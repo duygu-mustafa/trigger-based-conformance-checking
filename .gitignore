@@ -1,0 +1,16 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Data Files
+*.csv
+*.json
+*.xlsx
+*.xls
+*.parquet
+*.pkl
+*.pickle
+data/
+*.txt
