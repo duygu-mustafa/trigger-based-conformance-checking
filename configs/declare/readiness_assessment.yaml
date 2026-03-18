@@ -1,0 +1,13 @@
+version: 1
+model:
+  name: readiness_assessment
+  constraints:
+    - label: Readiness must precede SBT start
+      template: PRECEDENCE
+      activation: ReadinessCheck
+      target: SBTStarted
+
+    - label: No SBT start when readiness failed
+      template: NOT_CO_EXISTENCE
+      activation: ReadinessFailed
+      target: SBTStarted
