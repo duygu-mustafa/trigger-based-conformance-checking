@@ -1,0 +1,10 @@
+version: 1
+mappings:
+  SBTStarted:
+    itemid: 224715
+    conditions:
+      value_equals: "yes"
+  ReadinessFailed:
+    itemid: 224833
+  ReadinessCheck:
+    itemids: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 221906]

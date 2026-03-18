@@ -1,0 +1,14 @@
+version: 1
+items:
+  220224: PaO2
+  223835: FiO2
+  220277: SpO2
+  220339: PEEP
+  223830: pH_arterial
+  220228: hemoglobin
+  223762: temperature_c
+  228302: rass_loc
+  223753: sas
+  221906: norepinephrine
+  224715: sbt_started
+  224833: sbt_deferred
