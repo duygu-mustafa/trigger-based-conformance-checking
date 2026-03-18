@@ -1,5 +1,4 @@
-from weaning_conformance.model import DeclareConstraint, DeclareTemplate
-from weaning_conformance.model.constraint import TimeCondition, DataCondition
+from conformance.types import DataCondition, DeclareConstraint, DeclareTemplate, TimeCondition
 
 # Control-flow only
 c1 = DeclareConstraint(

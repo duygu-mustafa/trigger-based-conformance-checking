@@ -14,3 +14,6 @@ ENV/
 *.pickle
 data/
 *.txt
+
+pycache__/
+__pycache__/
