@@ -7,35 +7,35 @@ from typing import Optional
 
 class DeclareTemplate(Enum):
     # Existence (unary)
-    EXISTENCE = "Existence"
-    ABSENCE = "Absence"
-    EXACTLY = "Exactly"
-    INIT = "Init"
+    EXISTENCE = "Existence"  # Activity must occur at least once.
+    ABSENCE = "Absence"  # Activity must never occur.
+    EXACTLY = "Exactly"  # Activity must occur an exact number of times.
+    INIT = "Init"  # The first event in the trace must be this activity.
 
     # Positive binary
-    RESPONDED_EXISTENCE = "Responded Existence"
-    RESPONSE = "Response"
-    ALTERNATE_RESPONSE = "Alternate Response"
-    CHAIN_RESPONSE = "Chain Response"
+    RESPONDED_EXISTENCE = "Responded Existence"  # If A occurs, B must occur (order not required).
+    RESPONSE = "Response"  # If A occurs, B must occur later.
+    ALTERNATE_RESPONSE = "Alternate Response"  # Each A is followed by one B before another A.
+    CHAIN_RESPONSE = "Chain Response"  # Each A is immediately followed by B.
 
-    PRECEDENCE = "Precedence"
-    ALTERNATE_PRECEDENCE = "Alternate Precedence"
-    CHAIN_PRECEDENCE = "Chain Precedence"
+    PRECEDENCE = "Precedence"  # B can occur only if A occurred earlier.
+    ALTERNATE_PRECEDENCE = "Alternate Precedence"  # Each B must have one unmatched earlier A.
+    CHAIN_PRECEDENCE = "Chain Precedence"  # Each B must be immediately preceded by A.
 
-    CO_EXISTENCE = "Co-Existence"
+    CO_EXISTENCE = "Co-Existence"  # A and B must either both occur or both be absent.
 
-    SUCCESSION = "Succession"
-    ALTERNATE_SUCCESSION = "Alternate Succession"
-    CHAIN_SUCCESSION = "Chain Succession"
+    SUCCESSION = "Succession"  # Combines precedence and response between A and B.
+    ALTERNATE_SUCCESSION = "Alternate Succession"  # Alternate precedence + alternate response.
+    CHAIN_SUCCESSION = "Chain Succession"  # Chain precedence + chain response.
 
     # Negative binary
-    NOT_RESPONDED_EXISTENCE = "Not Responded Existence"
-    NOT_RESPONSE = "Not Response"
-    NOT_CHAIN_RESPONSE = "Not Chain Response"
-    NOT_PRECEDENCE = "Not Precedence"
-    NOT_CHAIN_PRECEDENCE = "Not Chain Precedence"
-    NOT_CO_EXISTENCE = "Not Co-Existence"
-    NOT_SUCCESSION = "Not Succession"
+    NOT_RESPONDED_EXISTENCE = "Not Responded Existence"  # If A occurs, B must not occur at all.
+    NOT_RESPONSE = "Not Response"  # If A occurs, B must not occur later.
+    NOT_CHAIN_RESPONSE = "Not Chain Response"  # A must not be immediately followed by B.
+    NOT_PRECEDENCE = "Not Precedence"  # B must not have A before it.
+    NOT_CHAIN_PRECEDENCE = "Not Chain Precedence"  # B must not be immediately preceded by A.
+    NOT_CO_EXISTENCE = "Not Co-Existence"  # A and B cannot both occur in one trace.
+    NOT_SUCCESSION = "Not Succession"  # A->B succession is forbidden.
 
 
 UNARY_TEMPLATES = {
