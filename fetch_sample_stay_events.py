@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+import pandas as pd
 
 # Allow running this file directly: python database/fetch_sample_stay_events.py
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,10 +13,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.fetch_events import fetch_icu_events_for_stay
-from conformance.event_log_builder import build_event_log
 from conformance.rules import build_readiness_assessment_model
 from conformance.checker import check_log_conformance
-
+from derive import raw_to_event_log
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch ICU event-level rows for a sample stay_id")
@@ -28,34 +28,34 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    df = fetch_icu_events_for_stay(stay_id=args.stay_id)
+    # df = fetch_icu_events_for_stay(stay_id=args.stay_id)
 
-    print(f"Fetched rows: {len(df)} for stay_id={args.stay_id}")
-    if len(df) == 0:
-        print("No rows returned. Check stay_id, DB schema, or credentials.")
-        return
+    # print(f"Fetched rows: {len(df)} for stay_id={args.stay_id}")
+    # if len(df) == 0:
+    #     print("No rows returned. Check stay_id, DB schema, or credentials.")
+    #     return
 
-    print("\nColumns:")
-    print(", ".join(df.columns))
+    # print("\nColumns:")
+    # print(", ".join(df.columns))
 
-    print("\nFirst 20 rows:")
-    print(df.head(20).to_string(index=False))
+    # print("\nFirst 20 rows:")
+    # print(df.head(20).to_string(index=False))
 
-    print("\nRows by source table:")
-    print(df["source_table"].value_counts().to_string())
+    # print("\nRows by source table:")
+    # print(df["source_table"].value_counts().to_string())
 
-    df.to_csv(args.out_csv, index=False)
-    print(f"\nSaved event-level extract to: {args.out_csv}")
+    # df.to_csv(args.out_csv, index=False)
+    # print(f"\nSaved event-level extract to: {args.out_csv}")
+    df = pd.read_csv(args.out_csv, low_memory=False)
 
     print("\n--- Conformance Checking ---")
-    # Prepare event log for conformance
-    # Map raw data to what the checker expects
-    df["case_id"] = df["stay_id"].astype(str)
-    df["activity"] = df["label"]
-    df["timestamp"] = df["event_time"]
-
-    # Build canonical event log
-    event_log = build_event_log(df)
+    # Prepare canonical event log through config-driven mapping.
+    event_log = raw_to_event_log(
+        df,
+        pipeline_config_path=PROJECT_ROOT / "configs" / "pipeline.yaml",
+        item_dictionary_path=PROJECT_ROOT / "configs" / "item_dictionary.yaml",
+        activity_mapping_path=PROJECT_ROOT / "configs" / "activity_mapping.yaml",
+    )
 
     # Load readiness clinical model
     model = build_readiness_assessment_model()
