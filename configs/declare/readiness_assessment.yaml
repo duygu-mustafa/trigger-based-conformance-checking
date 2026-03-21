@@ -53,12 +53,6 @@ model:
 
   data_conditions:
 
-    eligible_for_assessment:
-      description: >
-        Patient has been intubated and ventilated for at least 48 h.
-        Prerequisite before any readiness condition is meaningful.
-      expression: "hours_since_intubation >= 48" # CHECK THIS
-
     oxygenation_ok:
       description: "PaO2/FiO2 >= 150 OR (SpO2 >= 90% on FiO2 <= 0.40 and PEEP <= 5 cmH2O)"
       logic: OR
@@ -102,17 +96,6 @@ model:
     # ── Control-Flow ──────────────────────────────────────────────────────────
 
     - id: RC-CF-01
-      label: "SBT must not start before 48 h of ventilation"
-      template: MP_EXISTENCE
-      activation: SBTStarted
-      guard: "NOT eligible_for_assessment"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        Readiness is only evaluated after 48-72 h of ICU admission on invasive
-        ventilation. SBT before this window is a protocol violation.
-        Reference anchor: Intubation.starttime (procedureevents itemid 224385). # CHECK THIS
-
-    - id: RC-CF-02
       label: "SBT must not start when deferred in same window"
       template: NOT_CO_EXISTENCE
       activation: SBTDeferred
@@ -124,7 +107,7 @@ model:
         NOTE: Exclude SBTDeferred.value == "Pending procedure" from this
         constraint as it is censored/non-physiological data.
 
-    - id: RC-CF-03
+    - id: RC-CF-02
       label: "Invasive ventilation must precede SBT start"
       template: PRECEDENCE
       activation: InvasiveVentilationStarted
@@ -197,6 +180,16 @@ model:
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Riker-SAS (itemid 223753) must be 3 or 4 within 24 h of SBT start.
+    
+    - id: RC-DP-08
+      label: "Inspiratory effort criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      guard: "NOT inspiratory_effort_ok"
+      semantics: ACTIVATION_VIOLATION
+      source: >
+        Table 2 criterion 5: "initiate inspiratory effort" [1];
+        operationalized via Tidal Volume (spontaneous) itemid 224686 > 0 mL.
 
     # ── Temporal ──────────────────────────────────────────────────────────────
 

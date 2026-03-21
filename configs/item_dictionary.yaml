@@ -44,6 +44,7 @@ sources:
     # ── Ventilation Parameters ───────────────────────────────────────────
     224685: tidal_volume_observed       # Tidal Volume observed (mL)
     224684: tidal_volume_set            # Tidal Volume set (mL)
+    224686: tidal_volume_spontaneous    # Tidal Volume spontaneous (mL) -- proxy for inspiratory effort initiation
     224695: peak_insp_pressure          # Peak Inspiratory Pressure (cmH2O)
     224696: plateau_pressure            # Plateau Pressure (cmH2O)
     224697: mean_airway_pressure        # Mean Airway Pressure (cmH2O)

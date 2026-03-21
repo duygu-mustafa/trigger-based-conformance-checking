@@ -23,7 +23,7 @@ model:
         Accessory muscle use detected. Ordinal mapping: 0=Normal, 1=Mild,
         2=Moderate Distress (Fail), 3=Critical Fail.
         ItemID 229322 (Breathing pattern/effort) or 223990 (Respiratory Effort).
-      expression: "items[229322] in [2, 3] OR items[223990] in [2, 3]"  # CHECK mapping of values
+      expression: "items[229322] in [2, 3] OR items[223990] in [2, 3]" 
 
     spo2_failure:
       description: >
@@ -51,7 +51,7 @@ model:
         RASS LOC = No.
       logic: OR
       expressions:
-        - "items[223753] >= 6" # CHECK mapping of values
+        - "items[223753] >= 6"
         - "items[223753] <= 2"
         - "items[228302] == 'No'"
 
@@ -156,7 +156,7 @@ model:
       label: "No SBT success when haemodynamic failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      guard: "hemodynamic_failure AND items[224717] == 'Yes'"
+      guard: "hemodynamic_failure AND items[224717] == 'Yes'" # CHECK: paper says "with signs of hypoperfusion (appearance of cyanosis or mottling)"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         HR > 140 bpm or SBP > 180 mmHg during the trial contradicts
