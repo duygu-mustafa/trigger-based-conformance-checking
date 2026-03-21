@@ -488,7 +488,7 @@ def _evaluate_constraint_impl(
                 num_violated=int(violated),
                 activation_ts=str(act_rows.iloc[0]["timestamp"]),
                 violation_reason=(
-                    None if ok else "Activation guard evaluated to true for one or more events"
+                    None if ok else "Activation condition evaluated to true for one or more events"
                 )
                 if first_eval_error is None
                 else first_eval_error,

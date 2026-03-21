@@ -135,7 +135,7 @@ model:
       label: "No SBT success when respiratory rate failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      guard: "rr_failure AND items[224717] == 'Yes'"
+      activation_condition: "rr_failure AND items[224717] == 'Yes'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         RR > 35 breaths/min during the trial is an SBT failure criterion.
@@ -146,7 +146,7 @@ model:
       label: "No SBT success when SpO2 failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      guard: "spo2_failure AND items[224717] == 'Yes'"
+      activation_condition: "spo2_failure AND items[224717] == 'Yes'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Persistent SpO2 < 92% (or < 88% in chronic lung disease) is a
@@ -156,7 +156,7 @@ model:
       label: "No SBT success when haemodynamic failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      guard: "hemodynamic_failure AND items[224717] == 'Yes'" # CHECK: paper says "with signs of hypoperfusion (appearance of cyanosis or mottling)"
+      activation_condition: "hemodynamic_failure AND items[224717] == 'Yes'" # CHECK: paper says "with signs of hypoperfusion (appearance of cyanosis or mottling)"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         HR > 140 bpm or SBP > 180 mmHg during the trial contradicts
@@ -166,7 +166,7 @@ model:
       label: "No SBT success when mental status failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      guard: "mental_status_failure AND items[224717] == 'Yes'"
+      activation_condition: "mental_status_failure AND items[224717] == 'Yes'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
@@ -177,7 +177,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "psv_indicated"
-      guard: "vent_mode == 'PSV'"
+      activation_condition: "vent_mode == 'PSV'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
