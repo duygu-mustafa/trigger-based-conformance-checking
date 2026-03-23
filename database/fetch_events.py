@@ -92,6 +92,14 @@ def _build_table_query(schema: str, table: str, available: set[str]) -> sql.SQL:
         SELECT
             {table_name}::text AS source_table,
             e.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
             {event_time} AS event_time,
             {charttime} AS charttime,
             {starttime} AS starttime,
@@ -104,6 +112,8 @@ def _build_table_query(schema: str, table: str, available: set[str]) -> sql.SQL:
             {value_num} AS value_num,
             {value_uom} AS value_uom
         FROM {schema}.{table} e
+        LEFT JOIN {schema}.icustays s ON e.stay_id = s.stay_id
+        LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {schema}.d_items d ON e.itemid = d.itemid
         WHERE e.stay_id = %s
         """
@@ -127,8 +137,10 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
     """Fetch timestamped ICU events for one stay from all selected ICU tables.
 
     Returned columns:
-    source_table, stay_id, event_time, charttime, starttime, endtime, storetime,
-    itemid, label, category, value_text, value_num, value_uom
+    source_table, stay_id, subject_id, hadm_id, icu_intime, icu_outtime,
+    admittime, dischtime, deathtime, died_in_hospital, event_time, charttime,
+    starttime, endtime, storetime, itemid, label, category, value_text,
+    value_num, value_uom
     """
     schema = "mimiciv_icu"
     selected_tables = list(tables) if tables is not None else ICU_EVENT_TABLES
@@ -155,6 +167,14 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
             columns=[
                 "source_table",
                 "stay_id",
+                "subject_id",
+                "hadm_id",
+                "icu_intime",
+                "icu_outtime",
+                "admittime",
+                "dischtime",
+                "deathtime",
+                "died_in_hospital",
                 "event_time",
                 "charttime",
                 "starttime",
