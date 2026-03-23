@@ -144,6 +144,94 @@ def _measurement_activity_label(row: pd.Series, labels: dict[tuple[str, int], st
     return f"item_{itemid}"
 
 
+def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
+    """Generate derived activities from mapped activities.
+
+    Currently implements:
+    - SBTFailed: Fired when SBTCompleted.value == "No" OR when SBTStopped
+      occurs within an active SBT window.
+    """
+    derived_frames: list[pd.DataFrame] = []
+
+    # ── SBTFailed ────────────────────────────────────────────────────────────
+    # Case 1: SBTCompleted with value_raw == "No"
+    sbt_completed = activity_df[activity_df["activity"] == "SBTCompleted"].copy()
+    if not sbt_completed.empty:
+        failed_mask = (
+            sbt_completed.get("value_raw", pd.Series(index=sbt_completed.index, dtype=object))
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq("no")
+        )
+        sbt_failed_completed = sbt_completed[failed_mask].copy()
+        if not sbt_failed_completed.empty:
+            sbt_failed_from_completed = pd.DataFrame(
+                {
+                    "case_id": sbt_failed_completed["case_id"],
+                    "activity": "SBTFailed",
+                    "timestamp": sbt_failed_completed["timestamp"],
+                    "source_table": sbt_failed_completed["source_table"],
+                    "itemid": sbt_failed_completed["itemid"],
+                    "value_raw": sbt_failed_completed.get("value_raw"),
+                    "value_num": sbt_failed_completed.get("value_num"),
+                    "unit": sbt_failed_completed.get("unit"),
+                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=No"}] * len(sbt_failed_completed),
+                    "patient_id": sbt_failed_completed.get("patient_id"),
+                    "stay_id": sbt_failed_completed.get("stay_id"),
+                }
+            )
+            derived_frames.append(sbt_failed_from_completed)
+
+    # Case 2: SBTStopped within an active SBT window (between SBTStarted and before SBTCompleted/timeout)
+    sbt_stopped = activity_df[activity_df["activity"] == "SBTStopped"].copy()
+    if not sbt_stopped.empty:
+        for case_id in sbt_stopped["case_id"].unique():
+            case_stopped = sbt_stopped[sbt_stopped["case_id"] == case_id]
+            case_all = activity_df[activity_df["case_id"] == case_id].sort_values("timestamp")
+
+            for _, stopped_row in case_stopped.iterrows():
+                stopped_ts = stopped_row["timestamp"]
+
+                # Check if there's an active SBT (started but not yet completed before this stopped event)
+                prior_start = case_all[
+                    (case_all["activity"] == "SBTStarted") & (case_all["timestamp"] < stopped_ts)
+                ]
+                if prior_start.empty:
+                    continue
+
+                # Take the most recent SBT start
+                most_recent_start = prior_start.iloc[-1]
+                start_ts = most_recent_start["timestamp"]
+
+                # Check if there's no completed event between the start and this stop
+                between = case_all[
+                    (case_all["timestamp"] > start_ts) & (case_all["timestamp"] < stopped_ts)
+                ]
+                completed_between = between[between["activity"] == "SBTCompleted"]
+
+                if completed_between.empty:
+                    # SBTStopped occurred during an active SBT window
+                    sbt_failed_frame = pd.DataFrame(
+                        {
+                            "case_id": [case_id],
+                            "activity": ["SBTFailed"],
+                            "timestamp": [stopped_ts],
+                            "source_table": [stopped_row.get("source_table")],
+                            "itemid": [stopped_row.get("itemid")],
+                            "value_raw": [stopped_row.get("value_raw")],
+                            "value_num": [stopped_row.get("value_num")],
+                            "unit": [stopped_row.get("unit")],
+                            "attrs": [{"kind": "derived_activity", "trigger": "SBTStopped"}],
+                            "patient_id": [stopped_row.get("patient_id")],
+                            "stay_id": [stopped_row.get("stay_id")],
+                        }
+                    )
+                    derived_frames.append(sbt_failed_frame)
+
+    return derived_frames
+
+
 def emit_activities(
     raw_df: pd.DataFrame,
     *,
@@ -228,7 +316,17 @@ def emit_activities(
         if not mapped.empty:
             mapped_frames.append(mapped)
 
+    # Combine all frames before deriving
     all_frames = [measurement_df, *mapped_frames]
     out = pd.concat(all_frames, ignore_index=True)
     out = out.dropna(subset=["case_id", "activity", "timestamp"]).copy()
-    return out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
+    out = out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
+
+    # Generate derived activities
+    derived_frames = _derive_activities(out)
+    if derived_frames:
+        out = pd.concat([out, *derived_frames], ignore_index=True)
+        out = out.dropna(subset=["case_id", "activity", "timestamp"]).copy()
+        out = out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
+
+    return out

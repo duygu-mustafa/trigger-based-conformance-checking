@@ -65,6 +65,8 @@ sources:
     50995:  t4_free                     # Thyroxine T4 Free (ng/dL)
     227463: cortisol                    # Cortisol (mcg/dL)
 
+    226814: known_difficult_intubation  # Known difficult intubation - Text (Yes/No)
+
   procedureevents:
 
     # ── Ventilation Onset / Duration ─────────────────────────────────────
