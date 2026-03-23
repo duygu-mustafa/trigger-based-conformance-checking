@@ -7,13 +7,13 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-# Allow running this file directly: python database/fetch_sample_stay_events.py
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Allow running this file directly: python fetch_sample_stay_events.py
+PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.fetch_events import fetch_icu_events_for_stay
-from conformance.rules import build_readiness_assessment_model
+from conformance.rules import build_readiness_assessment_model, build_sbt_execution_model
 from conformance.checker import check_log_conformance
 from derive import raw_to_event_log
 
@@ -58,11 +58,11 @@ def main() -> None:
     )
 
     # Load readiness clinical model
-    model = build_readiness_assessment_model()
-    print(f"Evaluating model: {model.name}")
+    model_ready = build_readiness_assessment_model()
+    print(f"Evaluating model: {model_ready.name}")
 
     # Run checker
-    results = check_log_conformance(event_log, model)
+    results = check_log_conformance(event_log, model_ready)
 
     for trace_result in results:
         print(f"\nTrace ID: {trace_result.case_id}")
@@ -72,6 +72,16 @@ def main() -> None:
             if cr.violation_reason:
                 print(f"              Reason: {cr.violation_reason}")
 
+    model_sbt = build_sbt_execution_model()
+    print(f"\nEvaluating model: {model_sbt.name}")
+    results_sbt = check_log_conformance(event_log, model_sbt)   
+    for trace_result in results_sbt:
+        print(f"\nTrace ID: {trace_result.case_id}")
+        for cr in trace_result.constraint_results:
+            status = cr.outcome.name
+            print(f"  [{status:9}] {cr.constraint_id}")
+            if cr.violation_reason:
+                print(f"              Reason: {cr.violation_reason}")
 
 if __name__ == "__main__":
     main()
