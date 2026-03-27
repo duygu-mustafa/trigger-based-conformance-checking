@@ -1,0 +1,82 @@
+version: 1
+
+mappings:
+
+  # ── SBT Execution Activities (chartevents) ────────────────────────────────
+
+  SBTStarted:
+    source: chartevents
+    itemid: 224715
+    conditions:
+      value_equals: "Yes"
+    description: "Clinician-initiated SBT trigger. value=Yes denotes true start."
+
+  SBTCompleted:
+    source: chartevents
+    itemid: 224717
+    description: >
+      SBT outcome. value=Yes means success (tolerance of 30-120 min trial);
+      value=No means failure.
+
+  SBTStopped:
+    source: chartevents
+    itemid: 224716
+    description: "Explicit early SBT termination event."
+
+  SBTDeferred:
+    source: chartevents
+    itemid: 224833
+    description: >
+      SBT Deferred event recorded by nurse. Distinct values:
+        "Unable to perform RSBI"         -- low drive / high sedation / asynchrony
+        "Chronic vent dependent patient" -- flag as is_chronic = True
+        "Pending procedure"              -- censored data, exclude from physio model
+        "RSBI > 105"                     -- hard physiological screening failure
+
+  # ── Ventilation Lifecycle Activities (procedureevents) ───────────────────
+
+  InvasiveVentilationStarted:
+    source: procedureevents
+    itemid: 225792
+    timestamp_field: starttime
+    description: >
+      Start of invasive mechanical ventilation episode.
+      ventilation_duration_hours is derived as (current_charttime - starttime)
+      in hours. Used as the reference anchor for the 48 h readiness eligibility
+      window.
+
+  InvasiveVentilationEnded:
+    source: procedureevents
+    itemid: 225792
+    timestamp_field: endtime
+    description: "End of invasive ventilation episode (extubation or death)."
+
+  Intubation:
+    source: procedureevents
+    itemid: 224385
+    timestamp_field: starttime
+    description: >
+      Physical intubation procedure event. Secondary reference anchor.
+      Precedes InvasiveVentilationStarted by ~10 min in practice
+      (e.g., STAY 37510196: intubation 04:30, ventilation start 04:40).
+
+  # ── Derived / Synthetic Activities ───────────────────────────────────────
+
+  SBTFailed:
+    derived: true
+    logic: >
+      Fired when SBTCompleted.value == "No" OR when SBTStopped occurs
+      within an active SBT window.
+
+  VentilatorySupportResumed:
+    derived: true
+    logic: >
+      Fired when ventilator support is re-engaged after SBTFailed.
+      Encodes the guideline: "patient receives non-fatiguing, comfortable
+      form of ventilatory support" after SBT failure.
+
+  NIVInitiated:
+    derived: true
+    logic: >
+      Fired when non-invasive ventilation is started post-extubation for
+      high-risk patients who passed the SBT.

@@ -1,0 +1,207 @@
+version: 1
+
+model:
+  name: readiness_assessment
+  description: >
+    Readiness assessment is NOT a discrete activity in MIMIC-IV. It is a set of
+    physiological conditions that must ALL be satisfied in the observation window
+    immediately preceding SBTStarted. Constraints here are encoded as MP-Declare
+    guards on SBTStarted: the activation event is SBTStarted itself, and each
+    data condition is an activation condition that, if violated, constitutes a protocol deviation.
+
+    Ventilation onset is sourced from procedureevents (itemid 225792 starttime).
+    The 48-72 h eligibility window is computed relative to Intubation.starttime
+    (procedureevents itemid 224385).
+
+  # ── Computed Context Variables ────────────────────────────────────────────
+  # These are derived at query time from procedureevents, not from chartevents.
+
+  context_variables:
+
+    ventilation_duration_hours:
+      description: >
+        Hours elapsed from InvasiveVentilationStarted to the current event
+        timestamp. Derived from procedureevents itemid 225792:
+        (current_charttime - starttime) in hours,
+        OR value field (minutes) / 60 for completed episodes.
+      source: procedureevents
+      itemid: 225792
+
+    hours_since_intubation:
+      description: >
+        Hours elapsed from Intubation.starttime (procedureevents itemid 224385)
+        to the current event timestamp. Used to enforce the 48-72 h readiness
+        eligibility window.
+      source: procedureevents
+      itemid: 224385
+
+    previous_SBT_failed:
+      description: >
+        Boolean flag. True if the most recent SBTCompleted in this stay
+        had value = "No", or if SBTStopped occurred within a trial window.
+      derived: true
+
+    is_chronic:
+      description: >
+        Boolean flag. True if SBTDeferred.value == "Chronic vent dependent
+        patient" has been recorded in this stay.
+      derived: true
+
+  # ── Readiness Data Conditions ─────────────────────────────────────────────
+  # All conditions are evaluated in the chartevents observation window
+  # immediately before (within 24 h of) the SBTStarted timestamp.
+
+  data_conditions:
+
+    oxygenation_ok:
+      description: "PaO2/FiO2 >= 150 OR (SpO2 >= 90% on FiO2 <= 0.40 and PEEP <= 5 cmH2O)"
+      logic: OR
+      expressions:
+        - "(items[220224] / items[223835]) >= 150"
+        - "(items[220277] >= 90) AND (items[223835] <= 0.40) AND (items[220339] <= 5)"
+
+    ph_ok:
+      description: "Arterial pH > 7.25"
+      expression: "items[223830] > 7.25"
+
+    hemoglobin_ok:
+      description: "Hemoglobin >= 7 g/dL"
+      expression: "items[220228] >= 7.0"
+
+    temperature_ok:
+      description: "Core temperature <= 38 degrees C"
+      expression: "items[223762] <= 38.0"
+
+    vasopressor_ok:
+      description: >
+        Norepinephrine-equivalent <= 0.1 mcg/kg/min (hemodynamically stable).
+        Reference: Kotani et al., Crit Care 2023 (NE-equivalent score).
+      expression: "items[221906] <= 0.1"
+
+    rass_ok:
+      description: >
+        CAM-ICU RASS LOC (228302) = Yes -- patient awake and easily arousable.
+      expression: "items[228302] == 'Yes'"
+
+    sas_ok:
+      description: >
+        Riker-SAS (223753) in {3, 4}: Sedated (arousable) or Calm/Cooperative.
+        SAS >= 5 (agitation) or <= 2 (over-sedation) = not ready.
+      expression: "items[223753] in [3, 4]" # CHECK THIS: Maybe remove
+    
+    inspiratory_effort_ok:
+      description: >
+        Tidal Volume (spontaneous) (itemid 224686) > 0 mL -- patient is
+        initiating at least some spontaneous inspiratory effort.
+        Proxy for Table 2 criterion 5: "initiate inspiratory effort".
+      expression: "items[224686] > 0"
+  # ── Constraints ───────────────────────────────────────────────────────────
+
+  constraints:
+
+    # ── Control-Flow ──────────────────────────────────────────────────────────
+
+    - id: RC-CF-01
+      label: "Invasive ventilation must precede SBT start"
+      template: PRECEDENCE
+      activation: InvasiveVentilationStarted
+      target: SBTStarted
+      rationale: >
+        An SBT can only be initiated on a patient who is currently on invasive
+        mechanical ventilation. Enforces that procedureevents itemid 225792
+        has an open episode at the time of SBTStarted.
+
+    # ── Data-Perspective (MP-Declare activation conditions on SBTStarted) ─────
+
+    - id: RC-DP-01
+      label: "Oxygenation criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT oxygenation_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: >
+        PaO2/FiO2 >= 150 OR SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O
+        must be satisfied within 24 h before SBT initiation.
+
+    - id: RC-DP-02
+      label: "pH criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT ph_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: "Arterial pH must exceed 7.25 at SBT initiation."
+
+    - id: RC-DP-03
+      label: "Hemoglobin criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT hemoglobin_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: "Hemoglobin must be >= 7 g/dL at SBT initiation."
+
+    - id: RC-DP-04
+      label: "Temperature criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT temperature_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: "Core temperature must not exceed 38 degrees C at SBT initiation."
+
+    - id: RC-DP-05
+      label: "Vasopressor criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT vasopressor_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: >
+        Patient must be hemodynamically stable (NE-equivalent <= 0.1 mcg/kg/min)
+        at SBT initiation.
+
+    - id: RC-DP-06
+      label: "RASS criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT rass_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: >
+        CAM-ICU RASS LOC (itemid 228302) must be Yes within 24 h of SBT start.
+
+    - id: RC-DP-07
+      label: "SAS criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT sas_ok"
+      semantics: ACTIVATION_VIOLATION
+      rationale: >
+        Riker-SAS (itemid 223753) must be 3 or 4 within 24 h of SBT start.
+    
+    - id: RC-DP-08
+      label: "Inspiratory effort criterion must be met at SBT start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "NOT inspiratory_effort_ok"
+      semantics: ACTIVATION_VIOLATION
+
+    # ── Temporal ──────────────────────────────────────────────────────────────
+
+    - id: RC-TM-01
+      label: "Readiness observations must be recorded within 24 h before SBT"
+      template: TIMED_PRECEDENCE
+      activation: SBTStarted
+      observation_window_hours: 24
+      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 221906]
+      rationale: >
+        All readiness condition items must have at least one chartevents record
+        within 24 h before SBTStarted. Stale observations are not valid for
+        readiness determination.
+
+    - id: RC-TM-02
+      label: "Repeated SBT attempts at least 24 h apart after failure"
+      template: TIMED_RESPONSE
+      activation: SBTStarted
+      target: SBTStarted
+      min_gap_hours: 24
+      condition_on_activation: "previous_SBT_failed == True"
+      rationale: >
+        After SBT failure, the next attempt must be separated by at least 24 h,
+        matched with spontaneous awakening trials (sedation vacations).

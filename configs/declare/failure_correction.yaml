@@ -1,0 +1,4 @@
+version: 1
+model:
+  name: failure_correction
+  constraints: []

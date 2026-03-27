@@ -1,0 +1,87 @@
+version: 1
+
+# Items are split by source table in MIMIC-IV.
+# chartevents items use itemid; procedureevents use itemid from d_items.
+
+sources:
+
+  chartevents:
+
+    # ── Oxygenation ──────────────────────────────────────────────────────
+    220224: PaO2                        # Arterial O2 pressure (mmHg)
+    223835: FiO2                        # Inspired O2 Fraction (0-1 scale)
+    220277: SpO2                        # O2 saturation pulseoxymetry (%)
+    220339: PEEP                        # PEEP set (cmH2O)
+
+    # ── Acid-Base & Labs ─────────────────────────────────────────────────
+    223830: pH_arterial                 # PH Arterial
+    220228: hemoglobin                  # Hemoglobin (g/dL)
+
+    # ── Vital Signs ──────────────────────────────────────────────────────
+    223762: temperature_c               # Temperature Celsius (°C)
+    220045: heart_rate                  # Heart Rate (bpm)
+    220179: sbp                         # Systolic Blood Pressure (mmHg)
+    220181: map                         # Mean Arterial Pressure (mmHg)
+    220210: respiratory_rate            # Respiratory Rate (insp/min)
+
+    # ── Neurological / Sedation ──────────────────────────────────────────
+    228302: rass_loc                    # CAM-ICU RASS LOC (Pain/Sedation) - Text
+    223753: sas                         # Riker-SAS Scale (Pain/Sedation) - Text
+
+    # ── Vasopressors ─────────────────────────────────────────────────────
+    221906: norepinephrine              # Norepinephrine dose (mcg/kg/min)
+
+    # ── SBT Markers ──────────────────────────────────────────────────────
+    224715: sbt_started                 # SBT Started - Text (Yes/No)
+    224716: sbt_stopped                 # SBT Stopped - Text
+    224717: sbt_completed               # SBT Successfully Completed - Text (Yes/No)
+    224833: sbt_deferred                # SBT Deferred - Text (categorical)
+
+    # ── Respiratory Effort ───────────────────────────────────────────────
+    229322: breathing_pattern_effort    # Breathing pattern/effort - Text (ordinal 0-3)
+    223990: respiratory_effort          # Respiratory Effort - Text (ordinal 0-3)
+
+    # ── Ventilation Parameters ───────────────────────────────────────────
+    224685: tidal_volume_observed       # Tidal Volume observed (mL)
+    224684: tidal_volume_set            # Tidal Volume set (mL)
+    224686: tidal_volume_spontaneous    # Tidal Volume spontaneous (mL) -- proxy for inspiratory effort initiation
+    224695: peak_insp_pressure          # Peak Inspiratory Pressure (cmH2O)
+    224696: plateau_pressure            # Plateau Pressure (cmH2O)
+    224697: mean_airway_pressure        # Mean Airway Pressure (cmH2O)
+
+    # ── Musculoskeletal / NMJ ────────────────────────────────────────────
+    224419: nif                         # Negative Inspiratory Force (cmH2O)
+    228409: mrc_scale_1                 # MRC Scale limb strength components
+    228410: mrc_scale_2
+    228411: mrc_scale_3
+    228412: mrc_scale_4
+
+    # ── Cuff Leak Test ───────────────────────────────────────────────────
+    224417: cuff_pressure               # Cuff Pressure (cmH2O)
+    224418: cuff_volume                 # Cuff Volume (mL)
+
+    # ── Endocrine / Metabolic ────────────────────────────────────────────
+    50993:  tsh                         # Thyroid Stimulating Hormone (mIU/L)
+    50995:  t4_free                     # Thyroxine T4 Free (ng/dL)
+    227463: cortisol                    # Cortisol (mcg/dL)
+
+    226814: known_difficult_intubation  # Known difficult intubation - Text (Yes/No)
+
+  procedureevents:
+
+    # ── Ventilation Onset / Duration ─────────────────────────────────────
+    224385: intubation
+      # starttime = intubation timestamp
+      # endtime   = extubation timestamp
+      # category  = 1-Intubation/Extubation
+      # Example row from MIMIC-IV STAY 37510196:
+      #   starttime: 2131-01-11 04:30, endtime: 2131-01-11 05:40
+
+    225792: invasive_ventilation
+      # starttime = ventilation start
+      # endtime   = ventilation end
+      # value     = duration in minutes
+      # category  = 2-Ventilation
+      # Example row from MIMIC-IV STAY 37510196:
+      #   starttime: 2131-01-11 04:40, endtime: 2131-01-12 17:49, value: 2220 min
+      # ventilation_duration_hours = value / 60
