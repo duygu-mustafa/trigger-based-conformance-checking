@@ -14,6 +14,10 @@ ENV/
 *.pickle
 data/
 *.txt
+*.csv.gz
+*.decl
 
 pycache__/
 __pycache__/
+
+*.ipynb

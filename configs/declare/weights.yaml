@@ -1,0 +1,187 @@
+version: 1
+
+weights:
+
+  # ── Readiness assessment (RC-*) ─────────────────────────────────────────
+
+  RC-CF-01:
+    metadata_scores:
+      clinical_consequence: 0.8
+      unnoticed_frequency: 0.3
+      must_not_vs_should: 0.8
+
+  RC-DP-01:  # Oxygenation criterion
+    metadata_scores:
+      clinical_consequence: 1.0   # top tier
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 150
+    theta_crit: 100
+
+  RC-DP-02:  # pH > 7.25
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.9
+    theta: 7.25
+    theta_crit: 7.20
+
+  RC-DP-03:  # Hemoglobin >= 7 g/dL
+    metadata_scores:
+      clinical_consequence: 0.6   # clearly below oxygenation/pH
+      unnoticed_frequency: 0.4
+      must_not_vs_should: 0.6
+    theta: 7.0
+    theta_crit: 6.5
+
+  RC-DP-04:  # Temperature <= 38 °C
+    metadata_scores:
+      clinical_consequence: 0.5   # “nice to have”, least critical of readiness
+      unnoticed_frequency: 0.3
+      must_not_vs_should: 0.5
+    theta: 38.0
+    theta_crit: 39.0
+
+  RC-DP-05:  # Vasopressor (NE-equivalent)
+    metadata_scores:
+      clinical_consequence: 1.0   # top tier with oxygenation
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 0.1
+    theta_crit: 0.2
+
+  RC-DP-06:  # RASS / CAM-ICU awake/arousable
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 0.9
+    theta: 0.0
+    theta_crit: -3.0
+
+  RC-DP-07:  # SAS 3–4
+    metadata_scores:
+      clinical_consequence: 0.75
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.8
+    theta: 3
+    theta_crit: 2
+
+  RC-DP-08:  # Inspiratory effort > 0 mL
+    metadata_scores:
+      clinical_consequence: 0.8
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.85
+    theta: 0.0
+    theta_crit: 50.0
+
+  RC-TM-01:  # Observations within 24h before SBT
+    metadata_scores:
+      clinical_consequence: 0.7   # stale data can hide deterioration
+      unnoticed_frequency: 0.8    # documentation timing issues are common
+      must_not_vs_should: 0.6     # more “should” than hard barrier
+
+  RC-TM-02:  # Repeated SBT attempts ≥24h apart after failure
+    metadata_scores:
+      clinical_consequence: 0.75  # premature re‑trials risk fatigue/failure
+      unnoticed_frequency: 0.7    # schedule drift is common
+      must_not_vs_should: 0.7     # guideline‑like “should not”, but sometimes overridden
+
+  # ── SBT execution failure thresholds (SBT-DP-*) ─────────────────────────
+
+  SBT-DP-01:  # SBT duration 30–120 min
+    metadata_scores:
+      clinical_consequence: 0.6
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.6
+    theta: 30
+    theta_crit: 15
+
+  SBT-DP-02:  # RR > 35 with “success”
+    metadata_scores:
+      clinical_consequence: 0.95  # very high, just below oxygenation/pressors
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 1.0
+    theta: 35
+    theta_crit: 45
+
+  SBT-DP-03:  # SpO2 failure criterion
+    metadata_scores:
+      clinical_consequence: 1.0
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 1.0
+    theta: 92
+    theta_crit: 88
+
+  SBT-DP-04:  # Hemodynamic failure criterion
+    metadata_scores:
+      clinical_consequence: 1.0
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 140
+    theta_crit: 160
+
+  SBT-DP-05:  # Mental status failure criterion
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 0.9
+    theta: 3
+    theta_crit: 2
+
+  SBT-DP-06:  # Mode: PSV when >24h
+    metadata_scores:
+      clinical_consequence: 0.5
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.5
+
+  SBT-DP-07:  # High-risk → extubate to NIV
+    metadata_scores:
+      clinical_consequence: 0.75
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.8
+
+    # ── SBT control-flow constraints (SBT-CF-*) ────────────────────────────
+
+  SBT-CF-01:  # SBT must eventually be completed or stopped
+    metadata_scores:
+      clinical_consequence: 0.6   # missing outcome risks misclassification
+      unnoticed_frequency: 0.7    # charting omissions are common
+      must_not_vs_should: 0.6
+
+  SBT-CF-02:  # SBT completion must follow SBT start
+    metadata_scores:
+      clinical_consequence: 0.7   # strong internal consistency / data integrity
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.8     # essentially a “must” from a modeling viewpoint
+
+  SBT-CF-03:  # SBT stop must follow SBT start
+    metadata_scores:
+      clinical_consequence: 0.6
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.7
+
+  SBT-CF-04:  # SBT completion and SBT stop mutually exclusive
+    metadata_scores:
+      clinical_consequence: 0.7   # conflicting outcomes confuse labels
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.8
+
+  SBT-CF-05:  # After SBT failure, ventilatory support must resume
+    metadata_scores:
+      clinical_consequence: 0.85  # safety‑relevant (risk of fatigue/hypoxemia)
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.9
+
+  # ── SBT temporal constraints (SBT-TM-*) ────────────────────────────────
+
+  SBT-TM-01:  # Completion recorded within 3h of SBT start
+    metadata_scores:
+      clinical_consequence: 0.6   # long gaps suggest missing outcome
+      unnoticed_frequency: 0.7    # delays in documentation common
+      must_not_vs_should: 0.6
+
+  SBT-TM-02:  # Failure criterion → SBT stop within 30 min
+    metadata_scores:
+      clinical_consequence: 0.9   # delayed stop after failure is safety‑critical
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.9

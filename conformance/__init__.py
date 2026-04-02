@@ -7,6 +7,24 @@ from .rules import (
     build_sbt_execution_model,
 )
 from .types import DataCondition, DeclareConstraint, DeclareModel, DeclareTemplate, TimeCondition
+from .weighted_scoring import (
+    Constraint,
+    ViolationInstance,
+    compute_trace_scores,
+    compute_threshold_severity,
+    compute_violation_severity,
+    compute_violation_weight,
+    compute_w_max,
+    constraints_to_frame,
+    load_constraints_with_weights,
+    violations_to_frame,
+)
+from .outcome_postprocessing import (
+    LogisticFitSummary,
+    compare_guideline_vs_empirical_weights,
+    fit_constraint_outcome_logit,
+    fit_score_outcome_logit,
+)
 from . import examples
 
 __all__ = [
@@ -23,5 +41,19 @@ __all__ = [
     "build_readiness_assessment_model",
     "build_sbt_execution_model",
     "build_failure_correction_model",
+    "Constraint",
+    "ViolationInstance",
+    "compute_w_max",
+    "compute_threshold_severity",
+    "compute_violation_severity",
+    "compute_violation_weight",
+    "load_constraints_with_weights",
+    "constraints_to_frame",
+    "violations_to_frame",
+    "compute_trace_scores",
+    "LogisticFitSummary",
+    "fit_score_outcome_logit",
+    "fit_constraint_outcome_logit",
+    "compare_guideline_vs_empirical_weights",
     "examples",
 ]
