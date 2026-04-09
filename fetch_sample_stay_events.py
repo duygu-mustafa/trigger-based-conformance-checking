@@ -19,8 +19,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.fetch_events import fetch_icu_events_for_stay
 from conformance.rules import build_readiness_assessment_model, build_sbt_execution_model
 from conformance.checker import check_log_conformance
+from conformance.outcome_postprocessing import build_model_level_regression_frame
 from conformance.results import ConformanceOutcome, TraceResult
 from conformance.weighted_scoring import compute_trace_scores, load_constraints_with_weights
+from derive.reintubation import detect_intubation_after_sbt
 from derive import raw_to_event_log
 
 
@@ -147,6 +149,44 @@ def _append_tracking_rows(tracking_path: Path, rows: list[dict[str, object]], wr
     return False
 
 
+def _collect_constraint_outcome_columns(
+    trace_results: list[TraceResult],
+    constraint_id_map: dict[str, str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Build per-case lists of satisfied and violated constraints."""
+
+    per_case: dict[str, dict[str, set[str]]] = {}
+    for tr in trace_results:
+        case_id = str(tr.case_id)
+        case_bucket = per_case.setdefault(
+            case_id,
+            {
+                "violated": set(),
+                "satisfied": set(),
+            },
+        )
+        for cr in tr.constraint_results:
+            raw_constraint = str(cr.constraint_id)
+            normalized_constraint = (
+                constraint_id_map.get(raw_constraint, raw_constraint)
+                if constraint_id_map is not None
+                else raw_constraint
+            )
+            if cr.outcome == ConformanceOutcome.VIOLATED:
+                case_bucket["violated"].add(normalized_constraint)
+            elif cr.outcome == ConformanceOutcome.SATISFIED:
+                case_bucket["satisfied"].add(normalized_constraint)
+
+    # Keep CSV compact/deterministic: sorted, semicolon-separated identifiers.
+    out: dict[str, dict[str, str]] = {}
+    for case_id, bucket in per_case.items():
+        out[case_id] = {
+            "violated_constraints": ";".join(sorted(bucket["violated"])),
+            "satisfied_constraints": ";".join(sorted(bucket["satisfied"])),
+        }
+    return out
+
+
 def _build_weighted_inputs_from_results(
     trace_results: list[TraceResult],
     constraint_id_map: dict[str, str] | None = None,
@@ -236,6 +276,11 @@ def _run_weighted_conformance(
         # Mapping is a convenience; fall back to raw checker identifiers.
         constraint_id_map = {}
 
+    constraint_outcomes = _collect_constraint_outcome_columns(
+        trace_results,
+        constraint_id_map=constraint_id_map,
+    )
+
     try:
         constraints = load_constraints_with_weights(
             model_yaml_path=model_yaml_path,
@@ -244,6 +289,7 @@ def _run_weighted_conformance(
     except Exception as exc:  # Keep sample CLI robust during exploratory runs.
         print(f"Skipping weighted scoring (constraint/weight load error): {exc}")
         for case_id in all_case_ids:
+            case_outcomes = constraint_outcomes.get(case_id, {})
             tracking_rows.append(
                 {
                     "model_name": model_yaml_path.stem,
@@ -251,6 +297,8 @@ def _run_weighted_conformance(
                     "included_in_weighted_score": False,
                     "exclusion_reason": f"weight_load_error: {exc}",
                     "score": None,
+                    "violated_constraints": case_outcomes.get("violated_constraints", ""),
+                    "satisfied_constraints": case_outcomes.get("satisfied_constraints", ""),
                 }
             )
         return tracking_rows
@@ -273,6 +321,7 @@ def _run_weighted_conformance(
     if applicable_df.empty:
         print("No applicable constraints detected (num_activations == 0 for all); no weighted score.")
         for case_id in all_case_ids:
+            case_outcomes = constraint_outcomes.get(case_id, {})
             tracking_rows.append(
                 {
                     "model_name": model_yaml_path.stem,
@@ -280,6 +329,8 @@ def _run_weighted_conformance(
                     "included_in_weighted_score": False,
                     "exclusion_reason": "no_applicable_constraints",
                     "score": None,
+                    "violated_constraints": case_outcomes.get("violated_constraints", ""),
+                    "satisfied_constraints": case_outcomes.get("satisfied_constraints", ""),
                 }
             )
         return tracking_rows
@@ -299,6 +350,7 @@ def _run_weighted_conformance(
 
     score_map = {str(r["case_id"]): float(r["score"]) for _, r in scores.iterrows()}
     for case_id in all_case_ids:
+        case_outcomes = constraint_outcomes.get(case_id, {})
         if case_id in score_map:
             tracking_rows.append(
                 {
@@ -307,6 +359,8 @@ def _run_weighted_conformance(
                     "included_in_weighted_score": True,
                     "exclusion_reason": None,
                     "score": score_map[case_id],
+                    "violated_constraints": case_outcomes.get("violated_constraints", ""),
+                    "satisfied_constraints": case_outcomes.get("satisfied_constraints", ""),
                 }
             )
         else:
@@ -317,6 +371,8 @@ def _run_weighted_conformance(
                     "included_in_weighted_score": False,
                     "exclusion_reason": "no_applicable_constraints",
                     "score": None,
+                    "violated_constraints": case_outcomes.get("violated_constraints", ""),
+                    "satisfied_constraints": case_outcomes.get("satisfied_constraints", ""),
                 }
             )
 
@@ -332,6 +388,11 @@ def _run_conformance(df, stay_id: int) -> list[dict[str, object]]:
         item_dictionary_path=PROJECT_ROOT / "configs" / "item_dictionary.yaml",
         activity_mapping_path=PROJECT_ROOT / "configs" / "activity_mapping.yaml",
     )
+    reintubation_summary = detect_intubation_after_sbt(event_log)
+    reintubation_map = {
+        str(row["case_id"]): row
+        for _, row in reintubation_summary.iterrows()
+    }
 
     # Load readiness clinical model
     model_ready = build_readiness_assessment_model()
@@ -372,6 +433,12 @@ def _run_conformance(df, stay_id: int) -> list[dict[str, object]]:
 
     for row in tracking_rows:
         row["stay_id"] = stay_id
+        case_outcome = reintubation_map.get(str(row["case_id"]), {})
+        row["intubation_after_sbt"] = bool(case_outcome.get("intubation_after_sbt", False))
+        row["y"] = int(row["intubation_after_sbt"])
+        row["hours_from_sbt_to_intubation"] = case_outcome.get("hours_from_sbt_to_intubation")
+        row["first_sbt_started_ts"] = case_outcome.get("first_sbt_started_ts")
+        row["first_intubation_after_sbt_ts"] = case_outcome.get("first_intubation_after_sbt_ts")
     return tracking_rows
 
 def main() -> None:
@@ -459,9 +526,14 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tracking_path = out_dir / "weighted_scoring_trace_tracking.csv"
+    regression_path = out_dir / "logistic_regression_ready.csv"
     write_tracking_header = True
     if tracking_path.exists():
         tracking_path.unlink()
+    if regression_path.exists():
+        regression_path.unlink()
+
+    all_tracking_rows: list[dict[str, object]] = []
 
     total_stays = len(stay_ids)
     for idx, stay_id in enumerate(stay_ids, start=1):
@@ -490,6 +562,7 @@ def main() -> None:
 
         if not args.skip_conformance:
             rows = _run_conformance(df, stay_id=stay_id)
+            all_tracking_rows.extend(rows)
             write_tracking_header = _append_tracking_rows(tracking_path, rows, write_tracking_header)
 
         del df
@@ -497,6 +570,23 @@ def main() -> None:
 
     if tracking_path.exists():
         print(f"\nSaved weighted scoring inclusion/exclusion tracking to: {tracking_path}")
+
+    if all_tracking_rows:
+        tracking_df = pd.DataFrame(all_tracking_rows)
+        outcome_df = tracking_df[
+            [
+                "stay_id",
+                "case_id",
+                "intubation_after_sbt",
+                "hours_from_sbt_to_intubation",
+                "first_sbt_started_ts",
+                "first_intubation_after_sbt_ts",
+                "y",
+            ]
+        ].drop_duplicates(subset=["stay_id", "case_id"]) 
+        regression_df = build_model_level_regression_frame(tracking_df, outcome_df)
+        regression_df.to_csv(regression_path, index=False)
+        print(f"Saved logistic-regression-ready table to: {regression_path}")
 
 if __name__ == "__main__":
     main()

@@ -20,6 +20,90 @@ class LogisticFitSummary:
     model: Any
 
 
+def _require_columns(frame: pd.DataFrame, required: set[str], frame_name: str) -> None:
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"{frame_name} must include columns: {sorted(missing)}")
+
+
+def build_score_outcome_frame(
+    score_df: pd.DataFrame,
+    reintubation_df: pd.DataFrame,
+    *,
+    case_id_col: str = "case_id",
+    score_col: str = "score",
+    outcome_flag_col: str = "intubation_after_sbt",
+    outcome_col: str = "y",
+) -> pd.DataFrame:
+    """Merge a score table with a binary reintubation outcome.
+
+    This returns a long, regression-ready table with one row per input score
+    row and a binary target column derived from the reintubation summary.
+    """
+
+    _require_columns(score_df, {case_id_col, score_col}, "score_df")
+    _require_columns(reintubation_df, {case_id_col, outcome_flag_col}, "reintubation_df")
+
+    outcome = reintubation_df[[case_id_col, outcome_flag_col]].drop_duplicates(subset=[case_id_col]).copy()
+    outcome[outcome_flag_col] = outcome[outcome_flag_col].fillna(False).astype(bool)
+
+    merged = score_df.copy().merge(outcome, on=case_id_col, how="left")
+    merged[outcome_flag_col] = merged[outcome_flag_col].fillna(False).astype(bool)
+    merged[outcome_col] = merged[outcome_flag_col].astype(int)
+    return merged
+
+
+def build_model_level_regression_frame(
+    tracking_df: pd.DataFrame,
+    reintubation_df: pd.DataFrame,
+    *,
+    stay_id_col: str = "stay_id",
+    case_id_col: str = "case_id",
+    model_col: str = "model_name",
+    score_col: str = "score",
+    outcome_flag_col: str = "intubation_after_sbt",
+    outcome_col: str = "y",
+) -> pd.DataFrame:
+    """Build a case-level wide table for logistic regression.
+
+    The output contains one row per stay/case with a score column per model,
+    plus the binary reintubation label and the first observed time-to-reintubation.
+    """
+
+    required_tracking = {stay_id_col, case_id_col, model_col, score_col}
+    _require_columns(tracking_df, required_tracking, "tracking_df")
+    _require_columns(reintubation_df, {case_id_col, outcome_flag_col}, "reintubation_df")
+
+    base = tracking_df[[stay_id_col, case_id_col, model_col, score_col]].drop_duplicates().copy()
+    score_wide = (
+        base.pivot_table(
+            index=[stay_id_col, case_id_col],
+            columns=model_col,
+            values=score_col,
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+
+    outcome_cols = [case_id_col, outcome_flag_col]
+    if "hours_from_sbt_to_intubation" in reintubation_df.columns:
+        outcome_cols.append("hours_from_sbt_to_intubation")
+    if "first_sbt_started_ts" in reintubation_df.columns:
+        outcome_cols.append("first_sbt_started_ts")
+    if "first_intubation_after_sbt_ts" in reintubation_df.columns:
+        outcome_cols.append("first_intubation_after_sbt_ts")
+
+    outcome = reintubation_df[outcome_cols].drop_duplicates(subset=[case_id_col]).copy()
+    outcome[outcome_flag_col] = outcome[outcome_flag_col].fillna(False).astype(bool)
+    outcome[outcome_col] = outcome[outcome_flag_col].astype(int)
+
+    merged = score_wide.merge(outcome, on=case_id_col, how="left")
+    merged[outcome_flag_col] = merged[outcome_flag_col].fillna(False).astype(bool)
+    merged[outcome_col] = merged[outcome_col].fillna(0).astype(int)
+    merged = merged.sort_values([stay_id_col, case_id_col]).reset_index(drop=True)
+    return merged
+
+
 def _fit_logit(y: pd.Series, x: pd.DataFrame) -> LogisticFitSummary:
     """Fit logistic regression with statsmodels and return key statistics."""
 
@@ -167,6 +251,8 @@ def compare_guideline_vs_empirical_weights(
 
 __all__ = [
     "LogisticFitSummary",
+    "build_score_outcome_frame",
+    "build_model_level_regression_frame",
     "fit_score_outcome_logit",
     "fit_constraint_outcome_logit",
     "compare_guideline_vs_empirical_weights",
