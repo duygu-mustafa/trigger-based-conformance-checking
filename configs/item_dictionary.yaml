@@ -30,6 +30,7 @@ sources:
 
     # ── Vasopressors ─────────────────────────────────────────────────────
     221906: norepinephrine              # Norepinephrine dose (mcg/kg/min)
+    norepinephrine_equiv: norepinephrine_equiv # Norepinephrine-equivalent dose (mcg/kg/min)
 
     # ── SBT Markers ──────────────────────────────────────────────────────
     224715: sbt_started                 # SBT Started - Text (Yes/No)

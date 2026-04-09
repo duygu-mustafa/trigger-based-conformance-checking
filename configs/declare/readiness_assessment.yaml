@@ -75,8 +75,8 @@ model:
     vasopressor_ok:
       description: >
         Norepinephrine-equivalent <= 0.1 mcg/kg/min (hemodynamically stable).
-        Reference: Kotani et al., Crit Care 2023 (NE-equivalent score).
-      expression: "items[221906] <= 0.1"
+        Source: mimiciv_derived.norepinephrine_equivalent_dose
+      expression: "items['norepinephrine_equiv'] <= 0.1"
 
     rass_ok:
       description: >
@@ -189,7 +189,7 @@ model:
       template: TIMED_PRECEDENCE
       activation: SBTStarted
       observation_window_hours: 24
-      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 221906]
+      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 'norepinephrine_equiv']
       rationale: >
         All readiness condition items must have at least one chartevents record
         within 24 h before SBTStarted. Stale observations are not valid for

@@ -162,6 +162,43 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
                 if rows:
                     frames.append(pd.DataFrame(rows, columns=cols))
 
+            # Fetch Norepinephrine Equivalent Dose from derived schema
+            cursor.execute(
+                """
+                SELECT
+                    'norepinephrine_equivalent_dose'::text AS source_table,
+                    e.stay_id,
+                    s.subject_id,
+                    s.hadm_id,
+                    s.intime AS icu_intime,
+                    s.outtime AS icu_outtime,
+                    a.admittime,
+                    a.dischtime,
+                    a.deathtime,
+                    CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
+                    e.starttime AS event_time,
+                    NULL::timestamp AS charttime,
+                    e.starttime,
+                    e.endtime,
+                    NULL::timestamp AS storetime,
+                    'norepinephrine_equiv' AS itemid,
+                    'Norepinephrine-equivalent dose' AS label,
+                    'Vasopressor' AS category,
+                    e.norepinephrine_equivalent_dose::text AS value_text,
+                    e.norepinephrine_equivalent_dose::double precision AS value_num,
+                    'mcg/kg/min' AS value_uom
+                FROM mimiciv_derived.norepinephrine_equivalent_dose e
+                LEFT JOIN mimiciv_icu.icustays s ON e.stay_id = s.stay_id
+                LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
+                WHERE e.stay_id = %s
+                """,
+                (int(stay_id),),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                cols = [d.name for d in cursor.description]
+                frames.append(pd.DataFrame(rows, columns=cols))
+
     if not frames:
         return pd.DataFrame(
             columns=[
