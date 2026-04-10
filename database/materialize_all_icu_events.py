@@ -279,16 +279,110 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS starttime,
             NULL::timestamp AS endtime,
             NULL::timestamp AS storetime,
-            'peep_vent'::text AS itemid,
-            'PEEP (Ventilator Setting)'::text AS label,
+            cols.itemid::text AS itemid,
+            cols.label::text AS label,
             'Ventilation'::text AS category,
-            e.peep::text AS value_text,
-            e.peep::double precision AS value_num,
-            'cmH2O'::text AS value_uom
+            cols.val::text AS value_text,
+            cols.val_num::double precision AS value_num,
+            cols.uom::text AS value_uom
         FROM mimiciv_derived.ventilator_setting e
+        CROSS JOIN LATERAL (
+            VALUES 
+                ('peep_vent', 'PEEP (Ventilator Setting)', e.peep::text, e.peep, 'cmH2O'),
+                ('ventilator_mode', 'Ventilator Mode', e.ventilator_mode, NULL, NULL),
+                ('ventilator_mode_hamilton', 'Ventilator Mode (Hamilton)', e.ventilator_mode_hamilton, NULL, NULL),
+                ('plateau_pressure', 'Plateau Pressure', e.plateau_pressure::text, e.plateau_pressure, 'cmH2O')
+        ) AS cols(itemid, label, val, val_num, uom)
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
         LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
-        WHERE e.peep IS NOT NULL
+        WHERE cols.val IS NOT NULL
+
+        UNION ALL
+
+        -- Derived SBT Detection Logic (using ventilator_setting)
+        SELECT
+            'sbt_derived'::text AS source_table,
+            v.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            (a.deathtime IS NOT NULL) AS died_in_hospital,
+            v.charttime AS event_time,
+            v.charttime AS charttime,
+            NULL::timestamp AS starttime,
+            NULL::timestamp AS endtime,
+            NULL::timestamp AS storetime,
+            'sbt_status'::text AS itemid,
+            'Derived SBT Trigger'::text AS label,
+            'Ventilation'::text AS category,
+            'Started'::text AS value_text,
+            1.0::double precision AS value_num,
+            NULL::text AS value_uom
+        FROM (
+            SELECT 
+                stay_id, 
+                charttime,
+                CASE 
+                    -- Hamilton logic
+                    WHEN ventilator_mode_hamilton IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
+                    WHEN (ventilator_mode_hamilton = 'ASV' AND plateau_pressure - peep <= 8) THEN 'SBT Candidate'
+                    -- General mode logic
+                    WHEN ventilator_mode IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
+                    ELSE 'Full Support'
+                END as weaning_state,
+                LAG(
+                    CASE 
+                        WHEN ventilator_mode_hamilton IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
+                        WHEN (ventilator_mode_hamilton = 'ASV' AND plateau_pressure - peep <= 8) THEN 'SBT Candidate'
+                        WHEN ventilator_mode IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
+                        ELSE 'Full Support'
+                    END
+                ) OVER (PARTITION BY stay_id ORDER BY charttime) as prev_state
+            FROM mimiciv_derived.ventilator_setting
+        ) v
+        LEFT JOIN {{icu_schema}}.icustays s ON v.stay_id = s.stay_id
+        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
+        WHERE v.weaning_state = 'SBT Candidate' 
+          AND (v.prev_state IS NULL OR v.prev_state = 'Full Support')
+
+        UNION ALL
+
+        -- Ventilation Status - Narrowed to 'None' (Liberation) and Fallback for missing settings
+        SELECT
+            'ventilation'::text AS source_table,
+            e.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            (a.deathtime IS NOT NULL) AS died_in_hospital,
+            e.starttime AS event_time,
+            NULL::timestamp AS charttime,
+            e.starttime,
+            e.endtime,
+            NULL::timestamp AS storetime,
+            'ventilation_status'::text AS itemid,
+            'Ventilation Status'::text AS label,
+            'Ventilation'::text AS category,
+            e.ventilation_status::text AS value_text,
+            NULL::double precision AS value_num,
+            NULL::text AS value_uom
+        FROM mimiciv_derived.ventilation e
+        LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
+        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
+        WHERE e.ventilation_status = 'None' -- Phase 3: Liberation Signal
+           OR NOT EXISTS (
+               SELECT 1 FROM mimiciv_derived.ventilator_setting vs 
+               WHERE vs.stay_id = e.stay_id 
+                 AND vs.charttime BETWEEN e.starttime AND e.endtime
+           ) -- Phase 2: Strict Fallback
     )
     SELECT *
     FROM all_events

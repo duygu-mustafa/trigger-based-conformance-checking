@@ -67,6 +67,8 @@ class BatchConformanceRunner:
                     continue
                 
                 # 1. Transform raw data to event log
+                # The SBT triggers are now pre-materialized in the Parquet file
+                # as source_table='sbt_derived'.
                 event_log = raw_to_event_log(
                     df,
                     item_dictionary_path=self.item_dictionary_path,
