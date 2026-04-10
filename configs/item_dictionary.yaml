@@ -13,7 +13,10 @@ sources:
     220277: SpO2                        # O2 saturation pulseoxymetry (%)
     220339: PEEP                        # PEEP set (cmH2O)
 
-    # ── Acid-Base & Labs ─────────────────────────────────────────────────
+    # ── Derived / Virtual IDs ────────────────────────────────────────────
+    norepinephrine_equiv: Norepinephrine-equivalent dose (mcg/kg/min)
+    sbt_status: Spontaneous Breathing Trial Status Signal
+    sbt_outcome: Spontaneous Breathing Trial Final Outcome
     223830: pH_arterial                 # PH Arterial
     220228: hemoglobin                  # Hemoglobin (g/dL)
 

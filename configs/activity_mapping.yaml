@@ -2,21 +2,33 @@ version: 1
 
 mappings:
 
-  # ── SBT Execution Activities (chartevents) ────────────────────────────────
+  # ── SBT Execution Activities (derived from weaning logic) ────────────────
 
   SBTStarted:
+    source: sbt_derived
+    itemid: sbt_status
+    conditions:
+      value_equals: "Started"
+    description: "SBT start event, derived from weaning state transitions."
+
+  SBTCompleted:
+    source: sbt_derived
+    itemid: sbt_outcome
+    description: >
+      SBT outcome. Value=Success means liberation achieved;
+      Value=Failure means returned to full support.
+
+  # ── Deprecated Native Activities (kept for reference) ────────────────────
+
+  NativeSBTStarted:
     source: chartevents
     itemid: 224715
     conditions:
       value_equals: "Yes"
-    description: "Clinician-initiated SBT trigger. value=Yes denotes true start."
 
-  SBTCompleted:
+  NativeSBTCompleted:
     source: chartevents
     itemid: 224717
-    description: >
-      SBT outcome. value=Yes means success (tolerance of 30-120 min trial);
-      value=No means failure.
 
   SBTStopped:
     source: chartevents
