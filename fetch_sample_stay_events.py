@@ -19,7 +19,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.fetch_events import fetch_icu_events_for_stay
 from conformance.rules import build_readiness_assessment_model, build_sbt_execution_model
 from conformance.checker import check_log_conformance
-from conformance.outcome_postprocessing import build_model_level_regression_frame
 from conformance.results import ConformanceOutcome, TraceResult
 from conformance.weighted_scoring import compute_trace_scores, load_constraints_with_weights
 from derive.reintubation import detect_intubation_after_sbt
@@ -573,20 +572,8 @@ def main() -> None:
 
     if all_tracking_rows:
         tracking_df = pd.DataFrame(all_tracking_rows)
-        outcome_df = tracking_df[
-            [
-                "stay_id",
-                "case_id",
-                "intubation_after_sbt",
-                "hours_from_sbt_to_intubation",
-                "first_sbt_started_ts",
-                "first_intubation_after_sbt_ts",
-                "y",
-            ]
-        ].drop_duplicates(subset=["stay_id", "case_id"]) 
-        regression_df = build_model_level_regression_frame(tracking_df, outcome_df)
-        regression_df.to_csv(regression_path, index=False)
-        print(f"Saved logistic-regression-ready table to: {regression_path}")
+        tracking_df.to_csv(regression_path, index=False)
+        print(f"Saved conformance tracking table to: {regression_path}")
 
 if __name__ == "__main__":
     main()
