@@ -196,6 +196,99 @@ CREATE_TABLE_SQL_TEMPLATE = """
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
         LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
+
+        UNION ALL
+
+        SELECT
+            'norepinephrine_equivalent_dose'::text AS source_table,
+            e.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            (a.deathtime IS NOT NULL) AS died_in_hospital,
+            e.starttime AS event_time,
+            NULL::timestamp AS charttime,
+            e.starttime,
+            e.endtime,
+            NULL::timestamp AS storetime,
+            'norepinephrine_equiv'::text AS itemid,
+            'Norepinephrine-equivalent dose'::text AS label,
+            'Vasopressor'::text AS category,
+            e.norepinephrine_equivalent_dose::text AS value_text,
+            e.norepinephrine_equivalent_dose::double precision AS value_num,
+            'mcg/kg/min'::text AS value_uom
+        FROM mimiciv_derived.norepinephrine_equivalent_dose e
+        LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
+        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
+
+        UNION ALL
+
+        SELECT
+            'bg'::text AS source_table,
+            e.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            (a.deathtime IS NOT NULL) AS died_in_hospital,
+            e.charttime AS event_time,
+            e.charttime AS charttime,
+            NULL::timestamp AS starttime,
+            NULL::timestamp AS endtime,
+            NULL::timestamp AS storetime,
+            cols.itemid::text AS itemid,
+            cols.label::text AS label,
+            'Blood Gas'::text AS category,
+            cols.val::text AS value_text,
+            cols.val::double precision AS value_num,
+            cols.uom::text AS value_uom
+        FROM mimiciv_derived.bg e
+        CROSS JOIN LATERAL (
+            VALUES 
+                ('pao2fio2ratio', 'PaO2/FiO2 Ratio', e.pao2fio2ratio, 'ratio'),
+                ('fio2_bg', 'FiO2 (Blood Gas)', COALESCE(e.fio2, e.fio2_chartevents), '%'),
+                ('ph_bg', 'pH (Blood Gas)', e.ph, 'units'),
+                ('hemoglobin_bg', 'Hemoglobin (Blood Gas)', e.hemoglobin, 'g/dL')
+        ) AS cols(itemid, label, val, uom)
+        LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
+        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
+        WHERE cols.val IS NOT NULL
+
+        UNION ALL
+
+        SELECT
+            'ventilator_setting'::text AS source_table,
+            e.stay_id,
+            s.subject_id,
+            s.hadm_id,
+            s.intime AS icu_intime,
+            s.outtime AS icu_outtime,
+            a.admittime,
+            a.dischtime,
+            a.deathtime,
+            (a.deathtime IS NOT NULL) AS died_in_hospital,
+            e.charttime AS event_time,
+            e.charttime AS charttime,
+            NULL::timestamp AS starttime,
+            NULL::timestamp AS endtime,
+            NULL::timestamp AS storetime,
+            'peep_vent'::text AS itemid,
+            'PEEP (Ventilator Setting)'::text AS label,
+            'Ventilation'::text AS category,
+            e.peep::text AS value_text,
+            e.peep::double precision AS value_num,
+            'cmH2O'::text AS value_uom
+        FROM mimiciv_derived.ventilator_setting e
+        LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
+        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
+        WHERE e.peep IS NOT NULL
     )
     SELECT *
     FROM all_events

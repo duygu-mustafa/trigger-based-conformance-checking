@@ -199,6 +199,87 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
                 cols = [d.name for d in cursor.description]
                 frames.append(pd.DataFrame(rows, columns=cols))
 
+            # Fetch derived blood gas fields from mimiciv_derived.bg
+            cursor.execute(
+                """
+                SELECT
+                    'bg'::text AS source_table,
+                    e.stay_id,
+                    s.subject_id,
+                    s.hadm_id,
+                    s.intime AS icu_intime,
+                    s.outtime AS icu_outtime,
+                    a.admittime,
+                    a.dischtime,
+                    a.deathtime,
+                    CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
+                    e.charttime AS event_time,
+                    e.charttime AS charttime,
+                    NULL::timestamp AS starttime,
+                    NULL::timestamp AS endtime,
+                    NULL::timestamp AS storetime,
+                    cols.itemid,
+                    cols.label,
+                    'Blood Gas' AS category,
+                    cols.val::text AS value_text,
+                    cols.val::double precision AS value_num,
+                    cols.uom AS value_uom
+                FROM mimiciv_derived.bg e
+                CROSS JOIN LATERAL (
+                    VALUES 
+                        ('pao2fio2ratio', 'PaO2/FiO2 Ratio', e.pao2fio2ratio, 'ratio'),
+                        ('fio2_bg', 'FiO2 (Blood Gas)', COALESCE(e.fio2, e.fio2_chartevents), '%'),
+                        ('ph_bg', 'pH (Blood Gas)', e.ph, 'units'),
+                        ('hemoglobin_bg', 'Hemoglobin (Blood Gas)', e.hemoglobin, 'g/dL')
+                ) AS cols(itemid, label, val, uom)
+                LEFT JOIN mimiciv_icu.icustays s ON e.stay_id = s.stay_id
+                LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
+                WHERE e.stay_id = %s AND cols.val IS NOT NULL
+                """,
+                (int(stay_id),),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                cols = [d.name for d in cursor.description]
+                frames.append(pd.DataFrame(rows, columns=cols))
+
+            # Fetch PEEP from ventilator_setting
+            cursor.execute(
+                """
+                SELECT
+                    'ventilator_setting'::text AS source_table,
+                    e.stay_id,
+                    s.subject_id,
+                    s.hadm_id,
+                    s.intime AS icu_intime,
+                    s.outtime AS icu_outtime,
+                    a.admittime,
+                    a.dischtime,
+                    a.deathtime,
+                    CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
+                    e.charttime AS event_time,
+                    e.charttime AS charttime,
+                    NULL::timestamp AS starttime,
+                    NULL::timestamp AS endtime,
+                    NULL::timestamp AS storetime,
+                    'peep_vent' AS itemid,
+                    'PEEP (Ventilator Setting)' AS label,
+                    'Ventilation' AS category,
+                    e.peep::text AS value_text,
+                    e.peep::double precision AS value_num,
+                    'cmH2O' AS value_uom
+                FROM mimiciv_derived.ventilator_setting e
+                LEFT JOIN mimiciv_icu.icustays s ON e.stay_id = s.stay_id
+                LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
+                WHERE e.stay_id = %s AND e.peep IS NOT NULL
+                """,
+                (int(stay_id),),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                cols = [d.name for d in cursor.description]
+                frames.append(pd.DataFrame(rows, columns=cols))
+
     if not frames:
         return pd.DataFrame(
             columns=[

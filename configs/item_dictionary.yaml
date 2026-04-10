@@ -15,6 +15,11 @@ sources:
 
     # ── Derived / Virtual IDs ────────────────────────────────────────────
     norepinephrine_equiv: Norepinephrine-equivalent dose (mcg/kg/min)
+    pao2fio2ratio: PaO2/FiO2 Ratio (mimiciv_derived.bg)
+    fio2_bg: FiO2 (COALESCE bg.fio2, bg.fio2_chartevents)
+    peep_vent: PEEP (ventilator_setting.peep)
+    ph_bg: pH (bg.ph)
+    hemoglobin_bg: Hemoglobin (bg.hemoglobin)
     sbt_status: Spontaneous Breathing Trial Status Signal
     sbt_outcome: Spontaneous Breathing Trial Final Outcome
     223830: pH_arterial                 # PH Arterial
