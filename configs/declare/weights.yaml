@@ -278,3 +278,10 @@ weights:
     theta: 48          # max_gap_hours for hormonal replacement
     theta_crit: 72     # > 72 h without treatment after confirmed derangement
                        # = meaningful clinical delay
+
+  INT-COMPOSITE-01:
+  metadata_scores:
+    clinical_consequence: 1.0   # zero intervention after SBT failure is a
+                                 # critical protocol breach
+    unnoticed_frequency: 0.4    # total inaction is relatively rare and detectable
+    must_not_vs_should: 1.0     # hard must: at least something must happen

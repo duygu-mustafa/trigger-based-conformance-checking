@@ -157,3 +157,21 @@ constraints:
       48 h window is wider than other rules to reflect the slower prescribing
       decision for thyroid replacement. Marked as a soft rule in weights
       due to known gaps in corticosteroid charting in MIMIC-IV.
+
+  - id: INT-COMPOSITE-01
+    label: "At least one failure intervention must occur after SBT failure"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: AnyFailureIntervention
+    target_condition: >
+      exists(inputevents,  itemid IN [224170, 221794, 229639,
+                                      222056, 222051, 225974, 221429,
+                                      222011, 227536, 222151, 220995, 227523])
+      OR
+      exists(labevents,    itemid IN [50971, 50960, 50970, 50882, 50818, 50820,
+                                      227463, 50993, 50995])
+      OR
+      exists(prescriptions, drugname IN ['HYDROCORTISONE', 'METHYLPREDNISOLONE',
+                                          'DEXAMETHASONE', 'LEVOTHYROXINE SODIUM'])
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
