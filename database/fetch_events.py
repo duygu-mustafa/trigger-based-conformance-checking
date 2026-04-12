@@ -20,6 +20,26 @@ ICU_EVENT_TABLES = [
 ]
 
 
+FAILURE_CORRECTION_LAB_ITEMIDS = [
+    50971,  # potassium
+    50960,  # magnesium
+    50970,  # phosphate
+    50882,  # bicarbonate
+    50818,  # pco2
+    50820,  # ph
+    227463,  # cortisol
+    50993,  # tsh
+    50995,  # free t4
+]
+
+FAILURE_CORRECTION_HORMONAL_DRUGS = [
+    "HYDROCORTISONE",
+    "METHYLPREDNISOLONE",
+    "DEXAMETHASONE",
+    "LEVOTHYROXINE SODIUM",
+]
+
+
 def _get_table_columns(cursor, schema: str, table: str) -> set[str]:
     cursor.execute(
         """
@@ -141,6 +161,10 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
     admittime, dischtime, deathtime, died_in_hospital, event_time, charttime,
     starttime, endtime, storetime, itemid, label, category, value_text,
     value_num, value_uom
+
+    Includes ICU event tables, selected mimiciv_derived signals, and
+    rule-specific hospital sources (labevents + prescriptions) used by
+    failure-correction conformance checks.
     """
     schema = "mimiciv_icu"
     selected_tables = list(tables) if tables is not None else ICU_EVENT_TABLES
@@ -204,7 +228,7 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
                 """
                 SELECT
                     'bg'::text AS source_table,
-                    e.stay_id,
+                    s.stay_id,
                     s.subject_id,
                     s.hadm_id,
                     s.intime AS icu_intime,
@@ -232,9 +256,9 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
                         ('ph_bg', 'pH (Blood Gas)', e.ph, 'units'),
                         ('hemoglobin_bg', 'Hemoglobin (Blood Gas)', e.hemoglobin, 'g/dL')
                 ) AS cols(itemid, label, val, uom)
-                LEFT JOIN mimiciv_icu.icustays s ON e.stay_id = s.stay_id
+                INNER JOIN mimiciv_icu.icustays s ON e.hadm_id = s.hadm_id
                 LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
-                WHERE e.stay_id = %s AND cols.val IS NOT NULL
+                WHERE s.stay_id = %s AND cols.val IS NOT NULL
                 """,
                 (int(stay_id),),
             )
@@ -274,6 +298,83 @@ def fetch_icu_events_for_stay(stay_id: int, tables: Iterable[str] | None = None)
                 WHERE e.stay_id = %s AND e.peep IS NOT NULL
                 """,
                 (int(stay_id),),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                cols = [d.name for d in cursor.description]
+                frames.append(pd.DataFrame(rows, columns=cols))
+
+            # Fetch targeted labevents needed for failure-correction checks
+            cursor.execute(
+                """
+                SELECT
+                    'labevents'::text AS source_table,
+                    s.stay_id,
+                    s.subject_id,
+                    s.hadm_id,
+                    s.intime AS icu_intime,
+                    s.outtime AS icu_outtime,
+                    a.admittime,
+                    a.dischtime,
+                    a.deathtime,
+                    CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
+                    COALESCE(e.charttime, e.storetime) AS event_time,
+                    e.charttime,
+                    NULL::timestamp AS starttime,
+                    NULL::timestamp AS endtime,
+                    e.storetime,
+                    e.itemid::text AS itemid,
+                    d.label,
+                    d.fluid AS category,
+                    COALESCE(e.value::text, e.valuenum::text) AS value_text,
+                    e.valuenum::double precision AS value_num,
+                    e.valueuom AS value_uom
+                FROM mimiciv_hosp.labevents e
+                INNER JOIN mimiciv_icu.icustays s ON e.hadm_id = s.hadm_id
+                LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
+                LEFT JOIN mimiciv_hosp.d_labitems d ON e.itemid = d.itemid
+                WHERE s.stay_id = %s
+                  AND e.itemid = ANY(%s)
+                """,
+                (int(stay_id), FAILURE_CORRECTION_LAB_ITEMIDS),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                cols = [d.name for d in cursor.description]
+                frames.append(pd.DataFrame(rows, columns=cols))
+
+            # Fetch targeted hormonal prescriptions needed for failure-correction checks
+            cursor.execute(
+                """
+                SELECT
+                    'prescriptions'::text AS source_table,
+                    s.stay_id,
+                    s.subject_id,
+                    s.hadm_id,
+                    s.intime AS icu_intime,
+                    s.outtime AS icu_outtime,
+                    a.admittime,
+                    a.dischtime,
+                    a.deathtime,
+                    CASE WHEN a.deathtime IS NOT NULL THEN TRUE ELSE FALSE END AS died_in_hospital,
+                    e.starttime::timestamp AS event_time,
+                    e.starttime::timestamp AS charttime,
+                    e.starttime::timestamp AS starttime,
+                    e.stoptime::timestamp AS endtime,
+                    NULL::timestamp AS storetime,
+                    UPPER(TRIM(e.drug)) AS itemid,
+                    e.drug AS label,
+                    'Medication' AS category,
+                    e.drug AS value_text,
+                    NULL::double precision AS value_num,
+                    e.dose_unit_rx AS value_uom
+                FROM mimiciv_hosp.prescriptions e
+                INNER JOIN mimiciv_icu.icustays s ON e.hadm_id = s.hadm_id
+                LEFT JOIN mimiciv_hosp.admissions a ON s.hadm_id = a.hadm_id
+                WHERE s.stay_id = %s
+                  AND UPPER(TRIM(COALESCE(e.drug, ''))) = ANY(%s)
+                """,
+                (int(stay_id), FAILURE_CORRECTION_HORMONAL_DRUGS),
             )
             rows = cursor.fetchall()
             if rows:

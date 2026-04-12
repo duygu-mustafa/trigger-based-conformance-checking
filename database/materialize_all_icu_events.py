@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import sys
 from pathlib import Path
 
 from psycopg2 import sql
+
+# Allow running this file directly via an absolute path.
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from database.client import get_postgres_connection
 
