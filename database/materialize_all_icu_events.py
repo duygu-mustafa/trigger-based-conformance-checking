@@ -46,7 +46,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS starttime,
             NULL::timestamp AS endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             COALESCE(e.value::text, e.valuenum::text) AS value_text,
@@ -75,7 +75,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS starttime,
             NULL::timestamp AS endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             e.value::text AS value_text,
@@ -104,7 +104,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.starttime,
             e.endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             COALESCE(e.amount::text, e.rate::text) AS value_text,
@@ -133,7 +133,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS starttime,
             NULL::timestamp AS endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             e.value::text AS value_text,
@@ -162,7 +162,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.starttime,
             e.endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             e.value::text AS value_text,
@@ -191,7 +191,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.starttime,
             e.endtime,
             e.storetime,
-            e.itemid,
+            e.itemid::text AS itemid,
             d.label,
             d.category,
             COALESCE(e.amount::text, e.rate::text) AS value_text,
@@ -234,7 +234,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
 
         SELECT
             'bg'::text AS source_table,
-            e.stay_id,
+            s.stay_id,
             s.subject_id,
             s.hadm_id,
             s.intime AS icu_intime,
@@ -262,7 +262,7 @@ CREATE_TABLE_SQL_TEMPLATE = """
                 ('ph_bg', 'pH (Blood Gas)', e.ph, 'units'),
                 ('hemoglobin_bg', 'Hemoglobin (Blood Gas)', e.hemoglobin, 'g/dL')
         ) AS cols(itemid, label, val, uom)
-        LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
+        INNER JOIN {{icu_schema}}.icustays s ON e.hadm_id = s.hadm_id
         LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         WHERE cols.val IS NOT NULL
 
@@ -467,7 +467,7 @@ def _export_parquet(cursor, derived_schema: str, table_name: str, output_path: P
             pa.field("starttime", pa.timestamp("us")),
             pa.field("endtime", pa.timestamp("us")),
             pa.field("storetime", pa.timestamp("us")),
-            pa.field("itemid", pa.int64()),
+            pa.field("itemid", pa.string()),
             pa.field("label", pa.string()),
             pa.field("category", pa.string()),
             pa.field("value_text", pa.string()),
