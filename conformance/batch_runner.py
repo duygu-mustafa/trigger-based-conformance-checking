@@ -33,6 +33,8 @@ class BatchConformanceRunner:
         self.model = model_builder()
         self.item_dictionary_path = item_dictionary_path
         self.activity_mapping_path = activity_mapping_path
+        self._is_event_log_input = False  
+        self._batch_key_column = "stay_id"
         
         # Initialize DuckDB connection
         self.con = duckdb.connect(database=":memory:")
@@ -50,34 +52,46 @@ class BatchConformanceRunner:
         else:
             raise ValueError(f"Unsupported file format: {ext}")
 
-    def get_stay_ids(self) -> list[int]:
-        """Retrieve all unique stay_ids from the source file."""
-        rows = self.con.execute("SELECT DISTINCT stay_id FROM events WHERE stay_id IS NOT NULL").fetchall()
-        return [int(r[0]) for r in rows]
+        columns = {row[1] for row in self.con.execute("PRAGMA table_info('events')").fetchall()}
+        # Canonical event-log inputs already have checker-ready columns.
+        self._is_event_log_input = {"case_id", "activity", "timestamp"}.issubset(columns)
+        self._batch_key_column = "case_id" if self._is_event_log_input else "stay_id"
 
-    def process_batch(self, stay_ids: Iterable[int]) -> list[TraceResult]:
+    def get_stay_ids(self) -> list[str]:
+        """Retrieve all unique batch ids from the source file."""
+        rows = self.con.execute(
+            f"SELECT DISTINCT {self._batch_key_column} FROM events "
+            f"WHERE {self._batch_key_column} IS NOT NULL"
+        ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def process_batch(self, stay_ids: Iterable[str | int]) -> list[TraceResult]:
         """Process a specific batch of stay_ids."""
         results = []
         for stay_id in stay_ids:
             try:
-                # Fetch only columns needed for the pipeline to save memory
-                df = self.con.execute("SELECT * FROM events WHERE stay_id = ?", [stay_id]).df()
+                df = self.con.execute(
+                    f"SELECT * FROM events WHERE {self._batch_key_column} = ?",
+                    [str(stay_id)],
+                ).df()
                 
                 if df.empty:
                     continue
-                
-                # 1. Transform raw data to event log
-                # The SBT triggers are now pre-materialized in the Parquet file
-                # as source_table='sbt_derived'.
-                event_log = raw_to_event_log(
-                    df,
-                    item_dictionary_path=self.item_dictionary_path,
-                    activity_mapping_path=self.activity_mapping_path
-                )
+
+                if self._is_event_log_input:
+                    event_log = df
+                else:
+                    # Transform raw rows to canonical event-log rows.
+                    event_log = raw_to_event_log(
+                        df,
+                        item_dictionary_path=self.item_dictionary_path,
+                        activity_mapping_path=self.activity_mapping_path,
+                    )
                 
                 # 2. Run conformance checker
-                result = check_log_conformance(event_log, self.model)
-                results.append(result)
+                trace_results = check_log_conformance(event_log, self.model)
+                if trace_results:
+                    results.extend(trace_results)
             except Exception as e:
                 print(f"Error processing stay_id {stay_id}: {e}")
                 

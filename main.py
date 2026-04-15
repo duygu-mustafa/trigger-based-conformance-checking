@@ -1,19 +1,45 @@
 """CLI Entry point for batch conformance checking.
 
 Usage:
-    python run_conformance_batch.py --input data/raw/icu_event_level_sbt.parquet --output results.csv
+    python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet
+    python main.py --input icu_event_log.parquet --output conformance_results.csv
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from conformance.batch_runner import BatchConformanceRunner
 from conformance.rules import build_readiness_assessment_model
 from conformance.weighted_scoring import load_constraints_with_weights, compute_w_max
+
+
+def _load_constraint_id_lookup(model_path: Path) -> dict[str, str]:
+    """Build lookup from constraint labels/ids to canonical constraint id."""
+    with model_path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    model = data.get("model", {})
+    constraints = model.get("constraints", [])
+
+    lookup: dict[str, str] = {}
+    for c in constraints:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("id")
+        if not cid:
+            continue
+        cid = str(cid)
+        lookup[cid] = cid
+        label = c.get("label")
+        if isinstance(label, str) and label.strip():
+            lookup[label.strip()] = cid
+    return lookup
 
 
 def main() -> None:
@@ -21,8 +47,8 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        required=True,
-        help="Path to the single materialized ICU events file (Parquet or CSV).",
+        default=Path("icu_event_log.parquet"),
+        help="Path to canonical event-log file (recommended) or raw ICU events file.",
     )
     parser.add_argument(
         "--output",
@@ -33,7 +59,7 @@ def main() -> None:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=50,
+        default=1,
         help="Number of stay_ids to process in each memory-clearing batch.",
     )
     args = parser.parse_args()
@@ -58,6 +84,8 @@ def main() -> None:
         model_path = Path(__file__).resolve().parent / "configs" / "declare" / "readiness_assessment.yaml"
         
         scoring_constraints = load_constraints_with_weights(model_path, weights_path)
+        constraints_by_id = {c.constraint_id: c for c in scoring_constraints}
+        constraint_id_lookup = _load_constraint_id_lookup(model_path)
         
         output_rows = []
         for r in results:
@@ -80,13 +108,16 @@ def main() -> None:
             # or just calculate a basic weighted sum here.
             total_penalty = 0.0
             violated_ids = []
+            satisfied_ids = []
             for cr in r.constraint_results:
+                canonical_id = constraint_id_lookup.get(cr.constraint_id, cr.constraint_id)
                 if cr.outcome.name == "VIOLATED":
-                    # Get w_max for this constraint
-                    c_obj = next((c for c in scoring_constraints if c.constraint_id == cr.constraint_id), None)
+                    c_obj = constraints_by_id.get(canonical_id)
                     if c_obj:
                         total_penalty += compute_w_max(c_obj) * (cr.num_violated / cr.num_activations if cr.num_activations > 0 else 1.0)
-                    violated_ids.append(cr.constraint_id)
+                    violated_ids.append(canonical_id)
+                elif cr.outcome.name == "SATISFIED":
+                    satisfied_ids.append(canonical_id)
             
             output_rows.append({
                 "stay_id": r.case_id,
@@ -94,7 +125,9 @@ def main() -> None:
                 "conformance_score": max(0, 100 - (total_penalty * 10)), # Scaled score
                 "num_sbts": num_sbts,
                 "num_fails": num_fails,
-                "violations": ";".join(violated_ids)
+                "num_successes": len(satisfied_ids),
+                "violated": json.dumps(violated_ids),
+                "satisfied": json.dumps(satisfied_ids),
             })
             
         df = pd.DataFrame(output_rows)
