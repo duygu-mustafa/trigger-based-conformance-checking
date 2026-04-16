@@ -39,14 +39,14 @@ def _normalize_event_log_for_duckdb(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _create_view(con: duckdb.DuckDBPyConnection, input_file: Path) -> None:
+def _create_view(con: duckdb.DuckDBPyConnection, input_file: Path, view_name: str = "raw_events") -> None:
     ext = input_file.suffix.lower()
     file_path = str(input_file).replace("'", "''")
 
     if ext in {".parquet", ".pq"}:
-        con.execute(f"CREATE VIEW raw_events AS SELECT * FROM read_parquet('{file_path}')")
+        con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM read_parquet('{file_path}')")
     elif ext in {".csv", ".gz"}:
-        con.execute(f"CREATE VIEW raw_events AS SELECT * FROM read_csv_auto('{file_path}')")
+        con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM read_csv_auto('{file_path}')")
     else:
         raise ValueError(f"Unsupported input format: {ext}")
 
@@ -195,7 +195,7 @@ def main() -> None:
     parser.add_argument(
         "--sample-size",
         type=int,
-        default=1000,
+        default=100,
         help="Number of random stay_ids to process from sample-source.",
     )
     parser.add_argument(

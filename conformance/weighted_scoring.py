@@ -13,12 +13,16 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from conformance.results import ConformanceOutcome, ConstraintResult, TraceResult
+from conformance.types import DeclareTemplate, NEGATIVE_TEMPLATES, UNARY_TEMPLATES
+
 
 @dataclass(frozen=True)
 class Constraint:
     """Declarative constraint metadata used for weighted scoring.
 
-    Implements inputs needed for formulas (3.1) to (3.5).
+    Implements inputs needed for formulas (3.1) to (3.5) and the newer
+    fuzzy trace-scoring pipeline.
     """
 
     constraint_id: str
@@ -26,6 +30,12 @@ class Constraint:
     metadata_scores: dict[str, float] = field(default_factory=dict)
     theta: float | None = None
     theta_crit: float | None = None
+    count_target: float | None = None
+    delta_acc: float | None = None
+    delta_unacc: float | None = None
+    r_acc: float | None = None
+    r_unacc: float | None = None
+    aggregation: str = "mean"
 
 
 @dataclass(frozen=True)
@@ -136,6 +146,12 @@ def load_constraints_with_weights(
 
         theta = entry.get("theta")
         theta_crit = entry.get("theta_crit")
+        count_target = entry.get("count_target")
+        delta_acc = entry.get("delta_acc")
+        delta_unacc = entry.get("delta_unacc")
+        r_acc = entry.get("r_acc")
+        r_unacc = entry.get("r_unacc")
+        aggregation = entry.get("aggregation", "mean")
 
         out.append(
             Constraint(
@@ -144,6 +160,12 @@ def load_constraints_with_weights(
                 metadata_scores={str(k): float(v) for k, v in metadata_scores.items()},
                 theta=float(theta) if theta is not None else None,
                 theta_crit=float(theta_crit) if theta_crit is not None else None,
+                count_target=float(count_target) if count_target is not None else None,
+                delta_acc=float(delta_acc) if delta_acc is not None else None,
+                delta_unacc=float(delta_unacc) if delta_unacc is not None else None,
+                r_acc=float(r_acc) if r_acc is not None else None,
+                r_unacc=float(r_unacc) if r_unacc is not None else None,
+                aggregation=str(aggregation),
             )
         )
 
@@ -175,6 +197,123 @@ def compute_w_max(constraint: Constraint) -> float:
     if np.all(np.isclose(values, 1.0)):
         return 2.0
     return float(values.mean())
+
+
+def compute_importance_weight(constraint: Constraint) -> float:
+    """Compute the static importance weight used by the fuzzy trace score.
+
+    Unlike `compute_w_max`, this stays in [0, 1] and is the weight used by the
+    weighted-average trace score.
+    """
+
+    if not constraint.metadata_scores:
+        raise ValueError(f"Constraint '{constraint.constraint_id}' has no metadata scores.")
+
+    values = np.asarray(list(constraint.metadata_scores.values()), dtype=float)
+    if np.any((values < 0.0) | (values > 1.0)):
+        raise ValueError(
+            f"Constraint '{constraint.constraint_id}' has metadata outside [0, 1]."
+        )
+    return float(values.mean())
+
+
+def trap(x: float, a: float, b: float, c: float, d: float) -> float:
+    """Evaluate a trapezoidal membership function.
+
+    The implementation supports degenerate shoulders such as the common
+    `trap(x, 0, 0, c, d)` form used for fuzzy severity on deviations.
+    """
+
+    x = float(x)
+    a = float(a)
+    b = float(b)
+    c = float(c)
+    d = float(d)
+
+    if d < c:
+        raise ValueError("trap requires d >= c.")
+    if b < a:
+        raise ValueError("trap requires b >= a.")
+
+    # Degenerate left shoulder: full membership starts immediately at `a`.
+    if a == b:
+        if x <= a:
+            return 1.0 if x == a else 0.0
+        left = 1.0
+    else:
+        if x <= a:
+            return 0.0
+        if x < b:
+            return float((x - a) / (b - a))
+        left = 1.0
+
+    if x <= c:
+        return left
+    if x < d:
+        if d == c:
+            return 0.0
+        return float((d - x) / (d - c))
+    return 0.0
+
+
+def _normalise_template_name(template_type: str) -> str:
+    normalized = template_type.strip().upper().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "MP_EXISTENCE": "EXISTENCE",
+        "MP_RESPONSE": "RESPONSE",
+        "MP_PRECEDENCE": "PRECEDENCE",
+        "MP_SUCCESSION": "SUCCESSION",
+        "TIMED_RESPONSE": "RESPONSE",
+        "TIMED_PRECEDENCE": "PRECEDENCE",
+        "TIMED_SUCCESSION": "SUCCESSION",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _is_unary_template(template_type: str) -> bool:
+    normalized = _normalise_template_name(template_type)
+    return any(template.name == normalized for template in UNARY_TEMPLATES)
+
+
+def _is_negative_template(template_type: str) -> bool:
+    normalized = _normalise_template_name(template_type)
+    return any(template.name == normalized for template in NEGATIVE_TEMPLATES)
+
+
+def _default_rate_thresholds(template_type: str) -> tuple[float, float]:
+    if _is_negative_template(template_type):
+        return 0.0, 0.10
+    return 0.05, 0.20
+
+
+def _satisfaction_from_violation_rate(
+    violation_rate: float,
+    template_type: str,
+    *,
+    r_acc: float | None = None,
+    r_unacc: float | None = None,
+) -> float:
+    acc_default, unacc_default = _default_rate_thresholds(template_type)
+    acc = acc_default if r_acc is None else float(r_acc)
+    unacc = unacc_default if r_unacc is None else float(r_unacc)
+    if unacc < acc:
+        raise ValueError(
+            f"r_unacc must be greater than or equal to r_acc for template '{template_type}'."
+        )
+    return trap(float(violation_rate), 0.0, 0.0, acc, unacc)
+
+
+def _satisfaction_from_count_deviation(
+    deviation: float,
+    *,
+    delta_acc: float | None = None,
+    delta_unacc: float | None = None,
+) -> float:
+    acc = 0.0 if delta_acc is None else float(delta_acc)
+    unacc = 0.0 if delta_unacc is None else float(delta_unacc)
+    if unacc < acc:
+        raise ValueError("delta_unacc must be greater than or equal to delta_acc.")
+    return trap(float(deviation), 0.0, 0.0, acc, unacc)
 
 
 def compute_threshold_severity(x: float, theta: float, theta_crit: float) -> float:
@@ -225,6 +364,169 @@ def compute_violation_weight(violation: ViolationInstance, constraint: Constrain
     w_max = compute_w_max(constraint)
     mu = compute_violation_severity(violation=violation, constraint=constraint)
     return float((w_max**2) * mu)
+
+
+@dataclass(frozen=True)
+class TraceScore:
+    """Weighted fuzzy score for one trace."""
+
+    case_id: str
+    score: float
+    total_weight: float
+    weighted_sum: float
+    constraint_degrees: dict[str, float] = field(default_factory=dict)
+
+
+def compute_constraint_satisfaction_degree(
+    constraint: Constraint,
+    result: ConstraintResult,
+) -> float | None:
+    """Compute the fuzzy satisfaction degree for one constraint result.
+
+    The current implementation uses trace-level counts for relational templates
+    and crisp count handling for unary templates. This is the direct bridge
+    between the checker output and the weighted-average trace score.
+    """
+
+    if result.outcome == ConformanceOutcome.NOT_EVALUATED:
+        return None
+
+    normalized = _normalise_template_name(constraint.template_type)
+    num_activations = int(result.num_activations)
+    num_violated = int(result.num_violated)
+
+    if normalized == "ABSENCE":
+        return 1.0 if num_activations == 0 else 0.0
+
+    if normalized == "EXISTENCE":
+        return 1.0 if num_activations > 0 else 0.0
+
+    if normalized == "INIT":
+        return 1.0 if result.outcome == ConformanceOutcome.SATISFIED else 0.0
+
+    if normalized == "EXACTLY":
+        if constraint.count_target is None:
+            return 1.0 if result.outcome == ConformanceOutcome.SATISFIED else 0.0
+        deviation = abs(float(num_activations) - float(constraint.count_target))
+        return _satisfaction_from_count_deviation(
+            deviation,
+            delta_acc=constraint.delta_acc,
+            delta_unacc=constraint.delta_unacc,
+        )
+
+    if num_activations <= 0:
+        return 1.0
+
+    violation_rate = float(num_violated) / float(num_activations)
+    return _satisfaction_from_violation_rate(
+        violation_rate,
+        constraint.template_type,
+        r_acc=constraint.r_acc,
+        r_unacc=constraint.r_unacc,
+    )
+
+
+def score_trace_result(
+    trace_result: TraceResult,
+    constraints: Iterable[Constraint],
+    constraint_id_lookup: dict[str, str] | None = None,
+) -> TraceScore:
+    """Score one trace using the importance-qualified weighted average."""
+
+    constraints_by_id = {c.constraint_id: c for c in constraints}
+    lookup = constraint_id_lookup or {}
+
+    weighted_sum = 0.0
+    total_weight = 0.0
+    degrees: dict[str, float] = {}
+
+    for result in trace_result.constraint_results:
+        canonical_id = lookup.get(result.constraint_id, result.constraint_id)
+        constraint = constraints_by_id.get(canonical_id)
+        if constraint is None:
+            continue
+
+        degree = compute_constraint_satisfaction_degree(constraint, result)
+        if degree is None:
+            continue
+
+        weight = compute_importance_weight(constraint)
+        if weight <= 0.0:
+            continue
+
+        degrees[canonical_id] = float(degree)
+        weighted_sum += weight * float(degree)
+        total_weight += weight
+
+    score = float(weighted_sum / total_weight) if total_weight > 0 else float("nan")
+    return TraceScore(
+        case_id=str(trace_result.case_id),
+        score=score,
+        total_weight=float(total_weight),
+        weighted_sum=float(weighted_sum),
+        constraint_degrees=degrees,
+    )
+
+
+def sugeno_kpi(trace_scores: Iterable[float]) -> float:
+    """Aggregate trace scores into a population KPI using the Sugeno integral."""
+
+    values = [float(score) for score in trace_scores if score is not None and not pd.isna(score)]
+    if not values:
+        return float("nan")
+
+    values.sort(reverse=True)
+    count = len(values)
+    return float(max(min(values[index], float(index + 1) / float(count)) for index in range(count)))
+
+
+def score_trace_collection(
+    trace_results: Iterable[TraceResult],
+    constraints: Iterable[Constraint],
+    constraint_id_lookup: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, float]:
+    """Score all traces and return trace, detail, and KPI frames."""
+
+    constraints_list = list(constraints)
+    constraints_by_id = {c.constraint_id: c for c in constraints_list}
+
+    trace_scores: list[dict[str, object]] = []
+    detail_rows: list[dict[str, object]] = []
+
+    for trace_result in trace_results:
+        trace_score = score_trace_result(
+            trace_result=trace_result,
+            constraints=constraints_list,
+            constraint_id_lookup=constraint_id_lookup,
+        )
+        trace_scores.append(
+            {
+                "case_id": trace_score.case_id,
+                "score": trace_score.score,
+                "weighted_sum": trace_score.weighted_sum,
+                "total_weight": trace_score.total_weight,
+                "num_scored_constraints": len(trace_score.constraint_degrees),
+            }
+        )
+        for constraint_id, degree in trace_score.constraint_degrees.items():
+            constraint = constraints_by_id.get(constraint_id)
+            if constraint is None:
+                continue
+            weight = compute_importance_weight(constraint)
+            detail_rows.append(
+                {
+                    "case_id": trace_score.case_id,
+                    "constraint_id": constraint_id,
+                    "satisfaction_degree": degree,
+                    "weight": weight,
+                    "weighted_contribution": degree * weight,
+                }
+            )
+
+    scores_df = pd.DataFrame(trace_scores)
+    detail_df = pd.DataFrame(detail_rows)
+    kpi = sugeno_kpi(scores_df["score"].tolist()) if not scores_df.empty else float("nan")
+    return scores_df, detail_df, kpi
 
 
 def constraints_to_frame(constraints: Iterable[Constraint]) -> pd.DataFrame:
@@ -378,11 +680,18 @@ def compute_trace_scores(
 
 __all__ = [
     "Constraint",
+    "TraceScore",
     "ViolationInstance",
     "compute_w_max",
+    "compute_importance_weight",
+    "trap",
     "compute_threshold_severity",
     "compute_violation_severity",
     "compute_violation_weight",
+    "compute_constraint_satisfaction_degree",
+    "score_trace_result",
+    "score_trace_collection",
+    "sugeno_kpi",
     "load_constraints_with_weights",
     "constraints_to_frame",
     "violations_to_frame",

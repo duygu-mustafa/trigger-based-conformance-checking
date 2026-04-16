@@ -8,7 +8,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +15,7 @@ import yaml
 
 from conformance.batch_runner import BatchConformanceRunner
 from conformance.rules import build_readiness_assessment_model
-from conformance.weighted_scoring import load_constraints_with_weights, compute_w_max
+from conformance.weighted_scoring import load_constraints_with_weights, score_trace_collection
 
 
 def _load_constraint_id_lookup(model_path: Path) -> dict[str, str]:
@@ -40,6 +39,12 @@ def _load_constraint_id_lookup(model_path: Path) -> dict[str, str]:
         if isinstance(label, str) and label.strip():
             lookup[label.strip()] = cid
     return lookup
+
+
+def _format_id_list(values: list[str]) -> str:
+    """Serialize identifiers as a compact, CSV-friendly string."""
+
+    return ";".join(sorted(dict.fromkeys(str(value) for value in values)))
 
 
 def main() -> None:
@@ -82,57 +87,49 @@ def main() -> None:
         # Load weights for scoring
         weights_path = Path(__file__).resolve().parent / "configs" / "declare" / "weights.yaml"
         model_path = Path(__file__).resolve().parent / "configs" / "declare" / "readiness_assessment.yaml"
-        
+
         scoring_constraints = load_constraints_with_weights(model_path, weights_path)
-        constraints_by_id = {c.constraint_id: c for c in scoring_constraints}
         constraint_id_lookup = _load_constraint_id_lookup(model_path)
-        
+        scores_df, detail_df, population_kpi = score_trace_collection(
+            trace_results=results,
+            constraints=scoring_constraints,
+            constraint_id_lookup=constraint_id_lookup,
+        )
+
+        score_map = {str(row["case_id"]): float(row["score"]) for _, row in scores_df.iterrows()}
         output_rows = []
         for r in results:
-            # Count SBTs (Started events)
-            # Results are at the trace level, but we can look at the constraint results
-            # to see how many activations occurred for RC-DP-01 (or any readiness constraint)
-            # since they all activate on SBTStarted.
             num_sbts = 0
             if r.constraint_results:
-                # All RC-DP constraints activate on SBTStarted
                 num_sbts = r.constraint_results[0].num_activations
-            
-            # Count Fails (Violated traces)
+
             num_fails = 1 if not r.is_conformant else 0
-            
-            # Compute score (weighted penalty)
-            # compute_trace_scores returns a list of ViolationInstance, but we can 
-            # use a simpler approach since we have the results.
-            # We'll use the scoring logic from weighted_scoring.py if possible,
-            # or just calculate a basic weighted sum here.
-            total_penalty = 0.0
             violated_ids = []
             satisfied_ids = []
             for cr in r.constraint_results:
                 canonical_id = constraint_id_lookup.get(cr.constraint_id, cr.constraint_id)
                 if cr.outcome.name == "VIOLATED":
-                    c_obj = constraints_by_id.get(canonical_id)
-                    if c_obj:
-                        total_penalty += compute_w_max(c_obj) * (cr.num_violated / cr.num_activations if cr.num_activations > 0 else 1.0)
                     violated_ids.append(canonical_id)
                 elif cr.outcome.name == "SATISFIED":
                     satisfied_ids.append(canonical_id)
-            
+
+            trace_score = score_map.get(str(r.case_id), float("nan"))
             output_rows.append({
                 "stay_id": r.case_id,
                 "is_conformant": r.is_conformant,
-                "conformance_score": max(0, 100 - (total_penalty * 10)), # Scaled score
+                "trace_score": trace_score,
+                "conformance_score": float(trace_score * 100.0) if not pd.isna(trace_score) else float("nan"),
                 "num_sbts": num_sbts,
                 "num_fails": num_fails,
                 "num_successes": len(satisfied_ids),
-                "violated": json.dumps(violated_ids),
-                "satisfied": json.dumps(satisfied_ids),
+                "violated": _format_id_list(violated_ids),
+                "satisfied": _format_id_list(satisfied_ids),
             })
-            
+
         df = pd.DataFrame(output_rows)
         df.to_csv(args.output, index=False)
         print(f"Successfully processed {len(results)} stays.")
+        print(f"Population KPI (Sugeno): {population_kpi:.4f}" if not pd.isna(population_kpi) else "Population KPI (Sugeno): n/a")
         print(f"Results saved to {args.output}")
     else:
         print("No results generated.")

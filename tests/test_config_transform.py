@@ -59,7 +59,7 @@ class ConfigTransformTests(unittest.TestCase):
         activities = set(activity_df["activity"].astype(str).tolist())
 
         # Config-mapped modeled activities.
-        self.assertIn("SBTStarted", activities)
+        self.assertIn("NativeSBTStarted", activities)
         self.assertIn("InvasiveVentilationStarted", activities)
         self.assertIn("InvasiveVentilationEnded", activities)
 
@@ -99,6 +99,129 @@ class ConfigTransformTests(unittest.TestCase):
         self.assertEqual(expected_columns, list(event_log.columns))
         self.assertFalse(event_log.empty)
         self.assertEqual("202", str(event_log.iloc[0]["case_id"]))
+
+    def test_raw_to_event_log_can_inject_sbt_episodes(self) -> None:
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 303,
+                    "event_time": "2131-01-11 06:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "Control",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+                {
+                    "source_table": "procedureevents",
+                    "stay_id": 303,
+                    "event_time": "2131-01-11 09:30:00",
+                    "starttime": "2131-01-11 09:30:00",
+                    "endtime": "2131-01-11 12:00:00",
+                    "itemid": 225792,
+                    "value_text": "180",
+                    "value_num": 180,
+                    "value_uom": "min",
+                },
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 303,
+                    "event_time": "2131-01-11 07:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "CPAP",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 303,
+                    "event_time": "2131-01-11 08:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "Control",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+            ]
+        )
+
+        event_log = raw_to_event_log(raw_df)
+        activities = set(event_log["activity"].astype(str).tolist())
+        self.assertIn("SBTStarted", activities)
+        self.assertIn("InvasiveVentilationStarted", activities)
+
+        iv_start = event_log[event_log["activity"].astype(str) == "InvasiveVentilationStarted"]["timestamp"].min()
+        sbt_start = event_log[event_log["activity"].astype(str) == "SBTStarted"]["timestamp"].min()
+        self.assertEqual(pd.Timestamp("2131-01-11 06:00:00"), iv_start)
+        self.assertLessEqual(iv_start, sbt_start)
+
+    def test_raw_to_event_log_blocks_sbt_without_invasive_vent(self) -> None:
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 304,
+                    "event_time": "2131-01-11 07:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "CPAP",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 304,
+                    "event_time": "2131-01-11 08:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "Control",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+            ]
+        )
+
+        event_log = raw_to_event_log(raw_df)
+        self.assertNotIn("SBTStarted", set(event_log["activity"].astype(str).tolist()))
+
+    def test_raw_to_event_log_derives_invasive_vent_from_full_support(self) -> None:
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 305,
+                    "event_time": "2131-01-11 06:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "Control",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 305,
+                    "event_time": "2131-01-11 07:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "CPAP",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+                {
+                    "source_table": "ventilator_setting",
+                    "stay_id": 305,
+                    "event_time": "2131-01-11 08:00:00",
+                    "itemid": "ventilator_mode",
+                    "value_text": "Control",
+                    "value_num": None,
+                    "value_uom": None,
+                },
+            ]
+        )
+
+        event_log = raw_to_event_log(raw_df)
+        activities = set(event_log["activity"].astype(str).tolist())
+        self.assertIn("InvasiveVentilationStarted", activities)
+        self.assertIn("SBTStarted", activities)
+
+        iv_start = event_log[event_log["activity"].astype(str) == "InvasiveVentilationStarted"]["timestamp"].min()
+        sbt_start = event_log[event_log["activity"].astype(str) == "SBTStarted"]["timestamp"].min()
+        self.assertLessEqual(iv_start, sbt_start)
 
 
 if __name__ == "__main__":
