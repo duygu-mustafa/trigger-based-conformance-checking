@@ -9,13 +9,11 @@ from typing import Any
 import pandas as pd
 
 from derive.activity_emitter import emit_activities
-from derive.readiness_features import derive_readiness_features
 from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes
 from conformance.event_log_builder import build_event_log
 
 
 __all__ = [
-    "derive_readiness_features",
     "build_sbt_episodes",
     "emit_activities",
     "raw_to_event_log",
@@ -65,6 +63,20 @@ def _last_valid(series: pd.Series) -> object:
     return non_null.iloc[-1]
 
 
+_MISSING_TEXT_TOKENS = {"", "none", "null", "nan", "nat", "[null]", "<na>"}
+
+
+def _is_missing_text_value(value: object) -> bool:
+    if pd.isna(value):
+        return True
+    text = str(value).strip().lower()
+    return text in _MISSING_TEXT_TOKENS
+
+
+def _non_missing_text_mask(series: pd.Series) -> pd.Series:
+    return ~series.map(_is_missing_text_value)
+
+
 def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
     """Reconstruct a weaning frame from long-form raw event rows.
 
@@ -79,6 +91,29 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
     working = raw_df.copy()
     working["event_time"] = pd.to_datetime(working["event_time"], errors="coerce")
     working = working.dropna(subset=["stay_id", "event_time"]).copy()
+    if working.empty:
+        return pd.DataFrame()
+
+    # If raw rows already carry wide ventilator setting columns, keep only rows
+    # where at least one mode column has a non-empty value.
+    if {"ventilator_mode", "ventilator_mode_hamilton"}.issubset(working.columns):
+        mode_a = working["ventilator_mode"]
+        mode_b = working["ventilator_mode_hamilton"]
+        mode_a_missing = ~_non_missing_text_mask(mode_a)
+        mode_b_missing = ~_non_missing_text_mask(mode_b)
+        working = working.loc[~(mode_a_missing & mode_b_missing)].copy()
+        if working.empty:
+            return pd.DataFrame()
+
+    # Ignore empty ventilator mode observations; they can create artificial
+    # Full Support/SBT transitions when alternated with real mode values.
+    mode_setting_mask = (
+        working["source_table"].astype(str).eq("ventilator_setting")
+        & working["itemid"].astype(str).isin({"ventilator_mode", "ventilator_mode_hamilton"})
+    )
+    mode_value = working.get("value_text", pd.Series(index=working.index, dtype=object))
+    mode_missing_mask = ~_non_missing_text_mask(mode_value)
+    working = working.loc[~(mode_setting_mask & mode_missing_mask)].copy()
     if working.empty:
         return pd.DataFrame()
 
@@ -113,7 +148,8 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    if not working[["ventilation_status", "ventilator_mode", "ventilator_mode_hamilton", "plateau_pressure", "peep"]].notna().any().any():
+    setting_cols = ["ventilator_mode", "ventilator_mode_hamilton", "plateau_pressure", "peep"]
+    if not working[setting_cols].notna().any().any():
         return pd.DataFrame()
 
     grouped = (
@@ -130,6 +166,17 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
         )
     )
 
+    if grouped.empty:
+        return grouped
+
+    # Keep only rows with at least one non-null setting value. Rows with just
+    # ventilation_status can create artificial state transitions.
+    mode_non_empty = grouped[["ventilator_mode", "ventilator_mode_hamilton"]].apply(
+        _non_missing_text_mask,
+    )
+    numeric_non_null = grouped[["plateau_pressure", "peep"]].notna()
+    keep_mask = pd.concat([mode_non_empty, numeric_non_null], axis=1).any(axis=1)
+    grouped = grouped.loc[keep_mask].copy()
     if grouped.empty:
         return grouped
 
@@ -213,9 +260,49 @@ def _invasive_vent_start_times_from_raw(raw_df: pd.DataFrame) -> dict[str, pd.Ti
     return _full_support_start_times_from_settings(raw_df)
 
 
+def _keep_directly_preceded_sbt_episodes(
+    episodes: pd.DataFrame,
+    invasive_start_times: dict[str, pd.Timestamp],
+) -> pd.DataFrame:
+    """Keep only the first SBT episode that follows the invasive-vent start per stay.
+
+    The prepare-event-log entry point should emit a single SBT episode per invasive
+    ventilation episode. Later SBTs in the same stay are treated as follow-on events
+    unless a new invasive ventilation start is inferred first.
+    """
+
+    if episodes.empty or not invasive_start_times:
+        return episodes
+
+    working = episodes.copy()
+    working["sbt_start_time"] = pd.to_datetime(working["sbt_start_time"], errors="coerce")
+    working = working.dropna(subset=["stay_id", "sbt_start_time"]).copy()
+    if working.empty:
+        return working
+
+    working["stay_id_text"] = working["stay_id"].astype(str)
+
+    kept_rows: list[pd.DataFrame] = []
+    for stay_id_text, group in working.sort_values(["stay_id_text", "sbt_start_time"]).groupby("stay_id_text", sort=False):
+        invasive_start_ts = invasive_start_times.get(stay_id_text)
+        if invasive_start_ts is None:
+            continue
+
+        eligible = group[group["sbt_start_time"] >= invasive_start_ts]
+        if eligible.empty:
+            continue
+
+        kept_rows.append(eligible.head(1))
+
+    if not kept_rows:
+        return working.iloc[0:0].drop(columns=["stay_id_text"], errors="ignore")
+
+    return pd.concat(kept_rows, ignore_index=True).drop(columns=["stay_id_text"], errors="ignore")
+
+
 def _is_sbt_candidate_state(mode: object, mode_hamilton: object, plateau_pressure: object, peep: object) -> bool:
-    mode_text = str(mode).strip() if mode is not None else ""
-    mode_h_text = str(mode_hamilton).strip() if mode_hamilton is not None else ""
+    mode_text = "" if _is_missing_text_value(mode) else str(mode).strip()
+    mode_h_text = "" if _is_missing_text_value(mode_hamilton) else str(mode_hamilton).strip()
 
     if mode_h_text in {"Ambient", "SPONT", "CPAP"}:
         return True
@@ -329,6 +416,7 @@ def raw_to_event_log(
     The current implementation always builds mapped activities and forwards the
     resulting dataframe to the canonical event-log normalizer.
     """
+    
     if pipeline_config_path is not None:
         # Validates config file existence/shape now and keeps compatibility with
         # the run_* switches for future staged execution.
@@ -345,15 +433,7 @@ def raw_to_event_log(
         invasive_start_times = _invasive_vent_start_times_from_raw(raw_df)
         episodes = build_sbt_episodes(weaning_df)
         if not episodes.empty and invasive_start_times:
-            episodes = episodes[
-                episodes.apply(
-                    lambda row: (
-                        str(row["stay_id"]) in invasive_start_times
-                        and pd.to_datetime(row["sbt_start_time"], errors="coerce") >= invasive_start_times[str(row["stay_id"])]
-                    ),
-                    axis=1,
-                )
-            ].copy()
+            episodes = _keep_directly_preceded_sbt_episodes(episodes, invasive_start_times)
         else:
             episodes = episodes.iloc[0:0] if not invasive_start_times else episodes
 

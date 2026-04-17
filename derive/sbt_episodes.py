@@ -3,51 +3,140 @@
 import pandas as pd
 from typing import Optional
 
+
+_MISSING_TEXT_TOKENS = {"", "none", "null", "nan", "nat", "[null]", "<na>"}
+
+
+def _is_missing_text_value(value: object) -> bool:
+    if pd.isna(value):
+        return True
+    text = str(value).strip().lower()
+    return text in _MISSING_TEXT_TOKENS
+
+
+def _non_missing_text_mask(series: pd.Series) -> pd.Series:
+    return ~series.map(_is_missing_text_value)
+
+
+# Explicit ventilator mode to category mapping based on clinical evidence.
+# Maps from mode strings to one of: "Liberated/Non-Invasive", "Full Invasive Support", or "SBT"
+_VENTILATOR_MODE_MAPPING = {
+    # ventilator_mode column
+    "Ambient": "Liberated/Non-Invasive",
+    "Apnea Ventilation": "Full Invasive Support",
+    "APRV": "Full Invasive Support",
+    "APRV/Biphasic+ApnPress": "Full Invasive Support",
+    "APRV/Biphasic+ApnVol": "Full Invasive Support",
+    "APV (cmv)": "Full Invasive Support",
+    "CMV": "Full Invasive Support",
+    "CMV/ASSIST": "Full Invasive Support",
+    "CMV/ASSIST/AutoFlow": "Full Invasive Support",
+    "CMV/AutoFlow": "Full Invasive Support",
+    "CPAP": "SBT",
+    "CPAP/PPS": "SBT",
+    "CPAP/PSV": "SBT",
+    "CPAP/PSV+ApnPres": "SBT",
+    "CPAP/PSV+Apn TCPL": "SBT",
+    "CPAP/PSV+ApnVol": "SBT",
+    "DuoPaP": "Full Invasive Support",
+    "MMV": "Full Invasive Support",
+    "MMV/AutoFlow": "Full Invasive Support",
+    "MMV/PSV": "SBT",
+    "MMV/PSV/AutoFlow": "SBT",
+    "P-CMV": "Full Invasive Support",
+    "PCV+": "Full Invasive Support",
+    "PCV+Assist": "Full Invasive Support",
+    "PCV+/PSV": "SBT",
+    "PRES/AC": "Full Invasive Support",
+    "PRVC/AC": "Full Invasive Support",
+    "PRVC/SIMV": "Full Invasive Support",
+    "P-SIMV": "Full Invasive Support",
+    "PSV/SBT": "SBT",
+    "(S) CMV": "Full Invasive Support",
+    "SIMV": "Full Invasive Support",
+    "SIMV/AutoFlow": "Full Invasive Support",
+    "SIMV/PRES": "Full Invasive Support",
+    "SIMV/PSV": "SBT",
+    "SIMV/PSV/AutoFlow": "SBT",
+    "SIMV/VOL": "Full Invasive Support",
+    "SPONT": "SBT",
+    "Standby": "Liberated/Non-Invasive",
+    "SYNCHRON MASTER": "Full Invasive Support",
+    "SYNCHRON SLAVE": "Full Invasive Support",
+    "VOL/AC": "Full Invasive Support",
+}
+
+_VENTILATOR_MODE_HAMILTON_MAPPING = {
+    # ventilator_mode_hamilton column
+    "Ambient": "Liberated/Non-Invasive",
+    "APRV": "Full Invasive Support",
+    "APV (cmv)": "Full Invasive Support",
+    "APV (simv)": "Full Invasive Support",
+    "ASV": "Full Invasive Support",
+    "DuoPaP": "Full Invasive Support",
+    "nCPAP-PS": "Liberated/Non-Invasive",
+    "NIV": "Liberated/Non-Invasive",
+    "NIV-ST": "Liberated/Non-Invasive",
+    "P-CMV": "Full Invasive Support",
+    "P-SIMV": "Full Invasive Support",
+    "(S) CMV": "Full Invasive Support",
+    "SIMV": "Full Invasive Support",
+    "SPONT": "SBT",
+    "VS": "SBT",
+}
+
+
+def _map_category_to_state(category: str | None) -> str:
+    """Convert clinical category to weaning state for SBT detection."""
+    if category == "SBT":
+        return "SBT Candidate"
+    elif category == "Liberated/Non-Invasive":
+        return "SBT Candidate"
+    elif category == "Full Invasive Support":
+        return "Full Support"
+    else:
+        return "Other"
+
+
 def map_weaning_state(row: pd.Series) -> str:
     """
     Classifies a timepoint into a weaning state with preference for ventilator settings.
-    - Full Support: Any mode suggesting mandatory/controlled ventilation.
-    - SBT Candidate: CPAP, SPONT, Ambient, ASV with low support, or Supplemental oxygen.
-    - Liberated: None (from ventilation status) or explicitly 'None' in settings.
-    """
-    # 1. Start with ventilator modes as they are more granular/reliable
-    hamilton_mode = row.get('ventilator_mode_hamilton')
-    general_mode = row.get('ventilator_mode')
+    Uses explicit clinical mapping tables from evidence-based ventilator mode definitions.
     
-    # Hamilton specific logic (ASV, Ambient, etc.)
-    if hamilton_mode and pd.notna(hamilton_mode):
-        hamilton_mode = str(hamilton_mode)
-        if hamilton_mode == 'Ambient':
-            return 'SBT Candidate'
-        if hamilton_mode == 'ASV':
-            peep = row.get('peep', 0) or 0
-            plateau = row.get('plateau_pressure', 0) or 0
-            # ASV with pressure support <= 8 is a candidate
-            if plateau - peep > 0 and (plateau - peep) <= 8:
-                return 'SBT Candidate'
-            return 'Full Support'
-        if hamilton_mode in ['SPONT', 'CPAP']:
-            return 'SBT Candidate'
-        # Mandatory modes
-        if 'cmv' in hamilton_mode.lower() or 'SIMV' in hamilton_mode:
-            return 'Full Support'
-
-    # General mode logic
-    if general_mode and pd.notna(general_mode):
-        general_mode = str(general_mode)
-        if general_mode in ['CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous']:
-            return 'SBT Candidate'
-        if 'Control' in general_mode or 'Assist' in general_mode:
-            return 'Full Support'
+    Returns one of:
+    - 'SBT Candidate': Patient ready for spontaneous breathing trial (includes liberated modes).
+    - 'Full Support': Patient on mandatory/controlled ventilation.
+    - 'Liberated': Confirmed extubation/liberation signal.
+    - 'Other': Unmapped or ambiguous mode.
+    """
+    # 1. Prefer hamilton-specific mode if available (more granular)
+    hamilton_mode_raw = row.get('ventilator_mode_hamilton')
+    general_mode_raw = row.get('ventilator_mode')
+    
+    hamilton_mode = None if _is_missing_text_value(hamilton_mode_raw) else str(hamilton_mode_raw).strip()
+    general_mode = None if _is_missing_text_value(general_mode_raw) else str(general_mode_raw).strip()
+    
+    # Check Hamilton mode mapping first
+    if hamilton_mode and hamilton_mode in _VENTILATOR_MODE_HAMILTON_MAPPING:
+        category = _VENTILATOR_MODE_HAMILTON_MAPPING[hamilton_mode]
+        state = _map_category_to_state(category)
+        if state != "Other":
+            return state
+    
+    # Fall back to general ventilator mode mapping
+    if general_mode and general_mode in _VENTILATOR_MODE_MAPPING:
+        category = _VENTILATOR_MODE_MAPPING[general_mode]
+        state = _map_category_to_state(category)
+        if state != "Other":
+            return state
 
     # 2. Fallback to ventilation_status only if settings are completely missing
-    # or to identify specific 'None' (Phase 3 Liberation) signal
     status = row.get('ventilation_status')
     if status == 'None':
         return 'Liberated'
         
     # Only use status for mode classification if modes weren't found above
-    if not (hamilton_mode and pd.notna(hamilton_mode)) and not (general_mode and pd.notna(general_mode)):
+    if not hamilton_mode and not general_mode:
         if status == 'InvasiveVent':
             return 'Full Support'
         if status in ['SupplementalOxygen', 'HFNC', 'NonInvasiveVent']:
@@ -67,6 +156,21 @@ def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) ->
         return pd.DataFrame()
 
     df = weaning_df.copy()
+    # Require at least one non-null ventilator setting to classify a row.
+    setting_cols = ["ventilator_mode", "ventilator_mode_hamilton", "plateau_pressure", "peep"]
+    missing_setting_cols = [c for c in setting_cols if c not in df.columns]
+    for col in missing_setting_cols:
+        df[col] = pd.NA
+
+    mode_non_empty = df[["ventilator_mode", "ventilator_mode_hamilton"]].apply(
+        _non_missing_text_mask,
+    )
+    numeric_non_null = df[["plateau_pressure", "peep"]].notna()
+    keep_mask = pd.concat([mode_non_empty, numeric_non_null], axis=1).any(axis=1)
+    df = df.loc[keep_mask].copy()
+    if df.empty:
+        return pd.DataFrame()
+
     df['weaning_state'] = df.apply(map_weaning_state, axis=1)
 
     # Sort by time and reset index

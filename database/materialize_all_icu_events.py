@@ -301,6 +301,19 @@ CREATE_TABLE_SQL_TEMPLATE = """
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
         LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         WHERE cols.val IS NOT NULL
+          AND (
+              CASE
+                  WHEN e.ventilator_mode IS NULL THEN NULL
+                  WHEN LOWER(BTRIM(e.ventilator_mode)) IN ('', 'null', 'none', 'nan', 'nat', '[null]', '<na>') THEN NULL
+                  ELSE BTRIM(e.ventilator_mode)
+              END IS NOT NULL
+              OR
+              CASE
+                  WHEN e.ventilator_mode_hamilton IS NULL THEN NULL
+                  WHEN LOWER(BTRIM(e.ventilator_mode_hamilton)) IN ('', 'null', 'none', 'nan', 'nat', '[null]', '<na>') THEN NULL
+                  ELSE BTRIM(e.ventilator_mode_hamilton)
+              END IS NOT NULL
+          )
 
         UNION ALL
 
@@ -329,25 +342,45 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::text AS value_uom
         FROM (
             SELECT 
-                stay_id, 
-                charttime,
+                vs.stay_id,
+                vs.charttime,
                 CASE 
                     -- Hamilton logic
-                    WHEN ventilator_mode_hamilton IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
-                    WHEN (ventilator_mode_hamilton = 'ASV' AND plateau_pressure - peep <= 8) THEN 'SBT Candidate'
+                    WHEN vs.ventilator_mode_hamilton_clean IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
+                    WHEN (vs.ventilator_mode_hamilton_clean = 'ASV' AND vs.plateau_pressure - vs.peep <= 8) THEN 'SBT Candidate'
                     -- General mode logic
-                    WHEN ventilator_mode IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
+                    WHEN vs.ventilator_mode_clean IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
                     ELSE 'Full Support'
                 END as weaning_state,
                 LAG(
                     CASE 
-                        WHEN ventilator_mode_hamilton IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
-                        WHEN (ventilator_mode_hamilton = 'ASV' AND plateau_pressure - peep <= 8) THEN 'SBT Candidate'
-                        WHEN ventilator_mode IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
+                        WHEN vs.ventilator_mode_hamilton_clean IN ('Ambient', 'SPONT', 'CPAP') THEN 'SBT Candidate'
+                        WHEN (vs.ventilator_mode_hamilton_clean = 'ASV' AND vs.plateau_pressure - vs.peep <= 8) THEN 'SBT Candidate'
+                        WHEN vs.ventilator_mode_clean IN ('CPAP', 'CPAP/PSV', 'Pressure Support', 'Standby', 'Spontaneous') THEN 'SBT Candidate'
                         ELSE 'Full Support'
                     END
-                ) OVER (PARTITION BY stay_id ORDER BY charttime) as prev_state
-            FROM mimiciv_derived.ventilator_setting
+                ) OVER (PARTITION BY vs.stay_id ORDER BY vs.charttime) as prev_state
+            FROM (
+                SELECT
+                    stay_id,
+                    charttime,
+                    CASE
+                        WHEN ventilator_mode IS NULL THEN NULL
+                        WHEN LOWER(BTRIM(ventilator_mode)) IN ('', 'null', 'none', 'nan', 'nat', '[null]', '<na>') THEN NULL
+                        ELSE BTRIM(ventilator_mode)
+                    END AS ventilator_mode_clean,
+                    CASE
+                        WHEN ventilator_mode_hamilton IS NULL THEN NULL
+                        WHEN LOWER(BTRIM(ventilator_mode_hamilton)) IN ('', 'null', 'none', 'nan', 'nat', '[null]', '<na>') THEN NULL
+                        ELSE BTRIM(ventilator_mode_hamilton)
+                    END AS ventilator_mode_hamilton_clean,
+                    plateau_pressure,
+                    peep
+                FROM mimiciv_derived.ventilator_setting
+            ) vs
+            WHERE
+                vs.ventilator_mode_clean IS NOT NULL
+                OR vs.ventilator_mode_hamilton_clean IS NOT NULL
         ) v
         LEFT JOIN {{icu_schema}}.icustays s ON v.stay_id = s.stay_id
         LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id

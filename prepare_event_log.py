@@ -195,7 +195,7 @@ def main() -> None:
     parser.add_argument(
         "--sample-size",
         type=int,
-        default=100,
+        default=10,
         help="Number of random stay_ids to process from sample-source.",
     )
     parser.add_argument(

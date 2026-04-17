@@ -102,11 +102,11 @@ def load_constraints_with_weights(
 
     model_block = model_data.get("model")
     if not isinstance(model_block, dict):
-        raise ValueError("Model YAML must contain a top-level 'model' mapping.")
+        model_block = {}
 
-    raw_constraints = model_block.get("constraints")
+    raw_constraints = model_block.get("constraints", model_data.get("constraints"))
     if not isinstance(raw_constraints, list):
-        raise ValueError("Model YAML must contain model.constraints as a list.")
+        raise ValueError("Model YAML must contain constraints as a list (model.constraints or top-level constraints).")
 
     raw_weights = weights_data.get("weights", {})
     if raw_weights is None:

@@ -14,7 +14,12 @@ import pandas as pd
 import yaml
 
 from conformance.batch_runner import BatchConformanceRunner
-from conformance.rules import build_readiness_assessment_model
+from conformance.rules import (
+    build_failure_correction_model,
+    build_readiness_assessment_model,
+    build_sbt_execution_model,
+)
+from conformance.types import DeclareModel
 from conformance.weighted_scoring import load_constraints_with_weights, score_trace_collection
 
 
@@ -24,7 +29,7 @@ def _load_constraint_id_lookup(model_path: Path) -> dict[str, str]:
         data = yaml.safe_load(f) or {}
 
     model = data.get("model", {})
-    constraints = model.get("constraints", [])
+    constraints = model.get("constraints", data.get("constraints", []))
 
     lookup: dict[str, str] = {}
     for c in constraints:
@@ -45,6 +50,35 @@ def _format_id_list(values: list[str]) -> str:
     """Serialize identifiers as a compact, CSV-friendly string."""
 
     return ";".join(sorted(dict.fromkeys(str(value) for value in values)))
+
+
+def _build_combined_model() -> DeclareModel:
+    """Load and merge all Declare modules into a single model instance."""
+
+    model = DeclareModel(name="combined_readiness_sbt_failure")
+    for builder in (
+        build_readiness_assessment_model,
+        build_sbt_execution_model,
+        build_failure_correction_model,
+    ):
+        sub_model = builder()
+        for constraint in sub_model.constraints:
+            model.add(constraint)
+    return model
+
+
+def _load_combined_constraint_id_lookup(model_paths: list[Path]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for model_path in model_paths:
+        lookup.update(_load_constraint_id_lookup(model_path))
+    return lookup
+
+
+def _load_combined_scoring_constraints(model_paths: list[Path], weights_path: Path):
+    constraints = []
+    for model_path in model_paths:
+        constraints.extend(load_constraints_with_weights(model_path, weights_path))
+    return constraints
 
 
 def main() -> None:
@@ -73,10 +107,10 @@ def main() -> None:
         print(f"Error: Input file {args.input} does not exist.")
         return
 
-    # 1. Initialize the Batch Runner with the Readiness model
+    # 1. Initialize the Batch Runner with a combined model across all modules
     runner = BatchConformanceRunner(
         input_file=args.input,
-        model_builder=build_readiness_assessment_model
+        model_builder=_build_combined_model,
     )
 
     # 2. Execute batch processing
@@ -84,12 +118,16 @@ def main() -> None:
 
     # 3. Process results into a flat dataframe for analysis
     if results:
-        # Load weights for scoring
+        # Load weights and rule metadata for all modules.
         weights_path = Path(__file__).resolve().parent / "configs" / "declare" / "weights.yaml"
-        model_path = Path(__file__).resolve().parent / "configs" / "declare" / "readiness_assessment.yaml"
+        model_paths = [
+            Path(__file__).resolve().parent / "configs" / "declare" / "readiness_assessment.yaml",
+            Path(__file__).resolve().parent / "configs" / "declare" / "sbt_execution.yaml",
+            Path(__file__).resolve().parent / "configs" / "declare" / "failure_correction.yaml",
+        ]
 
-        scoring_constraints = load_constraints_with_weights(model_path, weights_path)
-        constraint_id_lookup = _load_constraint_id_lookup(model_path)
+        scoring_constraints = _load_combined_scoring_constraints(model_paths, weights_path)
+        constraint_id_lookup = _load_combined_constraint_id_lookup(model_paths)
         scores_df, detail_df, population_kpi = score_trace_collection(
             trace_results=results,
             constraints=scoring_constraints,
