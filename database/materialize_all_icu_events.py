@@ -575,7 +575,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("icu_event_level_sbt.parquet"),
+        default=Path("data/icu_event_level_sbt.parquet"),
         help="Local output file (.csv, .csv.gz, .parquet, or .pq).",
     )
     parser.add_argument(

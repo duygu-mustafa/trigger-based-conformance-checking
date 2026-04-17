@@ -22,7 +22,6 @@ from .weighted_scoring import (
 from .outcome_postprocessing import (
     build_model_level_summary_frame,
 )
-from . import examples
 
 __all__ = [
     "DeclareTemplate",
@@ -49,5 +48,4 @@ __all__ = [
     "violations_to_frame",
     "compute_trace_scores",
     "build_model_level_summary_frame",
-    "examples",
 ]

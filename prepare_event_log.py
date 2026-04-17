@@ -1,7 +1,7 @@
 """Precompute canonical event-log rows from raw ICU events.
 
 Usage:
-    python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet
+    python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/icu_event_log.parquet
 """
 
 from __future__ import annotations
@@ -171,13 +171,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("icu_event_level_sbt.parquet"),
+        default=Path("data/icu_event_level_sbt.parquet"),
         help="Raw ICU events input (Parquet or CSV).",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("icu_event_log.parquet"),
+        default=Path("data/icu_event_log.parquet"),
         help="Output canonical event-log file.",
     )
     parser.add_argument(
@@ -189,7 +189,7 @@ def main() -> None:
     parser.add_argument(
         "--sample-source",
         type=Path,
-        default=Path("sbt_started_yes_stay_ids.parquet"),
+        default=Path("data/sbt_started_yes_stay_ids.parquet"),
         help="Parquet file containing candidate stay_id values for sampling.",
     )
     parser.add_argument(

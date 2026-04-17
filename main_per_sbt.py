@@ -59,8 +59,8 @@ def _build_combined_model() -> DeclareModel:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("icu_event_log.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("main_per_sbt.csv"))
+    parser.add_argument("--input", type=Path, default=Path("data/icu_event_log.parquet"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/main_per_sbt.csv"))
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -163,6 +163,7 @@ def main() -> None:
             })
 
     output_df = pd.DataFrame(output_rows)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     output_df.to_csv(args.output, index=False)
     print(f"Saved granular per-SBT results to {args.output}")
 

@@ -102,7 +102,6 @@ The pipeline (`derive/pipeline.py`) performs these steps for each stay:
 
 ### Configuration Files
 - `configs/activity_mapping.yaml` — Maps raw source/itemid/value combinations to semantic activities
-- `configs/pipeline.yaml` — Feature engineering and event-log schema definition
 
 ---
 
@@ -216,7 +215,6 @@ Results saved to conformance_results.csv
 | `derive/` | Event log construction, SBT derivation, invasive-vent gating |
 | `conformance/` | Declarative rule checking and metrics computation |
 | `configs/` | YAML configuration for activity mapping, rules, weights |
-| `tests/` | Regression tests for config transform and rule matching |
 
 ### Data Flow
 
@@ -244,28 +242,6 @@ Canonical Event Log (icu_event_log.parquet)
        ↓
 Conformance Results (conformance_results.csv)
 ```
-
----
-
-## Testing
-
-Run regression tests to verify pipeline correctness:
-
-```bash
-python -m unittest tests.test_config_transform
-```
-
-Expected output:
-```
-....
-Ran 4 tests in 0.326s
-OK
-```
-
-These tests verify:
-- SBT episodes are emitted when invasive ventilation is present
-- SBT episodes are suppressed when invasive ventilation is absent
-- Activity mapping correctly transforms raw events to semantic activities
 
 ---
 

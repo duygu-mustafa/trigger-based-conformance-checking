@@ -1,8 +1,8 @@
 """CLI Entry point for batch conformance checking.
 
 Usage:
-    python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet
-    python main.py --input icu_event_log.parquet --output conformance_results.csv
+    python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/icu_event_log.parquet
+    python main.py --input data/icu_event_log.parquet --output data/results/conformance_results.csv
 """
 
 from __future__ import annotations
@@ -86,13 +86,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("icu_event_log.parquet"),
+        default=Path("data/icu_event_log.parquet"),
         help="Path to canonical event-log file (recommended) or raw ICU events file.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("conformance_results.csv"),
+        default=Path("data/results/conformance_results.csv"),
         help="Path to save the aggregated results CSV.",
     )
     parser.add_argument(
@@ -165,6 +165,7 @@ def main() -> None:
             })
 
         df = pd.DataFrame(output_rows)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(args.output, index=False)
         print(f"Successfully processed {len(results)} stays.")
         print(f"Population KPI (Sugeno): {population_kpi:.4f}" if not pd.isna(population_kpi) else "Population KPI (Sugeno): n/a")
