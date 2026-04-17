@@ -13,7 +13,15 @@ sources:
     220277: SpO2                        # O2 saturation pulseoxymetry (%)
     220339: PEEP                        # PEEP set (cmH2O)
 
-    # ── Acid-Base & Labs ─────────────────────────────────────────────────
+    # ── Derived / Virtual IDs ────────────────────────────────────────────
+    norepinephrine_equiv: Norepinephrine-equivalent dose (mcg/kg/min)
+    pao2fio2ratio: PaO2/FiO2 Ratio (mimiciv_derived.bg)
+    fio2_bg: FiO2 (COALESCE bg.fio2, bg.fio2_chartevents)
+    peep_vent: PEEP (ventilator_setting.peep)
+    ph_bg: pH (bg.ph)
+    hemoglobin_bg: Hemoglobin (bg.hemoglobin)
+    sbt_status: Spontaneous Breathing Trial Status Signal
+    sbt_outcome: Spontaneous Breathing Trial Final Outcome
     223830: pH_arterial                 # PH Arterial
     220228: hemoglobin                  # Hemoglobin (g/dL)
 
@@ -30,6 +38,7 @@ sources:
 
     # ── Vasopressors ─────────────────────────────────────────────────────
     221906: norepinephrine              # Norepinephrine dose (mcg/kg/min)
+    norepinephrine_equiv: norepinephrine_equiv # Norepinephrine-equivalent dose (mcg/kg/min)
 
     # ── SBT Markers ──────────────────────────────────────────────────────
     224715: sbt_started                 # SBT Started - Text (Yes/No)
@@ -66,6 +75,47 @@ sources:
     227463: cortisol                    # Cortisol (mcg/dL)
 
     226814: known_difficult_intubation  # Known difficult intubation - Text (Yes/No)
+
+  inputevents:
+
+    # ── Post-Failure Stabilising Medications ─────────────────────────────
+    224170: bronchodilator_admin         # MDI #1 Drug (inhaled bronchodilator)
+    221794: furosemide_admin             # Furosemide
+    229639: bumetanide_admin             # Bumetanide
+    222056: nitroglycerin_admin          # Nitroglycerin
+    222051: nitroprusside_admin          # Nitroprusside
+    225974: metoprolol_admin             # Metoprolol
+    221429: esmolol_admin                # Esmolol
+
+    # ── Electrolyte Replacement ──────────────────────────────────────────
+    222011: potassium_chloride_admin     # Potassium chloride replacement
+    227536: potassium_chloride_alt_admin # Potassium chloride replacement (alt item)
+    222151: potassium_phosphate_admin    # Potassium/Sodium phosphate replacement
+    220995: magnesium_sulfate_admin      # Magnesium sulfate replacement
+    227523: magnesium_sulfate_alt_admin  # Magnesium sulfate replacement (alt item)
+
+  labevents:
+
+    # ── Electrolyte and Blood Gas Follow-Up ──────────────────────────────
+    50971: potassium_lab                 # Potassium
+    50960: magnesium_lab                 # Magnesium
+    50970: phosphate_lab                 # Phosphate
+    50882: bicarbonate_lab               # Bicarbonate
+    50818: pco2_lab                      # pCO2
+    50820: ph_lab                        # pH
+
+    # ── Endocrine Follow-Up ──────────────────────────────────────────────
+    227463: cortisol_lab                 # Cortisol
+    50993: tsh_lab                       # Thyroid Stimulating Hormone
+    50995: t4_free_lab                   # Free T4
+
+  prescriptions:
+
+    # ── Hormonal Replacement (drugname-level) ────────────────────────────
+    HYDROCORTISONE: hydrocortisone_admin
+    METHYLPREDNISOLONE: methylprednisolone_admin
+    DEXAMETHASONE: dexamethasone_admin
+    LEVOTHYROXINE SODIUM: levothyroxine_admin
 
   procedureevents:
 

@@ -36,8 +36,8 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def _item_label_lookup(item_dictionary: dict[str, Any]) -> dict[tuple[str, int], str]:
-    out: dict[tuple[str, int], str] = {}
+def _item_label_lookup(item_dictionary: dict[str, Any]) -> dict[tuple[str, Any], str]:
+    out: dict[tuple[str, Any], str] = {}
     sources = item_dictionary.get("sources", {})
     if not isinstance(sources, dict):
         return out
@@ -46,12 +46,8 @@ def _item_label_lookup(item_dictionary: dict[str, Any]) -> dict[tuple[str, int],
         if not isinstance(source, str) or not isinstance(mapping, dict):
             continue
         for itemid_raw, name in mapping.items():
-            try:
-                itemid = int(itemid_raw)
-            except (TypeError, ValueError):
-                continue
             if isinstance(name, str) and name.strip():
-                out[(source, itemid)] = name.strip()
+                out[(source, itemid_raw)] = name.strip()
     return out
 
 
@@ -70,10 +66,9 @@ def _activity_rules(activity_mapping: dict[str, Any]) -> list[dict[str, Any]]:
         itemid_raw = cfg.get("itemid")
         if not isinstance(source, str):
             continue
-        try:
-            itemid = int(itemid_raw)
-        except (TypeError, ValueError):
-            continue
+        
+        # itemid_raw may be int or str (sbt_status)
+        itemid = itemid_raw
 
         value_equals = None
         conditions = cfg.get("conditions")
@@ -118,7 +113,10 @@ def _normalize_raw_input(raw_df: pd.DataFrame) -> pd.DataFrame:
         out["value_uom"] = out.get("valueuom")
 
     out["event_time"] = pd.to_datetime(out["event_time"], errors="coerce")
-    out["itemid"] = pd.to_numeric(out["itemid"], errors="coerce")
+    
+    # Do not force itemid to numeric to support sbt_status / norepinephrine_equiv
+    # out["itemid"] = pd.to_numeric(out["itemid"], errors="coerce")
+    
     out["value_num"] = pd.to_numeric(out["value_num"], errors="coerce")
 
     for ts_col in ["charttime", "starttime", "endtime", "storetime"]:
@@ -126,13 +124,13 @@ def _normalize_raw_input(raw_df: pd.DataFrame) -> pd.DataFrame:
             out[ts_col] = pd.to_datetime(out[ts_col], errors="coerce")
 
     out = out.dropna(subset=["event_time", "itemid"]).copy()
-    out["itemid"] = out["itemid"].astype(int)
+    # out["itemid"] = out["itemid"].astype(int)
     return out
 
 
-def _measurement_activity_label(row: pd.Series, labels: dict[tuple[str, int], str]) -> str:
+def _measurement_activity_label(row: pd.Series, labels: dict[tuple[str, Any], str]) -> str:
     source = str(row.get("source_table") or "")
-    itemid = int(row["itemid"])
+    itemid = row["itemid"]
     mapped = labels.get((source, itemid))
     if mapped:
         return mapped

@@ -57,16 +57,16 @@ model:
       description: "PaO2/FiO2 >= 150 OR (SpO2 >= 90% on FiO2 <= 0.40 and PEEP <= 5 cmH2O)"
       logic: OR
       expressions:
-        - "(items[220224] / items[223835]) >= 150"
-        - "(items[220277] >= 90) AND (items[223835] <= 0.40) AND (items[220339] <= 5)"
+        - "items['pao2fio2ratio'] >= 150"
+        - "(items[220277] >= 90) AND (items['fio2_bg'] <= 0.40) AND (items['peep_vent'] <= 5)"
 
     ph_ok:
       description: "Arterial pH > 7.25"
-      expression: "items[223830] > 7.25"
+      expression: "items['ph_bg'] > 7.25"
 
     hemoglobin_ok:
       description: "Hemoglobin >= 7 g/dL"
-      expression: "items[220228] >= 7.0"
+      expression: "items['hemoglobin_bg'] >= 7.0"
 
     temperature_ok:
       description: "Core temperature <= 38 degrees C"
@@ -75,19 +75,18 @@ model:
     vasopressor_ok:
       description: >
         Norepinephrine-equivalent <= 0.1 mcg/kg/min (hemodynamically stable).
-        Reference: Kotani et al., Crit Care 2023 (NE-equivalent score).
-      expression: "items[221906] <= 0.1"
+        Source: mimiciv_derived.norepinephrine_equivalent_dose
+      expression: "items['norepinephrine_equiv'] <= 0.1"
 
-    rass_ok:
+    mental_status_ok:
       description: >
-        CAM-ICU RASS LOC (228302) = Yes -- patient awake and easily arousable.
-      expression: "items[228302] == 'Yes'"
-
-    sas_ok:
-      description: >
-        Riker-SAS (223753) in {3, 4}: Sedated (arousable) or Calm/Cooperative.
-        SAS >= 5 (agitation) or <= 2 (over-sedation) = not ready.
-      expression: "items[223753] in [3, 4]" # CHECK THIS: Maybe remove
+        Patient is awake and easily arousable.
+        Satisfied if CAM-ICU RASS LOC (228302) = 'Yes' 
+        OR Riker-SAS (223753) is in {3, 4} (Sedated/Calm).
+      logic: OR
+      expressions:
+        - "items[228302] == 'Yes'"
+        - "items[223753] in [3, 4]"
     
     inspiratory_effort_ok:
       description: >
@@ -158,24 +157,16 @@ model:
         at SBT initiation.
 
     - id: RC-DP-06
-      label: "RASS criterion must be met at SBT start"
+      label: "Mental status criterion must be met at SBT start"
       template: MP_EXISTENCE
       activation: SBTStarted
-      activation_condition: "NOT rass_ok"
+      activation_condition: "NOT mental_status_ok"
       semantics: ACTIVATION_VIOLATION
       rationale: >
-        CAM-ICU RASS LOC (itemid 228302) must be Yes within 24 h of SBT start.
+        Patient must be awake and easily arousable (RASS LOC 'Yes' OR SAS 3-4) 
+        within 24 h of SBT start.
 
     - id: RC-DP-07
-      label: "SAS criterion must be met at SBT start"
-      template: MP_EXISTENCE
-      activation: SBTStarted
-      activation_condition: "NOT sas_ok"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        Riker-SAS (itemid 223753) must be 3 or 4 within 24 h of SBT start.
-    
-    - id: RC-DP-08
       label: "Inspiratory effort criterion must be met at SBT start"
       template: MP_EXISTENCE
       activation: SBTStarted
@@ -189,7 +180,7 @@ model:
       template: TIMED_PRECEDENCE
       activation: SBTStarted
       observation_window_hours: 24
-      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 221906]
+      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 'norepinephrine_equiv', 'pao2fio2ratio', 'fio2_bg', 'peep_vent', 'ph_bg', 'hemoglobin_bg']
       rationale: >
         All readiness condition items must have at least one chartevents record
         within 24 h before SBTStarted. Stale observations are not valid for

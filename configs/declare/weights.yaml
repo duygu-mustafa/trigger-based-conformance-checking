@@ -1,0 +1,287 @@
+version: 1
+
+weights:
+
+  # ── Readiness assessment (RC-*) ─────────────────────────────────────────
+
+  RC-CF-01:
+    metadata_scores:
+      clinical_consequence: 0.8
+      unnoticed_frequency: 0.3
+      must_not_vs_should: 0.8
+
+  RC-DP-01:  # Oxygenation criterion
+    metadata_scores:
+      clinical_consequence: 1.0   # top tier
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 150
+    theta_crit: 100
+
+  RC-DP-02:  # pH > 7.25
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.9
+    theta: 7.25
+    theta_crit: 7.20
+
+  RC-DP-03:  # Hemoglobin >= 7 g/dL
+    metadata_scores:
+      clinical_consequence: 0.6   # clearly below oxygenation/pH
+      unnoticed_frequency: 0.4
+      must_not_vs_should: 0.6
+    theta: 7.0
+    theta_crit: 6.5
+
+  RC-DP-04:  # Temperature <= 38 °C
+    metadata_scores:
+      clinical_consequence: 0.5   # “nice to have”, least critical of readiness
+      unnoticed_frequency: 0.3
+      must_not_vs_should: 0.5
+    theta: 38.0
+    theta_crit: 39.0
+
+  RC-DP-05:  # Vasopressor (NE-equivalent)
+    metadata_scores:
+      clinical_consequence: 1.0   # top tier with oxygenation
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 0.1
+    theta_crit: 0.2
+
+  RC-DP-06:  # RASS / CAM-ICU awake/arousable
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 0.9
+    theta: 0.0
+    theta_crit: -3.0
+
+  RC-DP-07:  # SAS 3–4
+    metadata_scores:
+      clinical_consequence: 0.75
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.8
+    theta: 3
+    theta_crit: 2
+
+  RC-DP-08:  # Inspiratory effort > 0 mL
+    metadata_scores:
+      clinical_consequence: 0.8
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.85
+    theta: 0.0
+    theta_crit: 50.0
+
+  RC-TM-01:  # Observations within 24h before SBT
+    metadata_scores:
+      clinical_consequence: 0.7   # stale data can hide deterioration
+      unnoticed_frequency: 0.8    # documentation timing issues are common
+      must_not_vs_should: 0.6     # more “should” than hard barrier
+
+  RC-TM-02:  # Repeated SBT attempts ≥24h apart after failure
+    metadata_scores:
+      clinical_consequence: 0.75  # premature re‑trials risk fatigue/failure
+      unnoticed_frequency: 0.7    # schedule drift is common
+      must_not_vs_should: 0.7     # guideline‑like “should not”, but sometimes overridden
+
+  # ── SBT execution failure thresholds (SBT-DP-*) ─────────────────────────
+
+  SBT-DP-01:  # SBT duration 30–120 min
+    metadata_scores:
+      clinical_consequence: 0.6
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.6
+    theta: 30
+    theta_crit: 15
+
+  SBT-DP-02:  # RR > 35 with “success”
+    metadata_scores:
+      clinical_consequence: 0.95  # very high, just below oxygenation/pressors
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 1.0
+    theta: 35
+    theta_crit: 45
+
+  SBT-DP-03:  # SpO2 failure criterion
+    metadata_scores:
+      clinical_consequence: 1.0
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 1.0
+    theta: 92
+    theta_crit: 88
+
+  SBT-DP-04:  # Hemodynamic failure criterion
+    metadata_scores:
+      clinical_consequence: 1.0
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 1.0
+    theta: 140
+    theta_crit: 160
+
+  SBT-DP-05:  # Mental status failure criterion
+    metadata_scores:
+      clinical_consequence: 0.85
+      unnoticed_frequency: 0.8
+      must_not_vs_should: 0.9
+    theta: 3
+    theta_crit: 2
+
+  SBT-DP-06:  # Mode: PSV when >24h
+    metadata_scores:
+      clinical_consequence: 0.5
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.5
+
+  SBT-DP-07:  # High-risk → extubate to NIV
+    metadata_scores:
+      clinical_consequence: 0.75
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.8
+
+    # ── SBT control-flow constraints (SBT-CF-*) ────────────────────────────
+
+  SBT-CF-01:  # SBT must eventually be completed or stopped
+    metadata_scores:
+      clinical_consequence: 0.6   # missing outcome risks misclassification
+      unnoticed_frequency: 0.7    # charting omissions are common
+      must_not_vs_should: 0.6
+
+  SBT-CF-02:  # SBT completion must follow SBT start
+    metadata_scores:
+      clinical_consequence: 0.7   # strong internal consistency / data integrity
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.8     # essentially a “must” from a modeling viewpoint
+
+  SBT-CF-03:  # SBT stop must follow SBT start
+    metadata_scores:
+      clinical_consequence: 0.6
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.7
+
+  SBT-CF-04:  # SBT completion and SBT stop mutually exclusive
+    metadata_scores:
+      clinical_consequence: 0.7   # conflicting outcomes confuse labels
+      unnoticed_frequency: 0.6
+      must_not_vs_should: 0.8
+
+  SBT-CF-05:  # After SBT failure, ventilatory support must resume
+    metadata_scores:
+      clinical_consequence: 0.85  # safety‑relevant (risk of fatigue/hypoxemia)
+      unnoticed_frequency: 0.5
+      must_not_vs_should: 0.9
+
+  # ── SBT temporal constraints (SBT-TM-*) ────────────────────────────────
+
+  SBT-TM-01:  # Completion recorded within 3h of SBT start
+    metadata_scores:
+      clinical_consequence: 0.6   # long gaps suggest missing outcome
+      unnoticed_frequency: 0.7    # delays in documentation common
+      must_not_vs_should: 0.6
+
+  SBT-TM-02:  # Failure criterion → SBT stop within 30 min
+    metadata_scores:
+      clinical_consequence: 0.9   # delayed stop after failure is safety‑critical
+      unnoticed_frequency: 0.7
+      must_not_vs_should: 0.9
+ # ── INT-TR-01: Bronchodilator ────────────────────────────────────────────
+
+  INT-TR-01:
+    metadata_scores:
+      clinical_consequence: 0.65  # failure to provide bronchodilators prolongs
+                                  # weaning in obstructive patients but is not
+                                  # immediately life-threatening
+      unnoticed_frequency: 0.65   # resistance signals are noisy; omission is
+                                  # common and not always flagged
+      must_not_vs_should: 0.5     # applies to a subset of failures (obstructive
+                                  # phenotype); low obligation across all failures
+
+  # ── INT-TR-02: Diuretic ──────────────────────────────────────────────────
+
+  INT-TR-02:
+    metadata_scores:
+      clinical_consequence: 0.75  # untreated fluid overload meaningfully
+                                  # increases reintubation risk
+      unnoticed_frequency: 0.5    # diuretics are consistently charted in
+                                  # inputevents; violations are detectable
+      must_not_vs_should: 0.6     # common intervention but not universal;
+                                  # applies mainly to volume-overloaded patients
+
+  # ── INT-TR-03: Afterload reduction ───────────────────────────────────────
+
+  INT-TR-03:
+    metadata_scores:
+      clinical_consequence: 0.85  # unmanaged cardiac dysfunction during weaning
+                                  # risks pulmonary edema and reintubation
+      unnoticed_frequency: 0.6    # cardiac drugs are well-charted in inputevents
+                                  # but are conditional on cardiac diagnosis
+      must_not_vs_should: 0.5     # applies to the cardiac-origin subset only;
+                                  # moderate obligation across all failures
+
+  # ── INT-DX-04: Electrolyte / Blood Gas labs ──────────────────────────────
+
+  INT-DX-04:
+    # Highest-confidence rule: electrolyte/BG draw is near-universal post-failure
+    # practice in any modern ICU. MIMIC labevents coverage is dense.
+    metadata_scores:
+      clinical_consequence: 0.85  # undetected derangement directly causes next
+                                  # SBT to fail; patient safety implication
+      unnoticed_frequency: 0.35   # lab draws are reliably documented; omission
+                                  # is uncommon and detectable
+      must_not_vs_should: 0.9     # near-mandatory: post-failure metabolic workup
+                                  # is standard ICU protocol
+    theta: 6           # max_gap_hours — labs should arrive within 6 h
+    theta_crit: 12     # > 12 h gap = significant documentation or care gap
+
+  # ── INT-TR-04: Electrolyte replacement ───────────────────────────────────
+
+  INT-TR-04:
+    metadata_scores:
+      clinical_consequence: 0.8   # electrolyte deficiencies directly impair
+                                  # respiratory muscle contractility
+      unnoticed_frequency: 0.4    # replacement drugs are clearly charted in
+                                  # inputevents; omission is detectable
+      must_not_vs_should: 0.75    # common across ICU stays; most patients
+                                  # receive at least one replacement post-failure
+    theta: 3.5         # K < 3.5 mEq/L as representative trigger threshold
+    theta_crit: 3.0    # K < 3.0 mEq/L = severe hypokalemia; arrhythmia risk
+
+  # ── INT-DX-05: Cortisol / Thyroid labs ───────────────────────────────────
+
+  INT-DX-05:
+    # Low must_not_vs_should: these are selectively ordered tests, not routine.
+    # A missing cortisol/TSH is only a violation when clinically indicated,
+    # but without activation_condition we cannot encode that distinction;
+    # the low weight compensates.
+    metadata_scores:
+      clinical_consequence: 0.6   # missed endocrine cause leads to prolonged
+                                  # weaning but is rarely acutely dangerous
+      unnoticed_frequency: 0.8    # selective ordering makes omission very common
+                                  # and hard to distinguish from "not indicated"
+      must_not_vs_should: 0.3     # soft: expected only in a minority of cases;
+                                  # treat violations as signals, not hard deviations
+
+  # ── INT-TR-05: Hormonal replacement ──────────────────────────────────────
+
+  INT-TR-05:
+    # Softest rule in the set. MIMIC charting gaps for steroids and the slow
+    # clinical decision timeline for thyroid replacement both justify low weight.
+    metadata_scores:
+      clinical_consequence: 0.65  # untreated adrenal insufficiency at extubation
+                                  # is clinically significant; thyroid deficiency
+                                  # contributes over a longer horizon
+      unnoticed_frequency: 0.85   # steroid prescriptions are poorly captured in
+                                  # MIMIC; violations are frequently undetectable
+      must_not_vs_should: 0.25    # very soft: expected only in confirmed endocrine
+                                  # dysfunction; MIMIC data limits enforcement
+    theta: 48          # max_gap_hours for hormonal replacement
+    theta_crit: 72     # > 72 h without treatment after confirmed derangement
+                       # = meaningful clinical delay
+
+  INT-COMPOSITE-01:
+    metadata_scores:
+      clinical_consequence: 1.0   # zero intervention after SBT failure is a
+                                   # critical protocol breach
+      unnoticed_frequency: 0.4    # total inaction is relatively rare and detectable
+      must_not_vs_should: 1.0     # hard must: at least something must happen

@@ -1,4 +1,177 @@
 version: 1
+
 model:
-  name: failure_correction
-  constraints: []
+  name: failure_interventions
+  description: >
+    Post-SBT-failure intervention constraints derived from Akella et al. (2022),
+    Table 1. Each constraint activates on SBTFailed and checks whether a specific
+    diagnostic or stabilising intervention was recorded within a defined time window.
+    No cause classification is performed: rules fire after every SBT failure and
+    individual weights reflect how universally each intervention is expected.
+
+    SBTFailed is defined as:
+      - chartevents itemid 224717 (SBT Successfully Completed) with value = "No"
+      - OR chartevents itemid 224716 (SBT Stopped) within an open SBT window.
+
+    Activity definitions:
+      SBTFailed                    -- derived from above
+      Bronchodilator_Admin         -- inputevents itemid 224170
+      Diuretic_Admin               -- inputevents itemids [221794, 229639]
+      AfterloadReduction_Admin     -- inputevents itemids [222056, 222051, 225974, 221429]
+      ElectrolyteBG_Test           -- labevents itemids [50971, 50960, 50970, 50882, 50818, 50820]
+      ElectrolyteCorrection_Admin  -- inputevents itemids [222011, 227536, 222151, 220995, 227523]
+      HormonalLab_Test             -- labevents itemids [227463, 50993, 50995]
+      HormonalReplacement_Admin    -- prescriptions drugnames
+                                      ["HYDROCORTISONE", "METHYLPREDNISOLONE",
+                                       "DEXAMETHASONE", "LEVOTHYROXINE SODIUM"]
+
+# ── Constraints ────────────────────────────────────────────────────────────
+
+constraints:
+
+  # ── Stabilising: Airway ───────────────────────────────────────────────────
+
+  - id: INT-TR-01
+    label: "Bronchodilator present in post-failure intervention window"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: Bronchodilator_Admin
+    # source: icu.inputevents, itemid 224170
+    # existence: >= 1 record with starttime in (sbt_fail_time, sbt_fail_time + 24h)
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Inhaled bronchodilators are a first-line stabilising intervention
+      for airway resistance as a cause of weaning failure (Akella et al.,
+      2022). Absence within 24 h of a failed SBT indicates the airway
+      resistance pathway was not addressed before the next attempt.
+
+  # ── Stabilising: Compliance / Fluid ──────────────────────────────────────
+
+  - id: INT-TR-02
+    label: "Diuretic present in post-failure intervention window"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: Diuretic_Admin
+    # source: icu.inputevents
+    # itemids: [221794 (Furosemide), 229639 (Bumetanide)]
+    # existence: >= 1 record with starttime in (sbt_fail_time, sbt_fail_time + 24h)
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Diuretics reduce pulmonary and chest-wall edema, improving static
+      compliance and reducing respiratory workload before the next SBT.
+      Absence within 24 h suggests fluid overload was not actively managed
+      following failure.
+
+  # ── Stabilising: Cardiac ──────────────────────────────────────────────────
+
+  - id: INT-TR-03
+    label: "Afterload reduction present in post-failure intervention window"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: AfterloadReduction_Admin
+    # source: icu.inputevents
+    # itemids: [222056 (Nitroglycerin), 222051 (Nitroprusside),
+    #           225974 (Metoprolol),    221429 (Esmolol)]
+    # existence: >= 1 record with starttime in (sbt_fail_time, sbt_fail_time + 24h)
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Afterload reduction agents address weaning-induced cardiac dysfunction
+      by reducing LV preload and afterload. Absence within 24 h of a failed
+      SBT suggests the cardiovascular pathway was not treated.
+
+  # ── Diagnostic: Electrolytes & Blood Gas ─────────────────────────────────
+
+  - id: INT-DX-04
+    label: "Electrolyte and blood gas labs drawn after SBT failure"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: ElectrolyteBG_Test
+    # source: hosp.labevents
+    # itemids: [50971 (K), 50960 (Mg), 50970 (Phos),
+    #           50882 (HCO3), 50818 (pCO2), 50820 (pH)]
+    # existence: >= 1 result with charttime in (sbt_fail_time, sbt_fail_time + 6h)
+    max_gap_hours: 6
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Electrolyte derangements (low K, Mg, Phos) and blood gas abnormalities
+      (acidosis, hypercapnia) are common reversible causes of SBT failure.
+      A basic metabolic panel and ABG should be drawn within 6 h of any
+      failed SBT. The 6 h window (tighter than other rules) reflects that
+      this is a routine, near-immediate workup rather than a specialist order.
+
+  # ── Stabilising: Electrolyte Correction ──────────────────────────────────
+
+  - id: INT-TR-04
+    label: "Electrolyte replacement present in post-failure intervention window"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: ElectrolyteCorrection_Admin
+    # source: icu.inputevents
+    # itemids: [222011, 227536 (KCl), 222151 (K-Phos/Na-Phos),
+    #           220995, 227523 (MgSO4)]
+    # existence: >= 1 record with starttime in (sbt_fail_time, sbt_fail_time + 24h)
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Electrolyte replacement corrects muscle weakness caused by low K, Mg,
+      or Phos before the next SBT attempt. Absence within 24 h indicates
+      the metabolic pathway was not addressed after failure.
+
+  # ── Diagnostic: Cortisol / Thyroid ───────────────────────────────────────
+
+  - id: INT-DX-05
+    label: "Cortisol and thyroid function labs drawn after SBT failure"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: HormonalLab_Test
+    # source: hosp.labevents
+    # itemids: [227463 (Cortisol), 50993 (TSH), 50995 (Free T4)]
+    # existence: >= 1 result with charttime in (sbt_fail_time, sbt_fail_time + 24h)
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Adrenal insufficiency and hypothyroidism are reversible endocrine
+      causes of weaning failure. Cortisol and thyroid function tests should
+      be drawn within 24 h of a failed SBT. Low expected compliance
+      reflected in weights (these are selective, not routine, tests).
+
+  # ── Stabilising: Hormonal Replacement ────────────────────────────────────
+
+  - id: INT-TR-05
+    label: "Hormonal replacement present in post-failure intervention window"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: HormonalReplacement_Admin
+    # source: hosp.prescriptions
+    # drugnames (adrenal): ["HYDROCORTISONE", "METHYLPREDNISOLONE", "DEXAMETHASONE"]
+    # drugnames (thyroid): ["LEVOTHYROXINE SODIUM"]
+    # existence: >= 1 prescription in (sbt_fail_time, sbt_fail_time + 48h)
+    max_gap_hours: 48
+    semantics: TARGET_VIOLATION
+    rationale: >
+      Stress-dose corticosteroids and thyroid hormone replacement address
+      confirmed endocrine dysfunction contributing to weaning failure. The
+      48 h window is wider than other rules to reflect the slower prescribing
+      decision for thyroid replacement. Marked as a soft rule in weights
+      due to known gaps in corticosteroid charting in MIMIC-IV.
+
+  - id: INT-COMPOSITE-01
+    label: "At least one failure intervention must occur after SBT failure"
+    template: TIMED_RESPONSE
+    activation: SBTFailed
+    target: AnyFailureIntervention
+    target_condition: >
+      exists(inputevents,  itemid IN [224170, 221794, 229639,
+                                      222056, 222051, 225974, 221429,
+                                      222011, 227536, 222151, 220995, 227523])
+      OR
+      exists(labevents,    itemid IN [50971, 50960, 50970, 50882, 50818, 50820,
+                                      227463, 50993, 50995])
+      OR
+      exists(prescriptions, drugname IN ['HYDROCORTISONE', 'METHYLPREDNISOLONE',
+                                          'DEXAMETHASONE', 'LEVOTHYROXINE SODIUM'])
+    max_gap_hours: 24
+    semantics: TARGET_VIOLATION
