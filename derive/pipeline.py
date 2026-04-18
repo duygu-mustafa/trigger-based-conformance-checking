@@ -255,9 +255,14 @@ def _explicit_invasive_vent_start_times_from_raw(raw_df: pd.DataFrame) -> dict[s
 
 
 def _invasive_vent_start_times_from_raw(raw_df: pd.DataFrame) -> dict[str, pd.Timestamp]:
-    """Return invasive ventilation start timestamp per stay from inferred Full Support only."""
+    """Return the first inferred invasive ventilation start timestamp per stay."""
 
-    return _full_support_start_times_from_settings(raw_df)
+    all_starts = _full_support_start_times_from_settings(raw_df)
+    first_starts: dict[str, pd.Timestamp] = {}
+    for stay_id, starts in all_starts.items():
+        if starts:
+            first_starts[stay_id] = starts[0]
+    return first_starts
 
 
 def _keep_directly_preceded_sbt_episodes(
@@ -321,8 +326,13 @@ def _is_sbt_candidate_state(mode: object, mode_hamilton: object, plateau_pressur
     return False
 
 
-def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, pd.Timestamp]:
-    """Fallback invasive-vent onset from ventilator settings classified as Full Support."""
+def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, list[pd.Timestamp]]:
+    """Infer all invasive ventilation trigger timestamps from ventilator settings.
+
+    Trigger rule per stay:
+    - create a trigger if the first observed ventilation mode is Full Support,
+    - create a trigger on each transition from SBT-candidate ventilation to Full Support.
+    """
 
     weaning_df = _derive_weaning_frame_from_raw(raw_df)
     if weaning_df.empty:
@@ -334,7 +344,8 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, p
     if working.empty:
         return {}
 
-    full_support_mask = ~working.apply(
+    working = working.sort_values(["stay_id", "charttime"]).copy()
+    working["is_full_support"] = ~working.apply(
         lambda row: _is_sbt_candidate_state(
             row.get("ventilator_mode"),
             row.get("ventilator_mode_hamilton"),
@@ -343,47 +354,51 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, p
         ),
         axis=1,
     )
-    full_support_rows = working.loc[full_support_mask, ["stay_id", "charttime"]]
-    if full_support_rows.empty:
-        return {}
 
-    start_times: dict[str, pd.Timestamp] = {}
-    for stay_id, group in full_support_rows.groupby("stay_id", sort=False):
-        start_times[str(stay_id)] = group["charttime"].min()
+    start_times: dict[str, list[pd.Timestamp]] = {}
+    for stay_id, group in working.groupby("stay_id", sort=False):
+        g = group.sort_values("charttime").copy()
+        prev_full = g["is_full_support"].shift(1)
+        start_mask = g["is_full_support"] & ((prev_full != True) | prev_full.isna())
+        starts = [ts for ts in g.loc[start_mask, "charttime"].tolist() if pd.notna(ts)]
+        if starts:
+            start_times[str(stay_id)] = starts
+
     return start_times
 
 
 def _synthesize_invasive_vent_events_from_settings(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """Create synthetic procedureevents(225792) starts from inferred Full Support onset."""
+    """Create one synthetic invasive-ventilation trigger per inferred start."""
 
     fallback_starts = _full_support_start_times_from_settings(raw_df)
     if not fallback_starts:
         return pd.DataFrame()
 
     synthetic_rows: list[dict[str, object]] = []
-    for stay_id_text in fallback_starts.keys():
+    for stay_id_text, start_timestamps in fallback_starts.items():
         stay_mask = raw_df.get("stay_id", pd.Series(index=raw_df.index, dtype=object)).astype(str).eq(stay_id_text)
         stay_rows = raw_df.loc[stay_mask]
 
-        row: dict[str, object] = {
-            "source_table": "procedureevents",
-            "stay_id": int(stay_id_text) if stay_id_text.isdigit() else stay_id_text,
-            "event_time": fallback_starts[stay_id_text],
-            "starttime": fallback_starts[stay_id_text],
-            "endtime": pd.NaT,
-            "itemid": 225792,
-            "label": "Invasive Ventilation (Derived from Full Support)",
-            "value_text": "derived_full_support_onset",
-            "value_num": None,
-            "value_uom": None,
-        }
+        for start_ts in start_timestamps:
+            row: dict[str, object] = {
+                "source_table": "ventilator_derived",
+                "stay_id": int(stay_id_text) if stay_id_text.isdigit() else stay_id_text,
+                "event_time": start_ts,
+                "starttime": start_ts,
+                "endtime": pd.NaT,
+                "itemid": "derived_invasive_ventilation_start",
+                "label": "Invasive Ventilation Started (Derived from Ventilator Settings)",
+                "value_text": "derived_full_support_onset",
+                "value_num": None,
+                "value_uom": None,
+            }
 
-        for optional_col in ["case_id", "subject_id", "hadm_id", "charttime", "storetime"]:
-            if optional_col in raw_df.columns:
-                non_null = stay_rows[optional_col].dropna()
-                row[optional_col] = non_null.iloc[0] if not non_null.empty else None
+            for optional_col in ["case_id", "subject_id", "hadm_id", "charttime", "storetime"]:
+                if optional_col in raw_df.columns:
+                    non_null = stay_rows[optional_col].dropna()
+                    row[optional_col] = non_null.iloc[0] if not non_null.empty else None
 
-        synthetic_rows.append(row)
+            synthetic_rows.append(row)
 
     return pd.DataFrame(synthetic_rows)
 
@@ -430,13 +445,9 @@ def raw_to_event_log(
 
     weaning_df = _derive_weaning_frame_from_raw(raw_df)
     if not weaning_df.empty:
-        invasive_start_times = _invasive_vent_start_times_from_raw(raw_df)
+        # Keep all detected SBT episodes; trigger-based episode segmentation is
+        # now handled in downstream conformance orchestration.
         episodes = build_sbt_episodes(weaning_df)
-        if not episodes.empty and invasive_start_times:
-            episodes = _keep_directly_preceded_sbt_episodes(episodes, invasive_start_times)
-        else:
-            episodes = episodes.iloc[0:0] if not invasive_start_times else episodes
-
         sbt_events = sbt_episodes_to_events(episodes)
         if not sbt_events.empty:
             raw_df = pd.concat([raw_df, sbt_events], ignore_index=True)

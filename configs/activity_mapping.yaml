@@ -2,6 +2,12 @@ version: 1
 
 mappings:
 
+  InvasiveVentilationStarted:
+    source: ventilator_derived
+    itemid: derived_invasive_ventilation_start
+    timestamp_field: event_time
+    description: "Invasive ventilation trigger event derived from ventilator settings."
+
   # ── SBT Execution Activities (derived from weaning logic) ────────────────
 
   SBTStarted:

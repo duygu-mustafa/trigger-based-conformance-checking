@@ -196,3 +196,15 @@ model:
       rationale: >
         After SBT failure, the next attempt must be separated by at least 24 h,
         matched with spontaneous awakening trials (sedation vacations).
+
+    - id: RC-TM-03
+      label: "SBT should be attempted 48-72 h after invasive ventilation start"
+      template: TIMED_RESPONSE
+      activation: InvasiveVentilationStarted
+      target: SBTStarted
+      min_gap_hours: 48
+      max_gap_hours: 72
+      rationale: >
+        Trigger-based episodes require a weaning attempt to be documented after
+        an initial stabilization period and no later than 72 h from invasive
+        ventilation start.
