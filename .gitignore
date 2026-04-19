@@ -21,3 +21,5 @@ pycache__/
 __pycache__/
 
 *.ipynb
+
+node_modules/

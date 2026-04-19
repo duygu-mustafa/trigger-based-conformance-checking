@@ -1,0 +1,167 @@
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  max-width: 1200px;
+  margin-bottom: 2rem;
+  border-bottom: 2px solid #333;
+  padding-bottom: 1rem;
+}
+
+.case-selector {
+  background: #333;
+  padding: 8px 16px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.case-selector select {
+  background: #222;
+  color: #fff;
+  border: 1px solid #444;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.visualization-area {
+  width: 100%;
+  max-width: 1300px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.timeline-svg {
+  width: 100%;
+  height: auto;
+  min-height: 400px;
+}
+
+.bar-intubation {
+  fill: #ff5252;
+  opacity: 0.7;
+}
+
+.bar-sbt {
+  fill: #448aff;
+  opacity: 0.7;
+}
+
+.event-marker {
+  cursor: pointer;
+}
+
+.event-marker:hover {
+  stroke: #fff;
+  stroke-width: 2px;
+}
+
+.axis-line {
+  stroke: #666;
+  stroke-width: 1px;
+}
+
+.axis-label {
+  fill: #aaa;
+  font-size: 12px;
+}
+
+.tooltip-area {
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #444;
+  height: 60px;
+}
+
+.tooltip-content {
+  font-size: 14px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 6px 12px;
+  border-radius: 4px;
+  display: inline-block;
+  border-left: 3px solid #2196f3;
+}
+
+.tooltip-placeholder {
+  color: #666;
+  font-style: italic;
+  font-size: 14px;
+  padding: 6px 0;
+}
+
+.violation-reason {
+  color: #ff5722;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.main-layout {
+  display: flex;
+  width: 100%;
+  margin-top: 1rem;
+  gap: 20px;
+  align-items: flex-start; /* Important for sticky */
+}
+
+.chart-area {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto; /* Allow horizontal scroll if SVG is wide */
+}
+
+.timeline-svg {
+  width: 100%;
+  height: auto;
+  min-width: 1000px; /* Ensure a minimum readable width */
+}
+
+.details-sidebar {
+  width: 350px;
+  background: #1e1e1e;
+  padding: 15px;
+  border-radius: 8px;
+  position: sticky;
+  top: 0;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.details-sidebar h3 {
+  margin-top: 0;
+  color: #fff;
+  font-size: 18px;
+}
+
+.details-sidebar h4 {
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.legend {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 2rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 1rem;
+  background: #1a1a1a;
+  border-radius: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 14px;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
