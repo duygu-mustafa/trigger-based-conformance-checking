@@ -7,6 +7,12 @@ mappings:
     itemid: derived_invasive_ventilation_start
     timestamp_field: event_time
     description: "Invasive ventilation trigger event derived from ventilator settings."
+ 
+  InvasiveVentilationEnded:
+    source: ventilator_derived
+    itemid: derived_invasive_ventilation_end
+    timestamp_field: event_time
+    description: "Invasive ventilation end event derived from ventilator settings."
 
   # ── SBT Execution Activities (derived from weaning logic) ────────────────
 
@@ -24,50 +30,9 @@ mappings:
       SBT outcome. Value=Success means liberation achieved;
       Value=Failure means returned to full support.
 
-  # ── Deprecated Native Activities (kept for reference) ────────────────────
-
-  NativeSBTStarted:
-    source: chartevents
-    itemid: 224715
-    conditions:
-      value_equals: "Yes"
-
-  NativeSBTCompleted:
-    source: chartevents
-    itemid: 224717
-
-  SBTStopped:
-    source: chartevents
-    itemid: 224716
-    description: "Explicit early SBT termination event."
-
-  SBTDeferred:
-    source: chartevents
-    itemid: 224833
-    description: >
-      SBT Deferred event recorded by nurse. Distinct values:
-        "Unable to perform RSBI"         -- low drive / high sedation / asynchrony
-        "Chronic vent dependent patient" -- flag as is_chronic = True
-        "Pending procedure"              -- censored data, exclude from physio model
-        "RSBI > 105"                     -- hard physiological screening failure
-
   # ── Derived / Synthetic Activities ───────────────────────────────────────
 
   SBTFailed:
     derived: true
     logic: >
-      Fired when SBTCompleted.value == "No" OR when SBTStopped occurs
-      within an active SBT window.
-
-  VentilatorySupportResumed:
-    derived: true
-    logic: >
-      Fired when ventilator support is re-engaged after SBTFailed.
-      Encodes the guideline: "patient receives non-fatiguing, comfortable
-      form of ventilatory support" after SBT failure.
-
-  NIVInitiated:
-    derived: true
-    logic: >
-      Fired when non-invasive ventilation is started post-extubation for
-      high-risk patients who passed the SBT.
+      Fired when SBTCompleted.value == "Failure"

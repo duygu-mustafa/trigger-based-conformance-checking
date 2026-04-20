@@ -201,9 +201,9 @@ def _build_eval_context(
     # Get snapshot of medical items (measurements) at evaluation time
     items = _build_items_snapshot(trace_df, eval_ts)
 
-    # Find key clinical milestones
-    intubation_ts = _first_ts(trace_df, "Intubation", eval_ts)
-    invasive_vent_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
+    # Find key clinical milestones (using derived start instead of intubation item)
+    intubation_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
+    invasive_vent_ts = intubation_ts
 
     # Calculate time elapsed since clinical events
     hours_since_intubation = (
@@ -215,8 +215,8 @@ def _build_eval_context(
         else 0.0
     )
 
-    # Item 225792 contains documented ventilation duration; use if it's larger
-    documented_vent_minutes = items.get(225792)
+    # Use derived ventilation duration if available as a virtual item
+    documented_vent_minutes = items.get('derived_invasive_ventilation_start')
     if isinstance(documented_vent_minutes, (float, int)) and not math.isnan(float(documented_vent_minutes)):
         ventilation_duration_hours = max(ventilation_duration_hours, float(documented_vent_minutes) / 60.0)
 
@@ -229,7 +229,7 @@ def _build_eval_context(
             or (prior["activity"] == "SBTStopped").any()
             or (
                 (prior["activity"] == "SBTCompleted")
-                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("no")
+                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("failure")
             ).any()
         )
 
@@ -277,7 +277,8 @@ def _to_python_expression(expression: str) -> str:
     expr = re.sub(r"\bTRUE\b", " True ", expr, flags=re.IGNORECASE)
     expr = re.sub(r"\bFALSE\b", " False ", expr, flags=re.IGNORECASE)
     # Convert item access from Declare syntax to function call
-    expr = re.sub(r"items\[(\d+)\]", r"__item(\1)", expr)
+    # Supports both numeric items[220210] and string items['sbt_outcome']
+    expr = re.sub(r"items\[['\"]?(\w+)['\"]?\]", r"__item('\1')", expr)
     return expr
 
 
@@ -314,8 +315,10 @@ def _evaluate_data_condition(
     items = ctx["items"]
 
     # Helper function to safely retrieve item values
-    def __item(itemid: int) -> object:
-        return items.get(int(itemid), math.nan)
+    def __item(itemid: str | int) -> object:
+        # Support both numeric and string keys
+        key = int(itemid) if isinstance(itemid, str) and itemid.isdigit() else itemid
+        return items.get(key, math.nan)
 
     # Set up local namespace with all available variables for eval()
     local_scope = {

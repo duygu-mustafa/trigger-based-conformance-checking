@@ -9,7 +9,7 @@ model:
     guards on SBTStarted: the activation event is SBTStarted itself, and each
     data condition is an activation condition that, if violated, constitutes a protocol deviation.
 
-    Ventilation onset is sourced from procedureevents (itemid 225792 starttime).
+    Ventilation onset is sourced from derived weaning state transitions.
     The 48-72 h eligibility window is computed relative to Intubation.starttime
     (procedureevents itemid 224385).
 
@@ -21,11 +21,9 @@ model:
     ventilation_duration_hours:
       description: >
         Hours elapsed from InvasiveVentilationStarted to the current event
-        timestamp. Derived from procedureevents itemid 225792:
-        (current_charttime - starttime) in hours,
-        OR value field (minutes) / 60 for completed episodes.
-      source: procedureevents
-      itemid: 225792
+        timestamp.
+      source: ventilator_derived
+      itemid: derived_invasive_ventilation_start
 
     hours_since_intubation:
       description: >
@@ -38,13 +36,12 @@ model:
     previous_SBT_failed:
       description: >
         Boolean flag. True if the most recent SBTCompleted in this stay
-        had value = "No", or if SBTStopped occurred within a trial window.
+        had value = "Failure".
       derived: true
 
     is_chronic:
       description: >
-        Boolean flag. True if SBTDeferred.value == "Chronic vent dependent
-        patient" has been recorded in this stay.
+        Boolean flag. True if the patient is marked as chronic ventilation dependent.
       derived: true
 
   # ── Readiness Data Conditions ─────────────────────────────────────────────
@@ -107,8 +104,8 @@ model:
       target: SBTStarted
       rationale: >
         An SBT can only be initiated on a patient who is currently on invasive
-        mechanical ventilation. Enforces that procedureevents itemid 225792
-        has an open episode at the time of SBTStarted.
+        mechanical ventilation. Enforces that InvasiveVentilationStarted
+        has occurred without an intervening end event.
 
     # ── Data-Perspective (MP-Declare activation conditions on SBTStarted) ─────
 
@@ -202,7 +199,7 @@ model:
       template: TIMED_RESPONSE
       activation: InvasiveVentilationStarted
       target: SBTStarted
-      min_gap_hours: 48
+      min_gap_hours: 0
       max_gap_hours: 72
       rationale: >
         Trigger-based episodes require a weaning attempt to be documented after

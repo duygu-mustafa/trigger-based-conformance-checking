@@ -152,7 +152,7 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     derived_frames: list[pd.DataFrame] = []
 
     # ── SBTFailed ────────────────────────────────────────────────────────────
-    # Case 1: SBTCompleted with value_raw == "No"
+    # Case 1: SBTCompleted with value_raw == "Failure"
     sbt_completed = activity_df[activity_df["activity"] == "SBTCompleted"].copy()
     if not sbt_completed.empty:
         failed_mask = (
@@ -160,7 +160,7 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
             .astype(str)
             .str.strip()
             .str.lower()
-            .eq("no")
+            .eq("failure")
         )
         sbt_failed_completed = sbt_completed[failed_mask].copy()
         if not sbt_failed_completed.empty:
@@ -174,58 +174,13 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
                     "value_raw": sbt_failed_completed.get("value_raw"),
                     "value_num": sbt_failed_completed.get("value_num"),
                     "unit": sbt_failed_completed.get("unit"),
-                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=No"}] * len(sbt_failed_completed),
+                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=Failure"}] * len(sbt_failed_completed),
                     "patient_id": sbt_failed_completed.get("patient_id"),
                     "stay_id": sbt_failed_completed.get("stay_id"),
                 }
             )
             derived_frames.append(sbt_failed_from_completed)
 
-    # Case 2: SBTStopped within an active SBT window (between SBTStarted and before SBTCompleted/timeout)
-    sbt_stopped = activity_df[activity_df["activity"] == "SBTStopped"].copy()
-    if not sbt_stopped.empty:
-        for case_id in sbt_stopped["case_id"].unique():
-            case_stopped = sbt_stopped[sbt_stopped["case_id"] == case_id]
-            case_all = activity_df[activity_df["case_id"] == case_id].sort_values("timestamp")
-
-            for _, stopped_row in case_stopped.iterrows():
-                stopped_ts = stopped_row["timestamp"]
-
-                # Check if there's an active SBT (started but not yet completed before this stopped event)
-                prior_start = case_all[
-                    (case_all["activity"] == "SBTStarted") & (case_all["timestamp"] < stopped_ts)
-                ]
-                if prior_start.empty:
-                    continue
-
-                # Take the most recent SBT start
-                most_recent_start = prior_start.iloc[-1]
-                start_ts = most_recent_start["timestamp"]
-
-                # Check if there's no completed event between the start and this stop
-                between = case_all[
-                    (case_all["timestamp"] > start_ts) & (case_all["timestamp"] < stopped_ts)
-                ]
-                completed_between = between[between["activity"] == "SBTCompleted"]
-
-                if completed_between.empty:
-                    # SBTStopped occurred during an active SBT window
-                    sbt_failed_frame = pd.DataFrame(
-                        {
-                            "case_id": [case_id],
-                            "activity": ["SBTFailed"],
-                            "timestamp": [stopped_ts],
-                            "source_table": [stopped_row.get("source_table")],
-                            "itemid": [stopped_row.get("itemid")],
-                            "value_raw": [stopped_row.get("value_raw")],
-                            "value_num": [stopped_row.get("value_num")],
-                            "unit": [stopped_row.get("unit")],
-                            "attrs": [{"kind": "derived_activity", "trigger": "SBTStopped"}],
-                            "patient_id": [stopped_row.get("patient_id")],
-                            "stay_id": [stopped_row.get("stay_id")],
-                        }
-                    )
-                    derived_frames.append(sbt_failed_frame)
 
     return derived_frames
 
@@ -241,6 +196,11 @@ def emit_activities(
     Returns a dataframe already aligned with the canonical event-log schema fields.
     """
     raw = _normalize_raw_input(raw_df)
+    
+    # HARD FILTER: Remove legacy SBT/Vent IDs from raw input entirely
+    legacy_blacklist = {224715, 224716, 224717, 225792, "224715", "224716", "224717", "225792"}
+    raw = raw[~raw["itemid"].isin(legacy_blacklist)].copy()
+
     raw = convert_categorical_values(raw)
     item_dictionary = _load_yaml(item_dictionary_path)
     activity_mapping = _load_yaml(activity_mapping_path)
@@ -268,6 +228,10 @@ def emit_activities(
             "stay_id": raw.get("stay_id"),
         }
     )
+
+    # Filter out virtual items that are handled as mapped activities to avoid duplication
+    virtual_ids = {"sbt_status", "sbt_outcome", "derived_invasive_ventilation_start"}
+    measurement_df = measurement_df[~measurement_df["itemid"].isin(virtual_ids)]
 
     mapped_frames: list[pd.DataFrame] = []
     for rule in rules:
@@ -325,6 +289,13 @@ def emit_activities(
     if derived_frames:
         out = pd.concat([out, *derived_frames], ignore_index=True)
         out = out.dropna(subset=["case_id", "activity", "timestamp"]).copy()
+        out = out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
+
+    # DEDUPLICATION: Remove identical rows (ignoring patient_id if it causes duplicates)
+    # We prioritize rows that HAVE a patient_id if duplicates exist
+    if not out.empty:
+        out = out.sort_values(["case_id", "timestamp", "activity", "patient_id"], na_position='last')
+        out = out.drop_duplicates(subset=["case_id", "activity", "timestamp", "itemid", "value_raw"], keep="first")
         out = out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
 
     return out

@@ -10,8 +10,7 @@ model:
     individual weights reflect how universally each intervention is expected.
 
     SBTFailed is defined as:
-      - chartevents itemid 224717 (SBT Successfully Completed) with value = "No"
-      - OR chartevents itemid 224716 (SBT Stopped) within an open SBT window.
+      - SBTCompleted with value = "Failure" (derived from weaning state transitions)
 
     Activity definitions:
       SBTFailed                    -- derived from above

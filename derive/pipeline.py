@@ -355,50 +355,80 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, l
         axis=1,
     )
 
-    start_times: dict[str, list[pd.Timestamp]] = {}
+    start_end_times: dict[str, list[tuple[pd.Timestamp, pd.Timestamp | None]]] = {}
     for stay_id, group in working.groupby("stay_id", sort=False):
         g = group.sort_values("charttime").copy()
         prev_full = g["is_full_support"].shift(1)
+        
+        # Starts: transition from non-full (or start of data) to full support
         start_mask = g["is_full_support"] & ((prev_full != True) | prev_full.isna())
-        starts = [ts for ts in g.loc[start_mask, "charttime"].tolist() if pd.notna(ts)]
-        if starts:
-            start_times[str(stay_id)] = starts
+        
+        # Ends: transition from full support to non-full support
+        end_mask = (prev_full == True) & (g["is_full_support"] != True)
+        
+        starts = g.loc[start_mask, "charttime"].tolist()
+        ends = g.loc[end_mask, "charttime"].tolist()
+        
+        # Pair them up
+        pairs = []
+        for s_ts in starts:
+            # Find the first end after this start
+            e_ts = next((e for e in ends if e > s_ts), None)
+            pairs.append((s_ts, e_ts))
+            
+        if pairs:
+            start_end_times[str(stay_id)] = pairs
 
-    return start_times
+    return start_end_times
 
 
 def _synthesize_invasive_vent_events_from_settings(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """Create one synthetic invasive-ventilation trigger per inferred start."""
+    """Create synthetic invasive-ventilation start and end triggers per inferred episode."""
 
-    fallback_starts = _full_support_start_times_from_settings(raw_df)
-    if not fallback_starts:
+    episode_times = _full_support_start_times_from_settings(raw_df)
+    if not episode_times:
         return pd.DataFrame()
 
     synthetic_rows: list[dict[str, object]] = []
-    for stay_id_text, start_timestamps in fallback_starts.items():
+    for stay_id_text, episodes in episode_times.items():
         stay_mask = raw_df.get("stay_id", pd.Series(index=raw_df.index, dtype=object)).astype(str).eq(stay_id_text)
         stay_rows = raw_df.loc[stay_mask]
 
-        for start_ts in start_timestamps:
-            row: dict[str, object] = {
+        for start_ts, end_ts in episodes:
+            # Common attributes
+            base_row: dict[str, object] = {
                 "source_table": "ventilator_derived",
                 "stay_id": int(stay_id_text) if stay_id_text.isdigit() else stay_id_text,
+            }
+            for optional_col in ["case_id", "subject_id", "hadm_id", "charttime", "storetime"]:
+                if optional_col in raw_df.columns:
+                    non_null = stay_rows[optional_col].dropna()
+                    base_row[optional_col] = non_null.iloc[0] if not non_null.empty else None
+
+            # Start event
+            start_row = base_row.copy()
+            start_row.update({
                 "event_time": start_ts,
                 "starttime": start_ts,
                 "endtime": pd.NaT,
                 "itemid": "derived_invasive_ventilation_start",
-                "label": "Invasive Ventilation Started (Derived from Ventilator Settings)",
+                "label": "Invasive Ventilation Started (Derived)",
                 "value_text": "derived_full_support_onset",
-                "value_num": None,
-                "value_uom": None,
-            }
+            })
+            synthetic_rows.append(start_row)
 
-            for optional_col in ["case_id", "subject_id", "hadm_id", "charttime", "storetime"]:
-                if optional_col in raw_df.columns:
-                    non_null = stay_rows[optional_col].dropna()
-                    row[optional_col] = non_null.iloc[0] if not non_null.empty else None
-
-            synthetic_rows.append(row)
+            # End event (if exists)
+            if end_ts and not pd.isna(end_ts):
+                end_row = base_row.copy()
+                end_row.update({
+                    "event_time": end_ts,
+                    "starttime": pd.NaT,
+                    "endtime": end_ts,
+                    "itemid": "derived_invasive_ventilation_end",
+                    "label": "Invasive Ventilation Ended (Derived)",
+                    "value_text": "derived_full_support_offset",
+                })
+                synthetic_rows.append(end_row)
 
     return pd.DataFrame(synthetic_rows)
 

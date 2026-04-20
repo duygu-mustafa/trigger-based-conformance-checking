@@ -186,7 +186,7 @@ def main() -> None:
             .drop_duplicates(subset=["timestamp"])
             .sort_values("timestamp")
         )
-        intubations = df_full[df_full["activity"] == "Intubation"]
+        vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
 
         attempt_index = 0
         for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
@@ -208,15 +208,21 @@ def main() -> None:
 
             if sbt_start is not None:
                 outcome_end = sbt_start + pd.Timedelta(hours=48)
-                matching_intub = intubations[
-                    (intubations["timestamp"] > sbt_start)
-                    & (intubations["timestamp"] <= outcome_end)
+                # Failure if a NEW invasive ventilation episode starts within 48h
+                matching_vent = vent_starts[
+                    (vent_starts["timestamp"] > sbt_start)
+                    & (vent_starts["timestamp"] <= outcome_end)
                 ]
-                outcome_val = (
-                    "Failure (Reintubated <48h)"
-                    if not matching_intub.empty
-                    else "Success (No Reintub <48h)"
-                )
+                
+                if not matching_vent.empty:
+                    outcome_val = "Failure (Reventilated <48h)"
+                else:
+                    # Right-censored case: Check the very last activity in the stay
+                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"])].sort_values("timestamp").iloc[-1:]
+                    if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":
+                         outcome_val = "Failure (Last State: Invasive Vent)"
+                    else:
+                         outcome_val = "Success (No Revent <48h / Last State: SBT)"
             else:
                 outcome_val = "No SBT Attempt"
 
@@ -269,11 +275,22 @@ def main() -> None:
                 else:
                     mandatory_violated.append(INT_COMPOSITE_ID)
 
+            # Find actual ventilation end within this trigger window
+            vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp")
+            vent_end: pd.Timestamp | None = None
+            if not vent_end_rows.empty:
+                vent_end = vent_end_rows.iloc[0]["timestamp"]
+            else:
+                # If ongoing, use the last timestamp in the stay
+                vent_end = df_full["timestamp"].max()
+
             output_rows.append({
                 "stay_id": stay_id,
                 "episode_index": episode_idx,
                 "episode_start": str(episode_start),
                 "episode_end": str(episode_end),
+                "ventilation_start": str(episode_start),
+                "ventilation_end": str(vent_end),
                 "sbt_attempt": attempt_index if sbt_start is not None else "",
                 "sbt_start": str(sbt_start) if sbt_start is not None else "",
                 "sbt_outcome": outcome_val,
@@ -291,6 +308,43 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     output_df.to_csv(args.output, index=False)
     print(f"Saved trigger-episode conformance results to {args.output}")
+
+    # --- AUTOMATIC FRONTEND EXPORT ---
+    print("Exporting JSON for frontend visualization...")
+    frontend_data_dir = Path("frontend/src/data")
+    frontend_data_dir.mkdir(parents=True, exist_ok=True)
+
+    for stay_id in tqdm(stay_ids, desc="Exporting JSON"):
+        # Get all events for this stay (including those used for measurements)
+        df_stay = runner.con.execute(
+            f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
+            [str(stay_id)],
+        ).df().sort_values("timestamp")
+        
+        # Format timestamps for JSON
+        df_stay["timestamp"] = pd.to_datetime(df_stay["timestamp"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Replace NaN/NaT with None for valid JSON nulls
+        df_stay = df_stay.where(pd.notnull(df_stay), None)
+        
+        # Get conformance results for this stay
+        stay_conformance_df = output_df[output_df["stay_id"] == stay_id].copy()
+        stay_conformance_df = stay_conformance_df.where(pd.notnull(stay_conformance_df), None)
+        stay_conformance = stay_conformance_df.to_dict(orient="records")
+        
+        # Final JSON structure
+        case_json = {
+            "case_id": str(stay_id),
+            "events": df_stay.to_dict(orient="records"),
+            "conformance": stay_conformance
+        }
+        
+        output_file = frontend_data_dir / f"case_{stay_id}.json"
+        with output_file.open("w", encoding="utf-8") as f:
+            import json
+            json.dump(case_json, f, indent=2, default=str)
+
+    print(f"Frontend JSON files exported to {frontend_data_dir}")
 
 if __name__ == "__main__":
     main()

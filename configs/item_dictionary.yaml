@@ -22,6 +22,7 @@ sources:
     hemoglobin_bg: Hemoglobin (bg.hemoglobin)
     sbt_status: Spontaneous Breathing Trial Status Signal
     sbt_outcome: Spontaneous Breathing Trial Final Outcome
+    derived_invasive_ventilation_start: Invasive Ventilation Start (Derived)
     223830: pH_arterial                 # PH Arterial
     220228: hemoglobin                  # Hemoglobin (g/dL)
 
@@ -39,12 +40,6 @@ sources:
     # ── Vasopressors ─────────────────────────────────────────────────────
     221906: norepinephrine              # Norepinephrine dose (mcg/kg/min)
     norepinephrine_equiv: norepinephrine_equiv # Norepinephrine-equivalent dose (mcg/kg/min)
-
-    # ── SBT Markers ──────────────────────────────────────────────────────
-    224715: sbt_started                 # SBT Started - Text (Yes/No)
-    224716: sbt_stopped                 # SBT Stopped - Text
-    224717: sbt_completed               # SBT Successfully Completed - Text (Yes/No)
-    224833: sbt_deferred                # SBT Deferred - Text (categorical)
 
     # ── Respiratory Effort ───────────────────────────────────────────────
     229322: breathing_pattern_effort    # Breathing pattern/effort - Text (ordinal 0-3)
@@ -124,14 +119,3 @@ sources:
       # starttime = intubation timestamp
       # endtime   = extubation timestamp
       # category  = 1-Intubation/Extubation
-      # Example row from MIMIC-IV STAY 37510196:
-      #   starttime: 2131-01-11 04:30, endtime: 2131-01-11 05:40
-
-    225792: invasive_ventilation
-      # starttime = ventilation start
-      # endtime   = ventilation end
-      # value     = duration in minutes
-      # category  = 2-Ventilation
-      # Example row from MIMIC-IV STAY 37510196:
-      #   starttime: 2131-01-11 04:40, endtime: 2131-01-12 17:49, value: 2220 min
-      # ventilation_duration_hours = value / 60

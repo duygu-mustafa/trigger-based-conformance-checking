@@ -310,6 +310,7 @@ def main() -> None:
             raise RuntimeError("No event-log rows were generated from input")
 
         _export_event_log(output_con, args.output)
+        _export_event_log(output_con, Path("data/icu_event_log_sbt_test.csv"))
         print(f"Saved event log: {args.output}")
     finally:
         source_con.close()
