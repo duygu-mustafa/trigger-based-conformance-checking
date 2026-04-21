@@ -114,6 +114,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT oxygenation_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: >
         PaO2/FiO2 >= 150 OR SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O
@@ -124,6 +125,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT ph_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: "Arterial pH must exceed 7.25 at SBT initiation."
 
@@ -132,6 +134,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT hemoglobin_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: "Hemoglobin must be >= 7 g/dL at SBT initiation."
 
@@ -140,6 +143,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT temperature_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: "Core temperature must not exceed 38 degrees C at SBT initiation."
 
@@ -148,6 +152,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT vasopressor_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Patient must be hemodynamically stable (NE-equivalent <= 0.1 mcg/kg/min)
@@ -158,6 +163,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT mental_status_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Patient must be awake and easily arousable (RASS LOC 'Yes' OR SAS 3-4) 
@@ -168,6 +174,7 @@ model:
       template: MP_EXISTENCE
       activation: SBTStarted
       activation_condition: "NOT inspiratory_effort_ok"
+      observation_window_hours: 24
       semantics: ACTIVATION_VIOLATION
 
     # ── Temporal ──────────────────────────────────────────────────────────────
@@ -199,7 +206,7 @@ model:
       template: TIMED_RESPONSE
       activation: InvasiveVentilationStarted
       target: SBTStarted
-      min_gap_hours: 0
+      min_gap_hours: 48
       max_gap_hours: 72
       rationale: >
         Trigger-based episodes require a weaning attempt to be documented after

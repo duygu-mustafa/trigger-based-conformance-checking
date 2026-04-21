@@ -65,9 +65,9 @@ model:
         > 24 h. Triggers direct extubation to preventative NIV.
       expression: "high_risk_flag == True AND ventilation_duration_hours > 24"
 
-    sbt_success_window:
-      description: "SBT duration falls within the valid 30-120 min success window."
-      expression: "sbt_duration_min >= 30 AND sbt_duration_min <= 120"
+    # sbt_success_window:
+    #   description: "SBT duration falls within the valid 30-120 min success window."
+    #   expression: "sbt_duration_min >= 30 AND sbt_duration_min <= 120"
 
   # ── Constraints ───────────────────────────────────────────────────────────
 
@@ -75,23 +75,23 @@ model:
 
     # ── Control-Flow ─────────────────────────────────────────────────────────
 
-    - id: SBT-CF-01
-      label: "SBT must eventually be completed"
-      template: RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      rationale: >
-        Every initiated SBT must produce an outcome record (itemid sbt_outcome).
-        Prevents unclosed SBT windows in the event log.
+    # - id: SBT-CF-01
+    #   label: "SBT must eventually be completed"
+    #   template: RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   rationale: >
+    #     Every initiated SBT must produce an outcome record (itemid sbt_outcome).
+    #     Prevents unclosed SBT windows in the event log.
 
-    - id: SBT-CF-02
-      label: "SBT completion must follow SBT start"
-      template: PRECEDENCE
-      activation: SBTStarted
-      target: SBTCompleted
-      rationale: >
-        Control-flow ordering: an SBT completion event cannot be recorded
-        without a preceding SBT initiation.
+    # - id: SBT-CF-02
+    #   label: "SBT completion must follow SBT start"
+    #   template: PRECEDENCE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   rationale: >
+    #     Control-flow ordering: an SBT completion event cannot be recorded
+    #     without a preceding SBT initiation.
 
     # - id: SBT-CF-05
     #   label: "After SBT failure, ventilatory support must resume"
@@ -104,16 +104,16 @@ model:
 
     # ── Data-Perspective (MP-Declare) ─────────────────────────────────────────
 
-    - id: SBT-DP-01
-      label: "SBT duration must be 30-120 min for a valid success"
-      template: MP_RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      target_condition: "sbt_success_window"
-      semantics: TARGET_VIOLATION
-      rationale: >
-        Tolerance of 30-120 min is required for SBT success per guideline.
-        Completions outside this window are flagged for review.
+    # - id: SBT-DP-01
+    #   label: "SBT duration must be 30-120 min for a valid success"
+    #   template: MP_RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   target_condition: "sbt_success_window"
+    #   semantics: TARGET_VIOLATION
+    #   rationale: >
+    #     Tolerance of 30-120 min is required for SBT success per guideline.
+    #     Completions outside this window are flagged for review.
 
     - id: SBT-DP-02
       label: "No SBT success when respiratory rate failure criterion met"
@@ -156,16 +156,15 @@ model:
         Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
         during the trial is a failure criterion.
 
-    - id: SBT-DP-06
-      label: "PSV mode used when ventilation duration > 24 h"
-      template: MP_EXISTENCE
-      activation: SBTStarted
-      activation_condition: "psv_indicated"
-      # activation_condition: "vent_mode == 'PSV'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
-        rather than T-piece.
+    # - id: SBT-DP-06
+    #   label: "PSV mode used when ventilation duration > 24 h"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "psv_indicated AND ('PSV' not in vent_mode)"
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
+    #     rather than T-piece.
 
     # - id: SBT-DP-07
     #   label: "High-risk patients extubated to preventative NIV"
@@ -180,16 +179,16 @@ model:
 
     # ── Temporal ──────────────────────────────────────────────────────────────
 
-    - id: SBT-TM-01
-      label: "SBT completion recorded within 3 h of SBT start"
-      template: TIMED_RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      max_gap_hours: 3
-      rationale: >
-        Maximum SBT duration is 120 min; completion should be charted within
-        3 h (allowing brief documentation delay). Longer gaps indicate
-        missing outcome records.
+    # - id: SBT-TM-01
+    #   label: "SBT completion recorded within 3 h of SBT start"
+    #   template: TIMED_RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   max_gap_hours: 3
+    #   rationale: >
+    #     Maximum SBT duration is 120 min; completion should be charted within
+    #     3 h (allowing brief documentation delay). Longer gaps indicate
+    #     missing outcome records.
 
     # - id: SBT-TM-02
     #   label: "Failure criterion triggers SBT stop within 30 min"

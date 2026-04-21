@@ -85,7 +85,11 @@ def _coerce_value(value_num: object, value_raw: object) -> object:
         return txt
 
 
-def _build_items_snapshot(trace_df: pd.DataFrame, ts: pd.Timestamp) -> dict[int, object]:
+def _build_items_snapshot(
+    trace_df: pd.DataFrame,
+    ts: pd.Timestamp,
+    observation_window_hours: float | None = None,
+) -> dict[int, object]:
     """Build a snapshot of medical items (key-value mapping) up to a given timestamp.
 
     Extracts the latest value for each unique item ID observed up to the specified time.
@@ -99,8 +103,11 @@ def _build_items_snapshot(trace_df: pd.DataFrame, ts: pd.Timestamp) -> dict[int,
         Dictionary mapping item IDs (int) to their latest values as of timestamp ts.
         Empty dict if no items found or itemid column missing.
     """
-    # Filter events up to the specified timestamp
+    # Filter events up to the specified timestamp.
     upto = trace_df[trace_df["timestamp"] <= ts]
+    if observation_window_hours is not None and observation_window_hours > 0:
+        lower_bound = ts - pd.Timedelta(hours=float(observation_window_hours))
+        upto = upto[upto["timestamp"] >= lower_bound]
     if upto.empty or "itemid" not in upto.columns:
         return {}
 
@@ -175,6 +182,7 @@ def _build_eval_context(
     trace_df: pd.DataFrame,
     eval_ts: pd.Timestamp,
     activation_ts: pd.Timestamp | None = None,
+    observation_window_hours: float | None = None,
 ) -> dict[str, object]:
     """Build a comprehensive evaluation context for data condition checking.
 
@@ -199,7 +207,11 @@ def _build_eval_context(
             - sbt_duration_min: Float minutes of current SBT duration
     """
     # Get snapshot of medical items (measurements) at evaluation time
-    items = _build_items_snapshot(trace_df, eval_ts)
+    items = _build_items_snapshot(
+        trace_df,
+        eval_ts,
+        observation_window_hours=observation_window_hours,
+    )
 
     # Find key clinical milestones (using derived start instead of intubation item)
     intubation_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
@@ -287,6 +299,7 @@ def _evaluate_data_condition(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
+    observation_window_hours: float | None = None,
 ) -> tuple[bool, str | None]:
     """Evaluate a data condition expression against event log state at a point in time.
 
@@ -311,8 +324,30 @@ def _evaluate_data_condition(
 
     # Build context with all clinical variables at evaluation time
     eval_ts = row["timestamp"]
-    ctx = _build_eval_context(trace_df, eval_ts=eval_ts, activation_ts=activation_ts)
+    ctx = _build_eval_context(
+        trace_df,
+        eval_ts=eval_ts,
+        activation_ts=activation_ts,
+        observation_window_hours=observation_window_hours,
+    )
     items = ctx["items"]
+
+    # If a bounded observation window is requested, treat missing referenced items
+    # as non-evaluable for this condition rather than implicit violations.
+    if observation_window_hours is not None:
+        refs = re.findall(r"items\[['\"]?(\w+)['\"]?\]", expression)
+        if refs:
+            has_missing_ref = False
+            for ref in refs:
+                if ref.isdigit():
+                    if int(ref) not in items:
+                        has_missing_ref = True
+                        break
+                elif ref not in items:
+                    has_missing_ref = True
+                    break
+            if has_missing_ref:
+                return False, None
 
     # Helper function to safely retrieve item values
     def __item(itemid: str | int) -> object:
@@ -351,6 +386,7 @@ def _filter_activation_rows(
     trace_df: pd.DataFrame,
     activation_rows: pd.DataFrame,
     constraint: DeclareConstraint,
+    observation_window_hours: float | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Filter activation rows based on activation condition expression.
 
@@ -378,7 +414,12 @@ def _filter_activation_rows(
     eval_error: str | None = None
 
     for idx, row in activation_rows.iterrows():
-        ok, err = _evaluate_data_condition(trace_df, row, expr)
+        ok, err = _evaluate_data_condition(
+            trace_df,
+            row,
+            expr,
+            observation_window_hours=observation_window_hours,
+        )
         if err is not None and eval_error is None:
             eval_error = err
         if ok:
@@ -412,7 +453,28 @@ def _evaluate_constraint_impl(
         ConstraintResult object with outcome, counts, and violation details.
     """
     # Create constraint identifier for tracking results
-    cid = constraint.label or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+    cid = (
+        getattr(constraint, "id", None)
+        or constraint.label
+        or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+    )
+
+    def _observation_window_hours() -> float | None:
+        raw = getattr(constraint, "observation_window_hours", None)
+        if raw is not None:
+            try:
+                val = float(raw)
+                if val > 0:
+                    return val
+            except (TypeError, ValueError):
+                pass
+
+        # Backward-compatible fallback for readiness data rules.
+        if isinstance(cid, str) and cid.startswith("RC-DP-"):
+            return 24.0
+        return None
+
+    observation_window_hours = _observation_window_hours()
 
     def _rows_for(activity: str | None) -> pd.DataFrame:
         if activity is None:
@@ -423,7 +485,12 @@ def _evaluate_constraint_impl(
         rows = _rows_for(constraint.activation)
         if rows.empty:
             return rows, None
-        return _filter_activation_rows(trace_df, rows, constraint)
+        return _filter_activation_rows(
+            trace_df,
+            rows,
+            constraint,
+            observation_window_hours=observation_window_hours,
+        )
 
     def _target_matches(
         target_row: pd.Series,
@@ -475,7 +542,12 @@ def _evaluate_constraint_impl(
             first_eval_error = None
 
             for _, row in act_rows.iterrows():
-                cond_true, eval_err = _evaluate_data_condition(trace_df, row, expr)
+                cond_true, eval_err = _evaluate_data_condition(
+                    trace_df,
+                    row,
+                    expr,
+                    observation_window_hours=observation_window_hours,
+                )
                 if eval_err is not None and first_eval_error is None:
                     first_eval_error = eval_err
                 if cond_true:
@@ -554,6 +626,7 @@ def _evaluate_constraint_impl(
                 trace_df,
                 first_row,
                 constraint.activation_cond.expression,
+                observation_window_hours=observation_window_hours,
             )
 
         return ConstraintResult(
@@ -1210,7 +1283,11 @@ def evaluate_constraint(
     """Dispatch constraint evaluation to a template-specific evaluator function."""
     evaluator = _TEMPLATE_EVALUATORS.get(constraint.template)
     if evaluator is None:
-        cid = constraint.label or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+        cid = (
+            getattr(constraint, "id", None)
+            or constraint.label
+            or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+        )
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,

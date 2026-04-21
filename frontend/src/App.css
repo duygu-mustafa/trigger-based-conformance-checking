@@ -5,34 +5,46 @@
   width: 100%;
   max-width: 1200px;
   margin-bottom: 2rem;
-  border-bottom: 2px solid #333;
+  border-bottom: 2px solid #dbe4ef;
   padding-bottom: 1rem;
 }
 
+.app-header h1 {
+  color: #0f172a;
+  margin: 0;
+}
+
 .case-selector {
-  background: #333;
+  background: #eef4fb;
   padding: 8px 16px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 10px;
+  color: #334155;
+  border: 1px solid #d5e2f1;
 }
 
 .case-selector select {
-  background: #222;
-  color: #fff;
-  border: 1px solid #444;
+  background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #bfd0e4;
   padding: 4px 8px;
   border-radius: 4px;
+}
+
+.app-container {
+  width: 100%;
 }
 
 .visualization-area {
   width: 100%;
   max-width: 1300px;
-  background: #2a2a2a;
+  background: #ffffff;
   border-radius: 8px;
   padding: 1.5rem;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  border: 1px solid #dbe6f2;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
   max-height: 80vh;
   overflow-y: auto;
 }
@@ -58,37 +70,38 @@
 }
 
 .event-marker:hover {
-  stroke: #fff;
+  stroke: #0f172a;
   stroke-width: 2px;
 }
 
 .axis-line {
-  stroke: #666;
+  stroke: #94a3b8;
   stroke-width: 1px;
 }
 
 .axis-label {
-  fill: #aaa;
+  fill: #64748b;
   font-size: 12px;
 }
 
 .tooltip-area {
   margin-bottom: 1rem;
-  border-bottom: 1px solid #444;
+  border-bottom: 1px solid #d9e4f0;
   height: 60px;
 }
 
 .tooltip-content {
   font-size: 14px;
-  background: rgba(0, 0, 0, 0.6);
+  background: #ecf3fb;
   padding: 6px 12px;
   border-radius: 4px;
   display: inline-block;
   border-left: 3px solid #2196f3;
+  color: #0f172a;
 }
 
 .tooltip-placeholder {
-  color: #666;
+  color: #64748b;
   font-style: italic;
   font-size: 14px;
   padding: 6px 0;
@@ -122,9 +135,10 @@
 
 .details-sidebar {
   width: 350px;
-  background: #1e1e1e;
+  background: #f8fbff;
   padding: 15px;
   border-radius: 8px;
+  border: 1px solid #d9e5f2;
   position: sticky;
   top: 0;
   max-height: 75vh;
@@ -133,13 +147,18 @@
 
 .details-sidebar h3 {
   margin-top: 0;
-  color: #fff;
+  color: #0f172a;
   font-size: 18px;
 }
 
 .details-sidebar h4 {
   font-size: 14px;
   margin-bottom: 8px;
+}
+
+.details-sidebar p,
+.details-sidebar div {
+  color: #1e293b;
 }
 
 .legend {
@@ -149,7 +168,8 @@
   justify-content: center;
   flex-wrap: wrap;
   padding: 1rem;
-  background: #1a1a1a;
+  background: #f5f9ff;
+  border: 1px solid #d9e5f2;
   border-radius: 8px;
 }
 
@@ -158,10 +178,23 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 14px;
+  color: #334155;
 }
 
 .legend-color {
   width: 16px;
   height: 16px;
   border-radius: 2px;
+}
+
+.loading-spinner {
+  color: #334155;
+}
+
+.error-message {
+  color: #b42318;
+  background: #fff1f3;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
+  padding: 12px;
 }

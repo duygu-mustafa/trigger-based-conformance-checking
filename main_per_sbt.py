@@ -25,6 +25,7 @@ from conformance.types import DeclareModel
 from conformance.checker import (
     evaluate_constraint
 )
+import json
 
 
 INT_COMPOSITE_ID = "INT-COMPOSITE-01"
@@ -144,6 +145,92 @@ def _build_combined_model() -> DeclareModel:
             model.add(constraint)
     return model
 
+def export_to_frontend(runner, stay_ids, results_df, output_dir):
+    """Export filtered clinical records and conformance results to JSON for the React frontend."""
+    print(f"Exporting JSON for frontend visualization to {output_dir}...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Load item whitelist from dictionary to filter out noise measurements
+    with Path("configs/item_dictionary.yaml").open("r") as f:
+        item_dict = yaml.safe_load(f)
+    
+    whitelist_ids = set()
+    for source in item_dict.get("sources", {}).values():
+        whitelist_ids.update(str(k) for k in source.keys())
+    
+    # Also whitelist derived ventilation/sbt IDs
+    whitelist_ids.update(["sbt_status", "sbt_outcome", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
+    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed"]
+
+    # 2. Extract constraint definitions keyed by canonical IDs for frontend lookup.
+    constraint_defs = {}
+    for c in runner.model.constraints:
+        cid = getattr(c, "id", None) or c.label
+        if not cid:
+            continue
+        constraint_defs[str(cid)] = {
+            "id": str(cid),
+            "label": c.label or str(cid),
+            "description": getattr(c, "description", "") or "",
+            "rationale": getattr(c, "rationale", "") or "",
+            "template": c.template.name if hasattr(c, "template") else None,
+            "activation": c.activation if hasattr(c, "activation") else None,
+            "target": c.target if hasattr(c, "target") else None,
+            "semantics": getattr(c, "semantics", None),
+            "activation_condition": getattr(c, "activation_condition_raw", None),
+            "target_condition": getattr(c, "target_condition_raw", None),
+            "observation_window_hours": getattr(c, "observation_window_hours", None),
+        }
+
+    # 3. Process each stay
+    for stay_id in tqdm(stay_ids, desc="Exporting JSON"):
+        # Get only whitelisted events:
+        # - Core activities (Ventilation, SBTs)
+        # - True modeled activities (mapped or derived)
+        # - Measurements for items specifically defined in our clinical dictionary
+        df_stay = runner.con.execute(
+            f"""
+            SELECT * FROM events 
+            WHERE {runner._batch_key_column} = ?
+              AND (
+                activity IN ({','.join(['?' for _ in core_activities])})
+                OR (attrs LIKE '%"mapped_activity"%' OR attrs LIKE '%"derived_activity"%')
+                OR (itemid IN ({','.join(['?' for _ in whitelist_ids])}))
+              )
+            """,
+            [str(stay_id)] + core_activities + list(whitelist_ids),
+        ).df().sort_values("timestamp")
+        
+        # Format timestamps for JSON
+        df_stay["timestamp"] = pd.to_datetime(df_stay["timestamp"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Robustly replace NaN/NaT with None for valid JSON nulls
+        df_stay = df_stay.astype(object).where(pd.notnull(df_stay), None)
+        
+        # Get conformance results for this stay
+        stay_conformance_df = results_df[results_df["stay_id"] == stay_id].copy()
+        stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
+        stay_conformance = stay_conformance_df.to_dict(orient="records")
+        
+        # Final JSON structure
+        case_json = {
+            "case_id": str(stay_id),
+            "events": df_stay.to_dict(orient="records"),
+            "conformance": stay_conformance,
+            "constraint_definitions": constraint_defs
+        }
+        
+        output_file = output_dir / f"case_{stay_id}.json"
+        with output_file.open("w", encoding="utf-8") as f:
+            json.dump(case_json, f, indent=2, default=str)
+
+    # 4. Export a manifest so the frontend can load cases dynamically
+    manifest = {"cases": [str(sid) for sid in stay_ids]}
+    with (output_dir / "manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"Frontend export complete.")
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=Path("data/icu_event_log.parquet"))
@@ -206,6 +293,7 @@ def main() -> None:
                 sbt_start = sbt_in_episode.iloc[0]["timestamp"]
                 attempt_index += 1
 
+            sbt_end: pd.Timestamp | None = None
             if sbt_start is not None:
                 outcome_end = sbt_start + pd.Timedelta(hours=48)
                 # Failure if a NEW invasive ventilation episode starts within 48h
@@ -216,6 +304,8 @@ def main() -> None:
                 
                 if not matching_vent.empty:
                     outcome_val = "Failure (Reventilated <48h)"
+                    # SBT ended when ventilation was restarted
+                    sbt_end = matching_vent.iloc[0]["timestamp"]
                 else:
                     # Right-censored case: Check the very last activity in the stay
                     last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"])].sort_values("timestamp").iloc[-1:]
@@ -223,6 +313,8 @@ def main() -> None:
                          outcome_val = "Failure (Last State: Invasive Vent)"
                     else:
                          outcome_val = "Success (No Revent <48h / Last State: SBT)"
+                    # SBT ended at episode end (either successful or right-censored)
+                    sbt_end = episode_end
             else:
                 outcome_val = "No SBT Attempt"
 
@@ -233,9 +325,10 @@ def main() -> None:
             composite_interventions: list[str] = []
 
             for constraint in runner.model.constraints:
-                canon_id = constraint_id_lookup.get(constraint.label, constraint.label or constraint.id)
-                if not canon_id:
-                    canon_id = constraint.id
+                raw_constraint_id = getattr(constraint, "id", None) or constraint.label
+                canon_id = constraint_id_lookup.get(raw_constraint_id, raw_constraint_id)
+                if not canon_id and constraint.label:
+                    canon_id = constraint_id_lookup.get(constraint.label, constraint.label)
                 if not canon_id:
                     continue
 
@@ -293,6 +386,7 @@ def main() -> None:
                 "ventilation_end": str(vent_end),
                 "sbt_attempt": attempt_index if sbt_start is not None else "",
                 "sbt_start": str(sbt_start) if sbt_start is not None else "",
+                "sbt_end": str(sbt_end) if sbt_end is not None else "",
                 "sbt_outcome": outcome_val,
                 "mandatory_violated_constraints": ";".join(sorted(set(mandatory_violated))),
                 "mandatory_satisfied_constraints": ";".join(sorted(set(mandatory_satisfied))),
@@ -310,41 +404,11 @@ def main() -> None:
     print(f"Saved trigger-episode conformance results to {args.output}")
 
     # --- AUTOMATIC FRONTEND EXPORT ---
-    print("Exporting JSON for frontend visualization...")
-    frontend_data_dir = Path("frontend/src/data")
-    frontend_data_dir.mkdir(parents=True, exist_ok=True)
-
-    for stay_id in tqdm(stay_ids, desc="Exporting JSON"):
-        # Get all events for this stay (including those used for measurements)
-        df_stay = runner.con.execute(
-            f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
-            [str(stay_id)],
-        ).df().sort_values("timestamp")
-        
-        # Format timestamps for JSON
-        df_stay["timestamp"] = pd.to_datetime(df_stay["timestamp"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
-        
-        # Replace NaN/NaT with None for valid JSON nulls
-        df_stay = df_stay.where(pd.notnull(df_stay), None)
-        
-        # Get conformance results for this stay
-        stay_conformance_df = output_df[output_df["stay_id"] == stay_id].copy()
-        stay_conformance_df = stay_conformance_df.where(pd.notnull(stay_conformance_df), None)
-        stay_conformance = stay_conformance_df.to_dict(orient="records")
-        
-        # Final JSON structure
-        case_json = {
-            "case_id": str(stay_id),
-            "events": df_stay.to_dict(orient="records"),
-            "conformance": stay_conformance
-        }
-        
-        output_file = frontend_data_dir / f"case_{stay_id}.json"
-        with output_file.open("w", encoding="utf-8") as f:
-            import json
-            json.dump(case_json, f, indent=2, default=str)
-
-    print(f"Frontend JSON files exported to {frontend_data_dir}")
+    # Calculate path relative to this script's location to be robust
+    base_path = Path(__file__).resolve().parent
+    frontend_data_dir = base_path / "frontend" / "public" / "data"
+    
+    export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
 
 if __name__ == "__main__":
     main()
