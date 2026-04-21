@@ -359,6 +359,7 @@ const Timeline = ({ data }) => {
               {selectedEpisode.mandatory_violated_constraints ? (
                 <div className="violation-list">
                   {parseViolationIds(selectedEpisode.mandatory_violated_constraints).map(cid => {
+                    if (cid === 'INT-COMPOSITE-01') return null;
                     const detail = getViolationDetail(cid, selectedEpisode);
                     const def = getConstraintDefinition(cid);
                     return (
@@ -410,6 +411,39 @@ const Timeline = ({ data }) => {
                           </div>
                         )}
                       </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {(() => {
+                const satisfiedIds = [
+                  ...parseViolationIds(selectedEpisode.mandatory_satisfied_constraints),
+                  ...parseViolationIds(selectedEpisode.info_satisfied_constraints),
+                ].filter(cid => cid !== 'INT-COMPOSITE-01');
+                const uniqueSatisfiedIds = [...new Set(satisfiedIds)];
+                if (uniqueSatisfiedIds.length === 0) return null;
+
+                return (
+                  <div style={{ marginTop: '14px' }}>
+                    <h4 style={{ color: '#15803d', borderBottom: '1px solid #dbe4ef', paddingBottom: '5px' }}>Satisfied Constraints</h4>
+                    <div className="violation-list">
+                      {uniqueSatisfiedIds.map(cid => {
+                        const detail = getViolationDetail(cid, selectedEpisode);
+                        const def = getConstraintDefinition(cid);
+                        return (
+                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#effaf2', border: '1px solid #ccebd4', borderRadius: '4px' }}>
+                            <div style={{ color: '#15803d', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                            {detail ? (
+                              <div style={{ fontSize: '11px', marginTop: '4px' }}>
+                                <div><span style={{ color: '#64748b' }}>Current:</span> {detail.actual}</div>
+                                <div><span style={{ color: '#64748b' }}>Expected:</span> {detail.expected}</div>
+                                {detail.observedAt && <div><span style={{ color: '#64748b' }}>Observed at:</span> {detail.observedAt}</div>}
+                              </div>
+                            ) : <div style={{ fontSize: '11px', marginTop: '4px', color: '#64748b' }}>No details available.</div>}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
