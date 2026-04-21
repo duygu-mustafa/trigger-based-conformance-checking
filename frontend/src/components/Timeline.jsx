@@ -229,15 +229,15 @@ const Timeline = ({ data }) => {
         <div className="chart-area">
           <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + 1)}`} className="timeline-svg">
             {/* Time Axis */}
-            <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="#94a3b8" strokeWidth="2" />
+            <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="var(--color-text-muted)" strokeWidth="2" />
             {[0, 24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 480, 720].map(h => {
               const time = minTime + h * 60 * 60 * 1000;
               if (time > maxTime) return null;
               const x = getX(time);
               return (
                 <g key={h}>
-                  <line x1={x} y1={paddingTop - 15} x2={x} y2={paddingTop - 5} stroke="#94a3b8" strokeWidth="2" />
-                  <text x={x} y={paddingTop - 25} textAnchor="middle" fill="#64748b" fontSize="11" fontWeight="bold">{h}h</text>
+                  <line x1={x} y1={paddingTop - 15} x2={x} y2={paddingTop - 5} stroke="var(--color-text-muted)" strokeWidth="2" />
+                  <text x={x} y={paddingTop - 25} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11" fontWeight="bold">{h}h</text>
                 </g>
               );
             })}
@@ -253,10 +253,10 @@ const Timeline = ({ data }) => {
               const isSelected = selectedEpisode?.episode_index === episode.episode_index;
               const outcomeStatus = getEpisodeOutcomeStatus(episode);
               const rowFill = outcomeStatus === 'success'
-                ? (isSelected ? '#b7e4c7' : '#d8f3dc')
+                ? (isSelected ? 'var(--color-success-bg-hover)' : 'var(--color-success-bg)')
                 : outcomeStatus === 'failure'
-                  ? (isSelected ? '#fecaca' : '#fee2e2')
-                  : (isSelected ? '#e2e8f0' : '#f1f5f9');
+                  ? (isSelected ? 'var(--color-violation-bg-hover)' : 'var(--color-violation-bg)')
+                  : (isSelected ? 'var(--color-neutral-bg-hover)' : 'var(--color-neutral-bg)');
 
               // Invasive Ventilation Bar (from episode start to SBT start or episode end)
               const ventEndX = sbtX || xEnd;
@@ -267,8 +267,8 @@ const Timeline = ({ data }) => {
                   <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill={rowFill} rx={6} opacity={1} />
 
                   {/* Row Divider */}
-                  <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="#cbd5e1" strokeDasharray="4 4" />
-                  <text x={paddingLeft - 15} y={y + 45} textAnchor="end" fill={isSelected ? "#0f172a" : "#64748b"} fontSize="12" fontWeight={isSelected ? "bold" : "normal"}>Ep {episode.episode_index}</text>
+                  <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
+                  <text x={paddingLeft - 15} y={y + 45} textAnchor="end" fill={isSelected ? "var(--color-text-main)" : "var(--color-text-muted)"} fontSize="12" fontWeight={isSelected ? "bold" : "normal"}>Ep {episode.episode_index}</text>
 
                   {/* Invasive Ventilation Bar */}
                   <rect
@@ -276,7 +276,7 @@ const Timeline = ({ data }) => {
                     y={y + 15}
                     width={Math.max(4, ventEndX - xStart)}
                     height={25}
-                    fill="#e91e63"
+                    fill="var(--color-vent)"
                     opacity={0.6}
                     rx={4}
                     onMouseEnter={() => setHoveredEvent({ activity: 'Invasive Ventilation', value: `Full Support for ${((new Date(episode.sbt_start || episode.episode_end) - new Date(episode.episode_start)) / (1000 * 60 * 60)).toFixed(1)}h` })}
@@ -290,7 +290,7 @@ const Timeline = ({ data }) => {
                       y={y + 15}
                       width={Math.max(30, sbtEndX - sbtX)}
                       height={25}
-                      fill="#2196f3"
+                      fill="var(--color-sbt)"
                       rx={4}
                       onMouseEnter={() => setHoveredEvent({
                         activity: 'SBT Attempt',
@@ -302,9 +302,9 @@ const Timeline = ({ data }) => {
 
                   {/* Conformance Indicators */}
                   <g>
-                    <circle cx={xStart + 15} cy={y + 60} r={7} fill={isViolated ? "#ff5722" : "#4caf50"} />
+                    <circle cx={xStart + 15} cy={y + 60} r={7} fill={isViolated ? "var(--color-violation)" : "var(--color-success)"} />
                     {isViolated && (
-                      <text x={xStart + 30} y={y + 65} fill="#ff5722" fontSize="11" fontWeight="bold">
+                      <text x={xStart + 30} y={y + 65} fill="var(--color-violation)" fontSize="11" fontWeight="bold">
                         {episode.num_mandatory_violations} violations
                       </text>
                     )}
@@ -316,7 +316,7 @@ const Timeline = ({ data }) => {
                         y={y + 50}
                         width={(24 * 60 * 60 * 1000 / duration) * chartWidth}
                         height={6}
-                        fill="#4caf50"
+                        fill="var(--color-success)"
                         opacity={0.4}
                         rx={3}
                       />
@@ -335,7 +335,7 @@ const Timeline = ({ data }) => {
                   cx={x}
                   cy={paddingTop + 5}
                   r={3}
-                  fill="#ffeb3b"
+                  fill="var(--color-meas)"
                   opacity={0.6}
                   onMouseEnter={() => setHoveredEvent({
                     activity: m.activity,
@@ -355,7 +355,7 @@ const Timeline = ({ data }) => {
               <h3>Episode {selectedEpisode.episode_index}</h3>
               <p><strong>Outcome:</strong> {selectedEpisode.sbt_outcome}</p>
 
-              <h4 style={{ color: '#b91c1c', borderBottom: '1px solid #dbe4ef', paddingBottom: '5px' }}>Violations</h4>
+              <h4 style={{ color: 'var(--color-error-text)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Violations</h4>
               {selectedEpisode.mandatory_violated_constraints ? (
                 <div className="violation-list">
                   {parseViolationIds(selectedEpisode.mandatory_violated_constraints).map(cid => {
@@ -363,15 +363,15 @@ const Timeline = ({ data }) => {
                     const detail = getViolationDetail(cid, selectedEpisode);
                     const def = getConstraintDefinition(cid);
                     return (
-                      <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#eef4fb', border: '1px solid #d8e4f1', borderRadius: '4px' }}>
-                        <div style={{ color: '#b91c1c', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                      <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                        <div style={{ color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
                         {detail ? (
                           <div style={{ fontSize: '11px', marginTop: '4px' }}>
-                            <div><span style={{ color: '#64748b' }}>Current:</span> {detail.actual}</div>
-                            <div><span style={{ color: '#64748b' }}>Expected:</span> {detail.expected}</div>
-                            {detail.observedAt && <div><span style={{ color: '#64748b' }}>Observed at:</span> {detail.observedAt}</div>}
+                            <div><span style={{ color: 'var(--color-text-muted)' }}>Current:</span> {detail.actual}</div>
+                            <div><span style={{ color: 'var(--color-text-muted)' }}>Expected:</span> {detail.expected}</div>
+                            {detail.observedAt && <div><span style={{ color: 'var(--color-text-muted)' }}>Observed at:</span> {detail.observedAt}</div>}
                           </div>
-                        ) : <div style={{ fontSize: '11px', marginTop: '4px', color: '#64748b' }}>No details available.</div>}
+                        ) : <div style={{ fontSize: '11px', marginTop: '4px', color: 'var(--color-text-muted)' }}>No details available.</div>}
                       </div>
                     );
                   })}
@@ -389,25 +389,25 @@ const Timeline = ({ data }) => {
 
                 return (
                   <div style={{ marginTop: '14px' }}>
-                    <h4 style={{ color: '#1d4ed8', borderBottom: '1px solid #dbe4ef', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
-                    <div style={{ marginBottom: '10px', padding: '8px', background: '#eef4fb', border: '1px solid #d8e4f1', borderRadius: '4px' }}>
-                      <div style={{ color: '#1d4ed8', fontWeight: 'bold', fontSize: '12px' }}>
+                    <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
+                    <div style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                      <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
                         {compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}
                       </div>
                       <div style={{ fontSize: '11px', marginTop: '4px' }}>
                         <div>
-                          <span style={{ color: '#64748b' }}>Status:</span> {satisfied ? 'Satisfied' : 'Violated'}
+                          <span style={{ color: 'var(--color-text-muted)' }}>Status:</span> {satisfied ? 'Satisfied' : 'Violated'}
                         </div>
                         <div>
-                          <span style={{ color: '#64748b' }}>Expected:</span> At least one qualifying intervention/test within 24h after SBT failure
+                          <span style={{ color: 'var(--color-text-muted)' }}>Expected:</span> At least one qualifying intervention/test within 24h after SBT failure
                         </div>
                         <div>
-                          <span style={{ color: '#64748b' }}>Satisfied by:</span>{' '}
+                          <span style={{ color: 'var(--color-text-muted)' }}>Satisfied by:</span>{' '}
                           {readableInterventions.length > 0 ? readableInterventions.join(', ') : 'None recorded'}
                         </div>
                         {!satisfied && selectedEpisode.composite_note && (
                           <div>
-                            <span style={{ color: '#64748b' }}>Detail:</span> {selectedEpisode.composite_note}
+                            <span style={{ color: 'var(--color-text-muted)' }}>Detail:</span> {selectedEpisode.composite_note}
                           </div>
                         )}
                       </div>
@@ -426,21 +426,21 @@ const Timeline = ({ data }) => {
 
                 return (
                   <div style={{ marginTop: '14px' }}>
-                    <h4 style={{ color: '#15803d', borderBottom: '1px solid #dbe4ef', paddingBottom: '5px' }}>Satisfied Constraints</h4>
+                    <h4 style={{ color: 'var(--color-satisfied-text)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Satisfied Constraints</h4>
                     <div className="violation-list">
                       {uniqueSatisfiedIds.map(cid => {
                         const detail = getViolationDetail(cid, selectedEpisode);
                         const def = getConstraintDefinition(cid);
                         return (
-                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#effaf2', border: '1px solid #ccebd4', borderRadius: '4px' }}>
-                            <div style={{ color: '#15803d', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-success-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                            <div style={{ color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
                             {detail ? (
                               <div style={{ fontSize: '11px', marginTop: '4px' }}>
-                                <div><span style={{ color: '#64748b' }}>Current:</span> {detail.actual}</div>
-                                <div><span style={{ color: '#64748b' }}>Expected:</span> {detail.expected}</div>
-                                {detail.observedAt && <div><span style={{ color: '#64748b' }}>Observed at:</span> {detail.observedAt}</div>}
+                                <div><span style={{ color: 'var(--color-text-muted)' }}>Current:</span> {detail.actual}</div>
+                                <div><span style={{ color: 'var(--color-text-muted)' }}>Expected:</span> {detail.expected}</div>
+                                {detail.observedAt && <div><span style={{ color: 'var(--color-text-muted)' }}>Observed at:</span> {detail.observedAt}</div>}
                               </div>
-                            ) : <div style={{ fontSize: '11px', marginTop: '4px', color: '#64748b' }}>No details available.</div>}
+                            ) : <div style={{ fontSize: '11px', marginTop: '4px', color: 'var(--color-text-muted)' }}>No details available.</div>}
                           </div>
                         );
                       })}
@@ -450,17 +450,17 @@ const Timeline = ({ data }) => {
               })()}
             </div>
           ) : (
-            <div style={{ textAlign: 'center', color: '#64748b', marginTop: '40px' }}>Select an episode to view details</div>
+            <div style={{ textAlign: 'center', color: 'var(--color-text-muted)', marginTop: '40px' }}>Select an episode to view details</div>
           )}
         </div>
       </div>
 
       <div className="legend" style={{ marginTop: '20px', display: 'flex', gap: '20px', justifyContent: 'center' }}>
-        <div className="legend-item"><div className="legend-color" style={{ background: '#e91e63' }}></div><span>Invasive Ventilation (Full Support)</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: '#2196f3' }}></div><span>SBT Trial</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: '#ffeb3b' }}></div><span>Measurement</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: '#4caf50' }}></div><span>Conforming</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: '#ff5722' }}></div><span>Violation</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-vent)' }}></div><span>Invasive Ventilation (Full Support)</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-sbt)' }}></div><span>SBT Trial</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-meas)' }}></div><span>Measurement</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Conforming</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-violation)' }}></div><span>Violation</span></div>
       </div>
     </div>
   );
