@@ -45,8 +45,6 @@
   padding: 1.5rem;
   border: 1px solid var(--color-border-light);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-  max-height: 80vh;
-  overflow-y: auto;
 }
 
 .timeline-svg {
@@ -126,7 +124,9 @@
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  /* Allow horizontal scroll if SVG is wide */
+  overflow-y: auto;
+  max-height: 65vh;
+  /* Only the SVG scrolls vertically */
 }
 
 .timeline-svg {
@@ -144,8 +144,9 @@
   border: 1px solid var(--color-border-light);
   position: sticky;
   top: 0;
-  max-height: 75vh;
+  max-height: 65vh;
   overflow-y: auto;
+  align-self: flex-start;
 }
 
 .details-sidebar h3 {
