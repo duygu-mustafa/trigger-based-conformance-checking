@@ -460,7 +460,7 @@ const Timeline = ({ data }) => {
                     const detail = getViolationDetail(cid, selectedEpisode);
                     const def = getConstraintDefinition(cid);
                     return (
-                      <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                      <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                           <div style={{ color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
                           {renderStatusBadge('Violated')}
@@ -490,7 +490,7 @@ const Timeline = ({ data }) => {
                 return (
                   <div style={{ marginTop: '14px' }}>
                     <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
-                    <div style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                    <div style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                         <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
                           {compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}
@@ -535,7 +535,7 @@ const Timeline = ({ data }) => {
                         const detail = getViolationDetail(cid, selectedEpisode);
                         const def = getConstraintDefinition(cid);
                         return (
-                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-success-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                               <div style={{ color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
                               {renderStatusBadge('Satisfied')}
@@ -571,7 +571,7 @@ const Timeline = ({ data }) => {
                         const detail = getVacuousDetail(cid, selectedEpisode);
                         const def = getConstraintDefinition(cid);
                         return (
-                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                               <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
                               {renderStatusBadge('Vacuous')}

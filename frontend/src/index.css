@@ -1,46 +1,45 @@
 :root {
-  --color-text-main: #0f172a;
-  --color-text-muted: #64748b;
-  --color-bg-page: #eef3f8;
+  --color-text-main: #0f1f2e;        /* deep navy-black, clinical and sharp */
+  --color-text-muted: #4a6278;       /* cool blue-gray muted text */
+  --color-bg-page: #eef2f7;          /* clean cool gray-blue page bg */
   --color-bg-card: #ffffff;
-  
+
   /* Activities */
-  --color-vent: #e91e63;
-  --color-sbt: #2196f3;
-  --color-meas: #ffeb3b;
+  --color-vent: #d6246e;             /* slightly deeper pink-red, less garish */
+  --color-sbt: #1976d2;              /* deeper, more clinical blue */
+  --color-meas: #f0a500;             /* muted amber — readable without harshness */
 
   /* Status Row Colors */
-  --color-success: #4caf50;
-  --color-success-bg: #d8f3dc;
-  --color-success-bg-hover: #b7e4c7;
-  
-  --color-violation: #ff5722;
-  --color-violation-bg: #fee2e2;
-  --color-violation-bg-hover: #fecaca;
-  --color-error-text: #b91c1c;
+  --color-success: #2e7d32;          /* deeper, more serious green */
+  --color-success-bg: #e8f5e9;       /* very light clinical green */
+  --color-success-bg-hover: #c8e6c9;
 
-  --color-neutral: #64748b;
-  --color-neutral-bg: #f1f5f9;
-  --color-neutral-bg-hover: #e2e8f0;
+  --color-violation: #c62828;        /* deep clinical red, not orange-toned */
+  --color-violation-bg: #fdecea;
+  --color-violation-bg-hover: #f9cdd0;
+  --color-error-text: #b71c1c;
+
+  --color-neutral: #546e7a;          /* blue-gray neutral */
+  --color-neutral-bg: #f0f4f8;       /* cool light surface */
+  --color-neutral-bg-hover: #dce6f0;
 
   /* UI Elements */
-  --color-border: #cbd5e1;
-  --color-border-light: #dbe4ef;
-  --color-accent: #1d4ed8;
-  --color-satisfied-text: #15803d;
-
-  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light;
-  color: var(--color-text-main);
-  background-color: var(--color-bg-page);
+  --color-border: #b0bec5;           /* cool blue-gray border, more defined */
+  --color-border-light: #cfd8dc;
+  --color-accent: #0d3c6e;           /* deep navy — headers, badges, focus rings */
+  --color-satisfied-text: #1b5e20;   /* deep clinical green for satisfied labels */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  font-family:
+  "Inter",
+  "Segoe UI",
+  system-ui,
+  -apple-system,
+  sans-serif;
 }
 
 body {
