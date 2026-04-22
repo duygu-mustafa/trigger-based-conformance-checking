@@ -19,6 +19,35 @@ const Timeline = ({ data }) => {
   const paddingTop = 40;
   const chartWidth = width - paddingLeft - paddingRight;
 
+  const totalHours = duration / (1000 * 60 * 60);
+  // Calculate optimal step to maintain ~80px spacing between labels
+  const possibleSteps = [6, 12, 24, 48, 72, 96, 168];
+  const idealStep = (80 * totalHours) / chartWidth;
+  const tickStep = possibleSteps.find(s => s >= idealStep) || 168;
+
+  const formatAxisTick = (hours) => {
+    if (hours === 0) return '0h';
+    if (totalHours < 72) return `${hours}h`;
+
+    if (hours >= 168) {
+      const weeks = hours / 168;
+      return Number.isInteger(weeks) ? `${weeks}w` : `${weeks.toFixed(1)}w`;
+    }
+
+    const days = hours / 24;
+    return Number.isInteger(days) ? `${days}d` : `${days.toFixed(1)}d`;
+  };
+
+  const timeTicks = [];
+  for (let h = 0; h <= totalHours; h += tickStep) {
+    timeTicks.push(h);
+  }
+  // Always include the last hour if it's not already there and there's space
+  const lastTick = timeTicks[timeTicks.length - 1];
+  if (totalHours - lastTick > tickStep / 2) {
+    timeTicks.push(Math.round(totalHours));
+  }
+
   const getX = (timestamp) => {
     const time = new Date(timestamp).getTime();
     return paddingLeft + ((time - minTime) / duration) * chartWidth;
@@ -298,14 +327,14 @@ const Timeline = ({ data }) => {
           <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + 1)}`} className="timeline-svg">
             {/* Time Axis */}
             <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="var(--color-text-muted)" strokeWidth="2" />
-            {[0, 24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 480, 720].map(h => {
+            {timeTicks.map(h => {
               const time = minTime + h * 60 * 60 * 1000;
               if (time > maxTime) return null;
               const x = getX(time);
               return (
                 <g key={h}>
                   <line x1={x} y1={paddingTop - 15} x2={x} y2={paddingTop - 5} stroke="var(--color-text-muted)" strokeWidth="2" />
-                  <text x={x} y={paddingTop - 25} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11" fontWeight="bold">{h}h</text>
+                  <text x={x} y={paddingTop - 25} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11" fontWeight="bold">{formatAxisTick(h)}</text>
                 </g>
               );
             })}
@@ -568,11 +597,11 @@ const Timeline = ({ data }) => {
       </div>
 
       <div className="legend" style={{ marginTop: '20px', display: 'flex', gap: '20px', justifyContent: 'center' }}>
-        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-vent)' }}></div><span>Invasive Ventilation (Full Support)</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-vent)' }}></div><span>Invasive Ventilation</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-sbt)' }}></div><span>SBT Trial</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-meas)' }}></div><span>Measurement</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Conforming</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Expected SBT Start Window</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-violation)' }}></div><span>Violation</span></div>
+        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-meas)' }}></div><span>Measurement</span></div>
       </div>
     </div>
   );
