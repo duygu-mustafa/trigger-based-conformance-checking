@@ -55,7 +55,7 @@ function App() {
   return (
     <div className="app-container">
       <header className="app-header">
-        <h1>SBT Conformance Visualization</h1>
+        <h1>Weaning Guideline Conformance Report</h1>
         <div className="case-selector">
           <label htmlFor="case-select">Select Case: </label>
           <select

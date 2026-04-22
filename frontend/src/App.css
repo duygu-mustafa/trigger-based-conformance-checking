@@ -4,8 +4,8 @@
   align-items: center;
   width: 100%;
   max-width: 1200px;
-  margin-bottom: 2rem;
-  border-bottom: 2px solid var(--color-border-light);
+  /* margin-bottom: 2rem; */
+  /* border-bottom: 2px solid var(--color-border-light); */
   padding-bottom: 1rem;
 }
 
@@ -118,19 +118,22 @@
   width: 100%;
   margin-top: 1rem;
   gap: 20px;
-  align-items: flex-start; /* Important for sticky */
+  align-items: flex-start;
+  /* Important for sticky */
 }
 
 .chart-area {
   flex: 1;
   min-width: 0;
-  overflow-x: auto; /* Allow horizontal scroll if SVG is wide */
+  overflow-x: auto;
+  /* Allow horizontal scroll if SVG is wide */
 }
 
 .timeline-svg {
   width: 100%;
   height: auto;
-  min-width: 1000px; /* Ensure a minimum readable width */
+  min-width: 1000px;
+  /* Ensure a minimum readable width */
 }
 
 .details-sidebar {

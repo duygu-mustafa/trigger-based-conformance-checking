@@ -316,6 +316,9 @@ const Timeline = ({ data }) => {
         {hoveredEvent ? (
           <div className="tooltip-content">
             <strong>{hoveredEvent.label || hoveredEvent.activity}</strong>: {hoveredEvent.value}
+            {hoveredEvent.timestamps && (
+              <div style={{ fontSize: '12px', marginTop: '2px', color: 'var(--color-text-muted)' }}>{hoveredEvent.timestamps}</div>
+            )}
           </div>
         ) : (
           <div className="tooltip-placeholder">Hover over bars for details • Click an episode for report</div>
@@ -376,7 +379,16 @@ const Timeline = ({ data }) => {
                     fill="var(--color-vent)"
                     opacity={0.6}
                     rx={4}
-                    onMouseEnter={() => setHoveredEvent({ activity: 'Invasive Ventilation', value: `Full Support for ${((new Date(episode.sbt_start || episode.episode_end) - new Date(episode.episode_start)) / (1000 * 60 * 60)).toFixed(1)}h` })}
+                    onMouseEnter={() => {
+                      const ventEnd = episode.sbt_start || episode.episode_end;
+                      const durationH = ((new Date(ventEnd) - new Date(episode.episode_start)) / (1000 * 60 * 60)).toFixed(1);
+                      const fmt = (ts) => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                      setHoveredEvent({
+                        activity: 'Invasive Ventilation',
+                        value: `Full Support for ${durationH}h`,
+                        timestamps: `${fmt(episode.episode_start)} → ${fmt(ventEnd)}`,
+                      });
+                    }}
                     onMouseLeave={() => setHoveredEvent(null)}
                   />
 
@@ -389,10 +401,15 @@ const Timeline = ({ data }) => {
                       height={25}
                       fill="var(--color-sbt)"
                       rx={4}
-                      onMouseEnter={() => setHoveredEvent({
-                        activity: 'SBT Attempt',
-                        value: `${episode.sbt_outcome} at ${getHours(episode.sbt_start).toFixed(1)}h`
-                      })}
+                      onMouseEnter={() => {
+                        const durationMin = ((new Date(episode.sbt_end) - new Date(episode.sbt_start)) / (1000 * 60)).toFixed(0);
+                        const fmt = (ts) => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                        setHoveredEvent({
+                          activity: 'SBT Attempt',
+                          value: `${episode.sbt_outcome} — ${durationMin} min`,
+                          timestamps: `${fmt(episode.sbt_start)} → ${fmt(episode.sbt_end)}`,
+                        });
+                      }}
                       onMouseLeave={() => setHoveredEvent(null)}
                     />
                   )}
@@ -452,7 +469,7 @@ const Timeline = ({ data }) => {
               <h3>Episode {selectedEpisode.episode_index}</h3>
               <p><strong>Outcome:</strong> {selectedEpisode.sbt_outcome}</p>
 
-              <h4 style={{ color: 'var(--color-error-text)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Violations</h4>
+              <h4 style={{ color: 'var(--color-error-text)', paddingBottom: '5px' }}>Violations</h4>
               {selectedEpisode.mandatory_violated_constraints ? (
                 <div className="violation-list">
                   {parseViolationIds(selectedEpisode.mandatory_violated_constraints).map(cid => {
@@ -489,7 +506,7 @@ const Timeline = ({ data }) => {
 
                 return (
                   <div style={{ marginTop: '14px' }}>
-                    <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
+                    <h4 style={{ color: 'var(--color-accent)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
                     <div style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                         <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
@@ -529,7 +546,7 @@ const Timeline = ({ data }) => {
 
                 return (
                   <div style={{ marginTop: '14px' }}>
-                    <h4 style={{ color: 'var(--color-satisfied-text)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Satisfied Constraints</h4>
+                    <h4 style={{ color: 'var(--color-satisfied-text)', paddingBottom: '5px' }}>Satisfied Constraints</h4>
                     <div className="violation-list">
                       {uniqueSatisfiedIds.map(cid => {
                         const detail = getViolationDetail(cid, selectedEpisode);
@@ -565,7 +582,7 @@ const Timeline = ({ data }) => {
 
                 return (
                   <div style={{ marginTop: '14px' }}>
-                    <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Vacuously Satisfied (No Data in Window)</h4>
+                    <h4 style={{ color: 'var(--color-accent)', paddingBottom: '5px' }}>Vacuously Satisfied (No Data in Window)</h4>
                     <div className="violation-list">
                       {uniqueVacuousIds.map(cid => {
                         const detail = getVacuousDetail(cid, selectedEpisode);
