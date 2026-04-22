@@ -123,11 +123,20 @@ def _build_items_snapshot(
     # Build dictionary with coerced values
     out: dict[int, object] = {}
     for _, row in latest.iterrows():
+        itemid_raw = row["itemid"]
+        value = _coerce_value(row.get("value_num"), row.get("value_raw"))
+
+        # Preserve the original key so string-based item IDs like
+        # 'pao2fio2ratio' remain addressable in data conditions.
+        out[itemid_raw] = value
+
+        # Also expose a numeric alias when the item ID is numeric or a
+        # digit-only string so existing rules using integer references still work.
         try:
-            itemid = int(row["itemid"])
+            numeric_itemid = int(itemid_raw)
         except (TypeError, ValueError):
             continue
-        out[itemid] = _coerce_value(row.get("value_num"), row.get("value_raw"))
+        out[numeric_itemid] = value
     return out
 
 
@@ -301,6 +310,23 @@ def _evaluate_data_condition(
     activation_ts: pd.Timestamp | None = None,
     observation_window_hours: float | None = None,
 ) -> tuple[bool, str | None]:
+    value, _, error = _evaluate_data_condition_status(
+        trace_df,
+        row,
+        expression,
+        activation_ts=activation_ts,
+        observation_window_hours=observation_window_hours,
+    )
+    return value, error
+
+
+def _evaluate_data_condition_status(
+    trace_df: pd.DataFrame,
+    row: pd.Series,
+    expression: str,
+    activation_ts: pd.Timestamp | None = None,
+    observation_window_hours: float | None = None,
+) -> tuple[bool, bool, str | None]:
     """Evaluate a data condition expression against event log state at a point in time.
 
     Parses and executes a Declare data condition (e.g., "items[225792] > 10") in the
@@ -314,13 +340,15 @@ def _evaluate_data_condition(
         activation_ts: Optional explicit timestamp for SBT activation tracking.
 
     Returns:
-        Tuple of (evaluation_result, error_message):
+        Tuple of (evaluation_result, is_vacuous, error_message):
             - evaluation_result: True/False if condition evaluates to boolean
+            - is_vacuous: True when the condition cannot be evaluated because
+              required items are missing from the observation window
             - error_message: String describing any evaluation error, or None if successful
     """
     # Empty expressions always evaluate to true
     if not expression.strip():
-        return True, None
+        return True, False, None
 
     # Build context with all clinical variables at evaluation time
     eval_ts = row["timestamp"]
@@ -332,22 +360,23 @@ def _evaluate_data_condition(
     )
     items = ctx["items"]
 
-    # If a bounded observation window is requested, treat missing referenced items
-    # as non-evaluable for this condition rather than implicit violations.
+    # If a bounded observation window is requested, only treat the condition as
+    # vacuous when every referenced item is missing from the observation window.
+    # Partial data should still be allowed to satisfy OR-based rules.
     if observation_window_hours is not None:
         refs = re.findall(r"items\[['\"]?(\w+)['\"]?\]", expression)
         if refs:
-            has_missing_ref = False
+            all_missing = True
             for ref in refs:
                 if ref.isdigit():
                     if int(ref) not in items:
-                        has_missing_ref = True
-                        break
+                        continue
                 elif ref not in items:
-                    has_missing_ref = True
-                    break
-            if has_missing_ref:
-                return False, None
+                    continue
+                all_missing = False
+                break
+            if all_missing:
+                return False, True, None
 
     # Helper function to safely retrieve item values
     def __item(itemid: str | int) -> object:
@@ -374,12 +403,12 @@ def _evaluate_data_condition(
     try:
         value = eval(py_expr, {"__builtins__": {}}, local_scope)
     except Exception as exc:
-        return False, f"Condition evaluation failed: {exc}"
+        return False, False, f"Condition evaluation failed: {exc}"
 
     # Ensure boolean result
     if isinstance(value, bool):
-        return value, None
-    return bool(value), None
+        return value, False, None
+    return bool(value), False, None
 
 
 def _filter_activation_rows(
@@ -540,9 +569,11 @@ def _evaluate_constraint_impl(
             expr = constraint.activation_cond.expression
             violated = 0
             first_eval_error = None
+            saw_vacuous = False
+            evaluable_rows = 0
 
             for _, row in act_rows.iterrows():
-                cond_true, eval_err = _evaluate_data_condition(
+                cond_true, is_vacuous, eval_err = _evaluate_data_condition_status(
                     trace_df,
                     row,
                     expr,
@@ -550,10 +581,43 @@ def _evaluate_constraint_impl(
                 )
                 if eval_err is not None and first_eval_error is None:
                     first_eval_error = eval_err
+                if is_vacuous:
+                    saw_vacuous = True
+                    continue
+                evaluable_rows += 1
                 if cond_true:
                     violated += 1
 
-            ok = violated == 0
+            if violated > 0:
+                ok = False
+            elif evaluable_rows == 0 and saw_vacuous:
+                return ConstraintResult(
+                    case_id=case_id,
+                    constraint_id=cid,
+                    outcome=ConformanceOutcome.VACUOUS,
+                    num_activations=int(len(act_rows)),
+                    num_fulfilled=0,
+                    num_violated=0,
+                    activation_ts=str(act_rows.iloc[0]["timestamp"]),
+                    violation_reason=first_eval_error or "No data in observation window",
+                )
+            else:
+                ok = True
+
+            if not ok:
+                return ConstraintResult(
+                    case_id=case_id,
+                    constraint_id=cid,
+                    outcome=ConformanceOutcome.VIOLATED,
+                    num_activations=int(len(act_rows)),
+                    num_fulfilled=int(len(act_rows) - violated),
+                    num_violated=int(violated),
+                    activation_ts=str(act_rows.iloc[0]["timestamp"]),
+                    violation_reason=(
+                        None if first_eval_error is None else first_eval_error
+                    ) or "Activation condition evaluated to true for one or more events",
+                )
+
             return ConstraintResult(
                 case_id=case_id,
                 constraint_id=cid,

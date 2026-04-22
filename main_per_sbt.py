@@ -87,6 +87,66 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     return failures.iloc[-1]["timestamp"]
 
 
+def _sbt_failed_by_reventilation(
+    vent_starts: pd.DataFrame,
+    sbt_start: pd.Timestamp,
+    failure_window_hours: float = 48.0,
+) -> bool:
+    outcome_end = sbt_start + pd.Timedelta(hours=failure_window_hours)
+    matching_vent = vent_starts[
+        (vent_starts["timestamp"] > sbt_start)
+        & (vent_starts["timestamp"] <= outcome_end)
+    ]
+    return not matching_vent.empty
+
+
+def _find_latest_failed_sbt_start_before(
+    df_full: pd.DataFrame,
+    current_sbt_start: pd.Timestamp,
+) -> pd.Timestamp | None:
+    sbt_starts = (
+        df_full[df_full["activity"] == "SBTStarted"]
+        .drop_duplicates(subset=["timestamp"])
+        .sort_values("timestamp")
+    )
+    if sbt_starts.empty:
+        return None
+
+    prior_attempts = sbt_starts[sbt_starts["timestamp"] < current_sbt_start]
+    if prior_attempts.empty:
+        return None
+
+    vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+    latest_failed: pd.Timestamp | None = None
+    for _, row in prior_attempts.iterrows():
+        prior_start = row["timestamp"]
+        if _sbt_failed_by_reventilation(vent_starts, prior_start):
+            latest_failed = prior_start
+
+    return latest_failed
+
+
+def _evaluate_rc_tm_02_outcome(
+    df_full: pd.DataFrame,
+    current_sbt_start: pd.Timestamp | None,
+    min_gap_hours: float = 24.0,
+) -> ConformanceOutcome:
+    if current_sbt_start is None:
+        return ConformanceOutcome.VACUOUS
+
+    prior_failed_start = _find_latest_failed_sbt_start_before(df_full, current_sbt_start)
+    if prior_failed_start is None:
+        # Activation condition is false: no prior failed SBT before this start.
+        return ConformanceOutcome.VACUOUS
+
+    gap_hours = float((current_sbt_start - prior_failed_start).total_seconds()) / 3600.0
+    return (
+        ConformanceOutcome.SATISFIED
+        if gap_hours >= min_gap_hours
+        else ConformanceOutcome.VIOLATED
+    )
+
+
 def _evaluate_composite_for_attempt(
     df_full: pd.DataFrame,
     sbt_start: pd.Timestamp,
@@ -320,8 +380,10 @@ def main() -> None:
 
             mandatory_violated: list[str] = []
             mandatory_satisfied: list[str] = []
+            mandatory_vacuous: list[str] = []
             informational_violated: list[str] = []
             informational_satisfied: list[str] = []
+            informational_vacuous: list[str] = []
             composite_interventions: list[str] = []
 
             for constraint in runner.model.constraints:
@@ -336,13 +398,21 @@ def main() -> None:
                     continue
 
                 is_failure_rule = canon_id.startswith("INT-")
-                res = evaluate_constraint(
-                    case_id=str(stay_id),
-                    trace_df=episode_df,
-                    constraint=constraint,
-                )
+                if canon_id == "RC-TM-02":
+                    outcome = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
+                else:
+                    res = evaluate_constraint(
+                        case_id=str(stay_id),
+                        trace_df=episode_df,
+                        constraint=constraint,
+                    )
+                    outcome = res.outcome
 
-                if res.outcome == ConformanceOutcome.VACUOUS:
+                if outcome == ConformanceOutcome.VACUOUS:
+                    target_vacuous = mandatory_vacuous
+                    if is_failure_rule:
+                        target_vacuous = informational_vacuous
+                    target_vacuous.append(canon_id)
                     continue
 
                 target_violated = mandatory_violated
@@ -351,9 +421,9 @@ def main() -> None:
                     target_violated = informational_violated
                     target_satisfied = informational_satisfied
 
-                if res.outcome == ConformanceOutcome.VIOLATED:
+                if outcome == ConformanceOutcome.VIOLATED:
                     target_violated.append(canon_id)
-                elif res.outcome == ConformanceOutcome.SATISFIED:
+                elif outcome == ConformanceOutcome.SATISFIED:
                     target_satisfied.append(canon_id)
 
             # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
@@ -390,8 +460,10 @@ def main() -> None:
                 "sbt_outcome": outcome_val,
                 "mandatory_violated_constraints": ";".join(sorted(set(mandatory_violated))),
                 "mandatory_satisfied_constraints": ";".join(sorted(set(mandatory_satisfied))),
+                "mandatory_vacuous_constraints": ";".join(sorted(set(mandatory_vacuous))),
                 "info_violated_constraints": ";".join(sorted(set(informational_violated))),
                 "info_satisfied_constraints": ";".join(sorted(set(informational_satisfied))),
+                "info_vacuous_constraints": ";".join(sorted(set(informational_vacuous))),
                 "composite_interventions": ";".join(composite_interventions),
                 "composite_note": composite_reason or "",
                 "num_mandatory_violations": len(set(mandatory_violated)),

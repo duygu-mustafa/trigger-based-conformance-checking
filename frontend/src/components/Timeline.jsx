@@ -53,6 +53,30 @@ const Timeline = ({ data }) => {
     return value.split(';').map(v => v.trim()).filter(Boolean);
   };
 
+  const getVacuousDetail = (cid, episode) => {
+    const detail = getViolationDetail(cid, episode);
+    const actualText = detail?.actual;
+
+    const hasAnyObservedValue = (() => {
+      if (!actualText || typeof actualText !== 'string') return false;
+      const parts = actualText.split(',').map(p => p.trim()).filter(Boolean);
+      if (parts.length === 0) return false;
+
+      const values = parts.map((part) => {
+        const eqIdx = part.indexOf('=');
+        return (eqIdx >= 0 ? part.slice(eqIdx + 1) : part).trim().toLowerCase();
+      });
+
+      return values.some((value) => value !== 'n/a' && value !== 'not available');
+    })();
+
+    return {
+      actual: hasAnyObservedValue ? actualText : 'No data in the observation window',
+      expected: detail?.expected || 'See rule definition',
+      observedAt: detail?.observedAt || null,
+    };
+  };
+
   const interventionLabel = (activity) => {
     const labels = {
       Bronchodilator_Admin: 'Bronchodilator administration',
@@ -93,6 +117,48 @@ const Timeline = ({ data }) => {
     if (outcome.includes('success')) return 'success';
     if (outcome.includes('failure')) return 'failure';
     return 'neutral';
+  };
+
+  const getStatusBadgeStyle = (status) => {
+    if (status === 'Violated') {
+      return {
+        color: 'var(--color-error-text)',
+        background: 'var(--color-violation-bg)',
+        border: '1px solid var(--color-violation-bg-hover)',
+      };
+    }
+    if (status === 'Satisfied') {
+      return {
+        color: 'var(--color-satisfied-text)',
+        background: 'var(--color-success-bg)',
+        border: '1px solid var(--color-success-bg-hover)',
+      };
+    }
+    return {
+      color: 'var(--color-accent)',
+      background: 'var(--color-neutral-bg)',
+      border: '1px solid var(--color-border-light)',
+    };
+  };
+
+  const renderStatusBadge = (status) => {
+    const style = getStatusBadgeStyle(status);
+    return (
+      <span
+        style={{
+          ...style,
+          borderRadius: '999px',
+          padding: '2px 8px',
+          fontSize: '10px',
+          fontWeight: '700',
+          textTransform: 'uppercase',
+          letterSpacing: '0.02em',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {status}
+      </span>
+    );
   };
 
   const formatMeasurement = (event, suffix = '') => {
@@ -161,10 +227,12 @@ const Timeline = ({ data }) => {
         .filter(ep => ep.sbt_start)
         .sort((a, b) => new Date(a.sbt_start).getTime() - new Date(b.sbt_start).getTime());
       const idx = sortedStarts.findIndex(ep => ep.episode_index === episode.episode_index);
-      if (idx <= 0) return { actual: 'No prior SBT start', expected: 'At least 24h after prior failed SBT' };
-      const prev = sortedStarts[idx - 1];
-      const deltaH = (new Date(episode.sbt_start).getTime() - new Date(prev.sbt_start).getTime()) / (1000 * 60 * 60);
-      return { actual: `${deltaH.toFixed(1)}h`, expected: 'At least 24h after prior failed SBT' };
+      const priorFailed = idx > 0
+        ? [...sortedStarts.slice(0, idx)].reverse().find(ep => typeof ep.sbt_outcome === 'string' && ep.sbt_outcome.startsWith('Failure'))
+        : null;
+      if (!priorFailed) return { actual: 'No prior failed SBT', expected: 'At least 24h after prior failed SBT' };
+      const deltaH = (new Date(episode.sbt_start).getTime() - new Date(priorFailed.sbt_start).getTime()) / (1000 * 60 * 60);
+      return { actual: `${deltaH.toFixed(1)}h since failed SBT`, expected: 'At least 24h after prior failed SBT' };
     }
     if (cid === 'RC-TM-03') {
       const actualH = episode.sbt_start ? getHours(episode.sbt_start) - getHours(episode.episode_start) : null;
@@ -274,7 +342,7 @@ const Timeline = ({ data }) => {
                   <rect
                     x={xStart}
                     y={y + 15}
-                    width={Math.max(4, ventEndX - xStart)}
+                    width={Math.max(2, ventEndX - xStart)}
                     height={25}
                     fill="var(--color-vent)"
                     opacity={0.6}
@@ -288,7 +356,7 @@ const Timeline = ({ data }) => {
                     <rect
                       x={sbtX}
                       y={y + 15}
-                      width={Math.max(30, sbtEndX - sbtX)}
+                      width={Math.max(6, sbtEndX - sbtX)}
                       height={25}
                       fill="var(--color-sbt)"
                       rx={4}
@@ -364,7 +432,10 @@ const Timeline = ({ data }) => {
                     const def = getConstraintDefinition(cid);
                     return (
                       <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
-                        <div style={{ color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                          {renderStatusBadge('Violated')}
+                        </div>
                         {detail ? (
                           <div style={{ fontSize: '11px', marginTop: '4px' }}>
                             <div><span style={{ color: 'var(--color-text-muted)' }}>Current:</span> {detail.actual}</div>
@@ -391,8 +462,11 @@ const Timeline = ({ data }) => {
                   <div style={{ marginTop: '14px' }}>
                     <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
                     <div style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
-                      <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
-                        {compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
+                          {compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}
+                        </div>
+                        {renderStatusBadge(satisfied ? 'Satisfied' : 'Violated')}
                       </div>
                       <div style={{ fontSize: '11px', marginTop: '4px' }}>
                         <div>
@@ -433,7 +507,10 @@ const Timeline = ({ data }) => {
                         const def = getConstraintDefinition(cid);
                         return (
                           <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-success-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
-                            <div style={{ color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                              {renderStatusBadge('Satisfied')}
+                            </div>
                             {detail ? (
                               <div style={{ fontSize: '11px', marginTop: '4px' }}>
                                 <div><span style={{ color: 'var(--color-text-muted)' }}>Current:</span> {detail.actual}</div>
@@ -441,6 +518,41 @@ const Timeline = ({ data }) => {
                                 {detail.observedAt && <div><span style={{ color: 'var(--color-text-muted)' }}>Observed at:</span> {detail.observedAt}</div>}
                               </div>
                             ) : <div style={{ fontSize: '11px', marginTop: '4px', color: 'var(--color-text-muted)' }}>No details available.</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {(() => {
+                const vacuousIds = [
+                  ...parseViolationIds(selectedEpisode.mandatory_vacuous_constraints),
+                  ...parseViolationIds(selectedEpisode.info_vacuous_constraints),
+                ].filter(cid => cid !== 'INT-COMPOSITE-01');
+                const uniqueVacuousIds = [...new Set(vacuousIds)];
+                if (uniqueVacuousIds.length === 0) return null;
+
+                return (
+                  <div style={{ marginTop: '14px' }}>
+                    <h4 style={{ color: 'var(--color-accent)', borderBottom: '1px solid var(--color-border-light)', paddingBottom: '5px' }}>Vacuously Satisfied (No Data in Window)</h4>
+                    <div className="violation-list">
+                      {uniqueVacuousIds.map(cid => {
+                        const detail = getVacuousDetail(cid, selectedEpisode);
+                        const def = getConstraintDefinition(cid);
+                        return (
+                          <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: 'var(--color-neutral-bg)', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                              {renderStatusBadge('Vacuous')}
+                            </div>
+                            <div style={{ fontSize: '11px', marginTop: '4px' }}>
+                              <div><span style={{ color: 'var(--color-text-muted)' }}>Status:</span> Vacuous</div>
+                              <div><span style={{ color: 'var(--color-text-muted)' }}>Current:</span> {detail.actual}</div>
+                              <div><span style={{ color: 'var(--color-text-muted)' }}>Expected:</span> {detail.expected}</div>
+                              {detail.observedAt && <div><span style={{ color: 'var(--color-text-muted)' }}>Observed at:</span> {detail.observedAt}</div>}
+                            </div>
                           </div>
                         );
                       })}

@@ -233,6 +233,18 @@ def emit_activities(
     virtual_ids = {"sbt_status", "sbt_outcome", "derived_invasive_ventilation_start"}
     measurement_df = measurement_df[~measurement_df["itemid"].isin(virtual_ids)]
 
+    # Filter out measurement rows with placeholder-only values (e.g., "N/A", "null", "none")
+    # Keep row if: has meaningful numeric value OR has non-placeholder text
+    # Drop row if: value_num is NaN AND value_raw is only placeholder
+    has_valid_number = pd.notna(measurement_df["value_num"])
+    
+    # Check if value_raw is not a placeholder (vectorized)
+    placeholder_set = {"", "none", "null", "nan", "nat", "[null]", "<na>", "n/a"}
+    is_placeholder_text = measurement_df["value_raw"].fillna("").astype(str).str.strip().str.lower().isin(placeholder_set)
+    has_valid_text = pd.notna(measurement_df["value_raw"]) & ~is_placeholder_text
+    
+    measurement_df = measurement_df[has_valid_number | has_valid_text]
+
     mapped_frames: list[pd.DataFrame] = []
     for rule in rules:
         mask = (raw["source_table"] == rule["source"]) & (raw["itemid"] == rule["itemid"])
