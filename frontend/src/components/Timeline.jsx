@@ -58,7 +58,42 @@ const Timeline = ({ data }) => {
     return (time - minTime) / (1000 * 60 * 60);
   };
 
-  const measurements = events.filter(e => !['InvasiveVentilationStarted', 'SBTStarted', 'SBTCompleted', 'SBTFailed', 'Intubation', 'Extubation', 'InvasiveVentilationEnded'].includes(e.activity));
+  const highlightedMeasurementSeries = [
+    {
+      id: 'respiratory-rate',
+      label: 'Respiratory Rate',
+      color: 'var(--color-meas)',
+      activities: ['Respiratory Rate'],
+    },
+  ];
+
+  const highlightedMeasurementRows = highlightedMeasurementSeries.map((series) => {
+    const points = events
+      .filter((event) => series.activities.includes(event.activity))
+      .map((event) => {
+        const numericValue = Number(event.value_num ?? event.value_raw);
+        if (!Number.isFinite(numericValue)) return null;
+        return { ...event, numericValue };
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const values = points.map(point => point.numericValue);
+    const minValue = values.length > 0 ? Math.min(...values) : null;
+    const maxValue = values.length > 0 ? Math.max(...values) : null;
+
+    return { ...series, points, minValue, maxValue };
+  });
+
+  const measurementRowCount = highlightedMeasurementRows.length;
+
+  const getMeasurementY = (value, minValue, maxValue, top, bottom) => {
+    if (minValue == null || maxValue == null) return (top + bottom) / 2;
+    if (minValue === maxValue) return (top + bottom) / 2;
+
+    const ratio = (value - minValue) / (maxValue - minValue);
+    return bottom - (ratio * (bottom - top));
+  };
 
   const findNext = (list, startTime) => {
     const start = new Date(startTime).getTime();
@@ -194,7 +229,7 @@ const Timeline = ({ data }) => {
     if (!event) return 'N/A';
     const raw = event.value_num ?? event.value_raw;
     const unit = event.unit ? ` ${event.unit}` : '';
-    return `${raw}${unit}${suffix}`;
+    return raw == null ? 'N/A' : `${raw}${unit}${suffix}`;
   };
 
   const getViolationDetail = (cid, episode) => {
@@ -321,13 +356,13 @@ const Timeline = ({ data }) => {
             )}
           </div>
         ) : (
-          <div className="tooltip-placeholder">Hover over bars for details • Click an episode for report</div>
+          <div className="tooltip-placeholder">Hover over bars or measurements for details • Click an episode for report</div>
         )}
       </div>
 
       <div className="main-layout">
         <div className="chart-area">
-          <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + 1)}`} className="timeline-svg">
+          <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + measurementRowCount + 1)}`} className="timeline-svg">
             {/* Time Axis */}
             <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="var(--color-text-muted)" strokeWidth="2" />
             {timeTicks.map(h => {
@@ -342,9 +377,68 @@ const Timeline = ({ data }) => {
               );
             })}
 
+            {/* Highlighted Measurements */}
+            {highlightedMeasurementRows.map((series, seriesIndex) => {
+              const y = paddingTop + 10 + seriesIndex * rowHeight;
+              const rowTop = y + 18;
+              const rowBottom = y + rowHeight - 24;
+              const path = series.points
+                .map((point, pointIndex) => {
+                  const x = getX(point.timestamp);
+                  const pointY = getMeasurementY(point.numericValue, series.minValue, series.maxValue, rowTop, rowBottom);
+                  return `${pointIndex === 0 ? 'M' : 'L'} ${x} ${pointY}`;
+                })
+                .join(' ');
+
+              return (
+                <g key={series.id}>
+                  <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill="var(--color-neutral-bg)" rx={6} opacity={1} />
+                  <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
+                  <text x={paddingLeft - 15} y={y + 38} textAnchor="end" fill="var(--color-text-main)" fontSize="12" fontWeight="bold">
+                    <tspan x={paddingLeft - 15} dy="0">Respiratory</tspan>
+                    <tspan x={paddingLeft - 15} dy="14">Rate</tspan>
+                  </text>
+
+                  {series.points.length > 0 ? (
+                    <>
+                      {series.points.length > 1 && (
+                        <path d={path} fill="none" stroke={series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                      )}
+                      {series.points.map((point, pointIndex) => {
+                        const x = getX(point.timestamp);
+                        const pointY = getMeasurementY(point.numericValue, series.minValue, series.maxValue, rowTop, rowBottom);
+                        return (
+                          <circle
+                            key={`${series.id}-${point.timestamp}-${pointIndex}`}
+                            cx={x}
+                            cy={pointY}
+                            r={2}
+                            fill={series.color}
+                            stroke="var(--color-bg-card)"
+                            strokeWidth="1"
+                            className="event-marker"
+                            onMouseEnter={() => setHoveredEvent({
+                              label: series.label,
+                              value: formatMeasurement(point),
+                              timestamps: new Date(point.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                            })}
+                            onMouseLeave={() => setHoveredEvent(null)}
+                          />
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <text x={(paddingLeft + width - paddingRight) / 2} y={y + 54} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11">
+                      No respiratory rate measurements
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+
             {/* Episodes */}
             {conformance.map((episode, i) => {
-              const y = paddingTop + 10 + i * rowHeight;
+              const y = paddingTop + 10 + (i + measurementRowCount) * rowHeight;
               const xStart = getX(episode.episode_start);
               const xEnd = getX(episode.episode_end);
               const sbtX = episode.sbt_start ? getX(episode.sbt_start) : null;
@@ -437,26 +531,6 @@ const Timeline = ({ data }) => {
                     )}
                   </g>
                 </g>
-              );
-            })}
-
-            {/* Measurements as markers */}
-            {measurements.map((m, i) => {
-              const x = getX(m.timestamp);
-              return (
-                <circle
-                  key={`meas-${i}`}
-                  cx={x}
-                  cy={paddingTop + 5}
-                  r={3}
-                  fill="var(--color-meas)"
-                  opacity={0.6}
-                  onMouseEnter={() => setHoveredEvent({
-                    activity: m.activity,
-                    value: `${m.value_num || m.value_raw} ${m.unit || ''}`
-                  })}
-                  onMouseLeave={() => setHoveredEvent(null)}
-                />
               );
             })}
           </svg>
@@ -618,7 +692,9 @@ const Timeline = ({ data }) => {
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-sbt)' }}></div><span>SBT Trial</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Expected SBT Start Window</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-violation)' }}></div><span>Violation</span></div>
-        <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-meas)' }}></div><span>Measurement</span></div>
+        {highlightedMeasurementRows.map(series => (
+          <div key={series.id} className="legend-item"><div className="legend-color" style={{ background: series.color }}></div><span>{series.label}</span></div>
+        ))}
       </div>
     </div>
   );
