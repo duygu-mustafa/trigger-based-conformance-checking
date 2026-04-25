@@ -67,6 +67,14 @@ const Timeline = ({ data }) => {
     },
   ];
 
+  const respiratoryRateThresholdBands = [
+    { min: 0, max: 8, color: 'rgba(239, 68, 68, 0.18)', label: 'Danger' },
+    { min: 8, max: 12, color: 'rgba(245, 158, 11, 0.18)', label: 'Transition' },
+    { min: 12, max: 22, color: 'rgba(34, 197, 94, 0.18)', label: 'Sweet Spot' },
+    { min: 22, max: 30, color: 'rgba(245, 158, 11, 0.18)', label: 'Transition' },
+    { min: 30, max: Number.POSITIVE_INFINITY, color: 'rgba(239, 68, 68, 0.18)', label: 'Danger' },
+  ];
+
   const highlightedMeasurementRows = highlightedMeasurementSeries.map((series) => {
     const points = events
       .filter((event) => series.activities.includes(event.activity))
@@ -79,10 +87,17 @@ const Timeline = ({ data }) => {
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     const values = points.map(point => point.numericValue);
-    const minValue = values.length > 0 ? Math.min(...values) : null;
-    const maxValue = values.length > 0 ? Math.max(...values) : null;
+    const observedMaxValue = values.length > 0 ? Math.max(...values) : 45;
+    const domainMin = 0;
+    const domainMax = series.id === 'respiratory-rate'
+      ? Math.max(45, observedMaxValue)
+      : (values.length > 0 ? observedMaxValue : 1);
 
-    return { ...series, points, minValue, maxValue };
+    const thresholdBands = series.id === 'respiratory-rate'
+      ? respiratoryRateThresholdBands
+      : [];
+
+    return { ...series, points, domainMin, domainMax, thresholdBands };
   });
 
   const measurementRowCount = highlightedMeasurementRows.length;
@@ -385,7 +400,7 @@ const Timeline = ({ data }) => {
               const path = series.points
                 .map((point, pointIndex) => {
                   const x = getX(point.timestamp);
-                  const pointY = getMeasurementY(point.numericValue, series.minValue, series.maxValue, rowTop, rowBottom);
+                  const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
                   return `${pointIndex === 0 ? 'M' : 'L'} ${x} ${pointY}`;
                 })
                 .join(' ');
@@ -393,6 +408,31 @@ const Timeline = ({ data }) => {
               return (
                 <g key={series.id}>
                   <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill="var(--color-neutral-bg)" rx={6} opacity={1} />
+
+                  {series.thresholdBands.map((band, bandIndex) => {
+                    const clampedMin = Math.max(series.domainMin, band.min);
+                    const clampedMax = Number.isFinite(band.max)
+                      ? Math.min(series.domainMax, band.max)
+                      : series.domainMax;
+
+                    if (clampedMax <= clampedMin) return null;
+
+                    const yTop = getMeasurementY(clampedMax, series.domainMin, series.domainMax, rowTop, rowBottom);
+                    const yBottom = getMeasurementY(clampedMin, series.domainMin, series.domainMax, rowTop, rowBottom);
+
+                    return (
+                      <rect
+                        key={`${series.id}-band-${bandIndex}`}
+                        x={paddingLeft}
+                        y={yTop}
+                        width={chartWidth}
+                        height={Math.max(1, yBottom - yTop)}
+                        fill={band.color}
+                        pointerEvents="none"
+                      />
+                    );
+                  })}
+
                   <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
                   <text x={paddingLeft - 15} y={y + 38} textAnchor="end" fill="var(--color-text-main)" fontSize="12" fontWeight="bold">
                     <tspan x={paddingLeft - 15} dy="0">Respiratory</tspan>
@@ -402,18 +442,18 @@ const Timeline = ({ data }) => {
                   {series.points.length > 0 ? (
                     <>
                       {series.points.length > 1 && (
-                        <path d={path} fill="none" stroke={series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                        <path d={path} fill="none" stroke={series.id === 'respiratory-rate' ? '#000000' : series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
                       )}
                       {series.points.map((point, pointIndex) => {
                         const x = getX(point.timestamp);
-                        const pointY = getMeasurementY(point.numericValue, series.minValue, series.maxValue, rowTop, rowBottom);
+                        const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
                         return (
                           <circle
                             key={`${series.id}-${point.timestamp}-${pointIndex}`}
                             cx={x}
                             cy={pointY}
                             r={2}
-                            fill={series.color}
+                            fill={series.id === 'respiratory-rate' ? '#000000' : series.color}
                             stroke="var(--color-bg-card)"
                             strokeWidth="1"
                             className="event-marker"
@@ -693,7 +733,7 @@ const Timeline = ({ data }) => {
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Expected SBT Start Window</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-violation)' }}></div><span>Violation</span></div>
         {highlightedMeasurementRows.map(series => (
-          <div key={series.id} className="legend-item"><div className="legend-color" style={{ background: series.color }}></div><span>{series.label}</span></div>
+          <div key={series.id} className="legend-item"><div className="legend-color" style={{ background: series.id === 'respiratory-rate' ? '#000000' : series.color }}></div><span>{series.label}</span></div>
         ))}
       </div>
     </div>
