@@ -387,108 +387,120 @@ const Timeline = ({ data }) => {
 
       <div className="main-layout">
         <div className="chart-area">
-          <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + measurementRowCount + 1)}`} className="timeline-svg">
-            {/* Time Axis */}
-            <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="var(--color-text-muted)" strokeWidth="2" />
-            {timeTicks.map(h => {
-              const time = minTime + h * 60 * 60 * 1000;
-              if (time > maxTime) return null;
-              const x = getX(time);
-              return (
-                <g key={h}>
-                  <line x1={x} y1={paddingTop - 15} x2={x} y2={paddingTop - 5} stroke="var(--color-text-muted)" strokeWidth="2" />
-                  <text x={x} y={paddingTop - 25} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11" fontWeight="bold">{formatAxisTick(h)}</text>
-                </g>
-              );
-            })}
+          <div className="chart-sticky-header">
+            <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * measurementRowCount + 20}`} className="timeline-svg timeline-svg-pinned">
+              <rect
+                x={0}
+                y={0}
+                width={width}
+                height={paddingTop + rowHeight * measurementRowCount + 20}
+                fill="var(--color-bg-card)"
+              />
 
-            {/* Highlighted Measurements */}
-            {highlightedMeasurementRows.map((series, seriesIndex) => {
-              const y = paddingTop + 10 + seriesIndex * rowHeight;
-              const rowTop = y + 18;
-              const rowBottom = y + rowHeight - 24;
-              const path = series.points
-                .map((point, pointIndex) => {
-                  const x = getX(point.timestamp);
-                  const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
-                  return `${pointIndex === 0 ? 'M' : 'L'} ${x} ${pointY}`;
-                })
-                .join(' ');
+              {/* Time Axis */}
+              <line x1={paddingLeft} y1={paddingTop - 10} x2={width - paddingRight} y2={paddingTop - 10} stroke="var(--color-text-muted)" strokeWidth="2" />
+              {timeTicks.map(h => {
+                const time = minTime + h * 60 * 60 * 1000;
+                if (time > maxTime) return null;
+                const x = getX(time);
+                return (
+                  <g key={h}>
+                    <line x1={x} y1={paddingTop - 15} x2={x} y2={paddingTop - 5} stroke="var(--color-text-muted)" strokeWidth="2" />
+                    <text x={x} y={paddingTop - 25} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11" fontWeight="bold">{formatAxisTick(h)}</text>
+                  </g>
+                );
+              })}
 
-              return (
-                <g key={series.id}>
-                  <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill="var(--color-neutral-bg)" rx={6} opacity={1} />
+              {/* Highlighted Measurements */}
+              {highlightedMeasurementRows.map((series, seriesIndex) => {
+                const y = paddingTop + 10 + seriesIndex * rowHeight;
+                const rowTop = y + 18;
+                const rowBottom = y + rowHeight - 24;
+                const path = series.points
+                  .map((point, pointIndex) => {
+                    const x = getX(point.timestamp);
+                    const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
+                    return `${pointIndex === 0 ? 'M' : 'L'} ${x} ${pointY}`;
+                  })
+                  .join(' ');
 
-                  {series.thresholdBands.map((band, bandIndex) => {
-                    const clampedMin = Math.max(series.domainMin, band.min);
-                    const clampedMax = Number.isFinite(band.max)
-                      ? Math.min(series.domainMax, band.max)
-                      : series.domainMax;
+                return (
+                  <g key={series.id}>
+                    <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill="var(--color-neutral-bg)" rx={6} opacity={1} />
 
-                    if (clampedMax <= clampedMin) return null;
+                    {series.thresholdBands.map((band, bandIndex) => {
+                      const clampedMin = Math.max(series.domainMin, band.min);
+                      const clampedMax = Number.isFinite(band.max)
+                        ? Math.min(series.domainMax, band.max)
+                        : series.domainMax;
 
-                    const yTop = getMeasurementY(clampedMax, series.domainMin, series.domainMax, rowTop, rowBottom);
-                    const yBottom = getMeasurementY(clampedMin, series.domainMin, series.domainMax, rowTop, rowBottom);
+                      if (clampedMax <= clampedMin) return null;
 
-                    return (
-                      <rect
-                        key={`${series.id}-band-${bandIndex}`}
-                        x={paddingLeft}
-                        y={yTop}
-                        width={chartWidth}
-                        height={Math.max(1, yBottom - yTop)}
-                        fill={band.color}
-                        pointerEvents="none"
-                      />
-                    );
-                  })}
+                      const yTop = getMeasurementY(clampedMax, series.domainMin, series.domainMax, rowTop, rowBottom);
+                      const yBottom = getMeasurementY(clampedMin, series.domainMin, series.domainMax, rowTop, rowBottom);
 
-                  <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
-                  <text x={paddingLeft - 15} y={y + 38} textAnchor="end" fill="var(--color-text-main)" fontSize="12" fontWeight="bold">
-                    <tspan x={paddingLeft - 15} dy="0">Respiratory</tspan>
-                    <tspan x={paddingLeft - 15} dy="14">Rate</tspan>
-                  </text>
+                      return (
+                        <rect
+                          key={`${series.id}-band-${bandIndex}`}
+                          x={paddingLeft}
+                          y={yTop}
+                          width={chartWidth + paddingRight}
+                          height={Math.max(1, yBottom - yTop)}
+                          fill={band.color}
+                          pointerEvents="none"
+                        />
+                      );
+                    })}
 
-                  {series.points.length > 0 ? (
-                    <>
-                      {series.points.length > 1 && (
-                        <path d={path} fill="none" stroke={series.id === 'respiratory-rate' ? '#000000' : series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
-                      )}
-                      {series.points.map((point, pointIndex) => {
-                        const x = getX(point.timestamp);
-                        const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
-                        return (
-                          <circle
-                            key={`${series.id}-${point.timestamp}-${pointIndex}`}
-                            cx={x}
-                            cy={pointY}
-                            r={2}
-                            fill={series.id === 'respiratory-rate' ? '#000000' : series.color}
-                            stroke="var(--color-bg-card)"
-                            strokeWidth="1"
-                            className="event-marker"
-                            onMouseEnter={() => setHoveredEvent({
-                              label: series.label,
-                              value: formatMeasurement(point),
-                              timestamps: new Date(point.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                            })}
-                            onMouseLeave={() => setHoveredEvent(null)}
-                          />
-                        );
-                      })}
-                    </>
-                  ) : (
-                    <text x={(paddingLeft + width - paddingRight) / 2} y={y + 54} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11">
-                      No respiratory rate measurements
+                    <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
+                    <text x={paddingLeft - 15} y={y + 38} textAnchor="end" fill="var(--color-text-main)" fontSize="12" fontWeight="bold">
+                      <tspan x={paddingLeft - 15} dy="0">Respiratory</tspan>
+                      <tspan x={paddingLeft - 15} dy="14">Rate</tspan>
                     </text>
-                  )}
-                </g>
-              );
-            })}
 
+                    {series.points.length > 0 ? (
+                      <>
+                        {series.points.length > 1 && (
+                          <path d={path} fill="none" stroke={series.id === 'respiratory-rate' ? '#000000' : series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                        )}
+                        {series.points.map((point, pointIndex) => {
+                          const x = getX(point.timestamp);
+                          const pointY = getMeasurementY(point.numericValue, series.domainMin, series.domainMax, rowTop, rowBottom);
+                          return (
+                            <circle
+                              key={`${series.id}-${point.timestamp}-${pointIndex}`}
+                              cx={x}
+                              cy={pointY}
+                              r={2}
+                              fill={series.id === 'respiratory-rate' ? '#000000' : series.color}
+                              stroke="var(--color-bg-card)"
+                              strokeWidth="1"
+                              className="event-marker"
+                              onMouseEnter={() => setHoveredEvent({
+                                label: series.label,
+                                value: formatMeasurement(point),
+                                timestamps: new Date(point.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                              })}
+                              onMouseLeave={() => setHoveredEvent(null)}
+                            />
+                          );
+                        })}
+                      </>
+                    ) : (
+                      <text x={(paddingLeft + width - paddingRight) / 2} y={y + 54} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11">
+                        No respiratory rate measurements
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+
+          <svg viewBox={`0 0 ${width} ${paddingTop + rowHeight * (conformance.length + 1)}`} className="timeline-svg timeline-svg-body">
             {/* Episodes */}
             {conformance.map((episode, i) => {
-              const y = paddingTop + 10 + (i + measurementRowCount) * rowHeight;
+              const y = paddingTop + 10 + i * rowHeight;
               const xStart = getX(episode.episode_start);
               const xEnd = getX(episode.episode_end);
               const sbtX = episode.sbt_start ? getX(episode.sbt_start) : null;
@@ -502,19 +514,15 @@ const Timeline = ({ data }) => {
                   ? (isSelected ? 'var(--color-violation-bg-hover)' : 'var(--color-violation-bg)')
                   : (isSelected ? 'var(--color-neutral-bg-hover)' : 'var(--color-neutral-bg)');
 
-              // Invasive Ventilation Bar (from episode start to SBT start or episode end)
               const ventEndX = sbtX || xEnd;
 
               return (
                 <g key={`episode-${i}`} onClick={() => setSelectedEpisode(episode)} style={{ cursor: 'pointer' }}>
-                  {/* Row Background Window */}
                   <rect x={paddingLeft} y={y} width={chartWidth + paddingRight} height={rowHeight - 15} fill={rowFill} rx={6} opacity={1} />
 
-                  {/* Row Divider */}
                   <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width - paddingRight} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
-                  <text x={paddingLeft - 15} y={y + 45} textAnchor="end" fill={isSelected ? "var(--color-text-main)" : "var(--color-text-muted)"} fontSize="12" fontWeight={isSelected ? "bold" : "normal"}>Ep {episode.episode_index}</text>
+                  <text x={paddingLeft - 15} y={y + 45} textAnchor="end" fill={isSelected ? 'var(--color-text-main)' : 'var(--color-text-muted)'} fontSize="12" fontWeight={isSelected ? 'bold' : 'normal'}>Ep {episode.episode_index}</text>
 
-                  {/* Invasive Ventilation Bar */}
                   <rect
                     x={xStart}
                     y={y + 15}
@@ -536,7 +544,6 @@ const Timeline = ({ data }) => {
                     onMouseLeave={() => setHoveredEvent(null)}
                   />
 
-                  {/* SBT Bar */}
                   {sbtX && sbtEndX && (
                     <rect
                       x={sbtX}
@@ -558,16 +565,14 @@ const Timeline = ({ data }) => {
                     />
                   )}
 
-                  {/* Conformance Indicators */}
                   <g>
-                    <circle cx={xStart + 15} cy={y + 60} r={7} fill={isViolated ? "var(--color-violation)" : "var(--color-success)"} />
+                    <circle cx={xStart + 15} cy={y + 60} r={7} fill={isViolated ? 'var(--color-violation)' : 'var(--color-success)'} />
                     {isViolated && (
                       <text x={xStart + 30} y={y + 65} fill="var(--color-violation)" fontSize="11" fontWeight="bold">
                         {episode.num_mandatory_violations} violations
                       </text>
                     )}
 
-                    {/* Target Window visual aid */}
                     {episode.mandatory_violated_constraints.includes('RC-TM-03') && (
                       <rect
                         x={getX(episode.episode_start) + (48 * 60 * 60 * 1000 / duration) * chartWidth}

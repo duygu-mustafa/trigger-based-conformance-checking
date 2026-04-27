@@ -163,11 +163,32 @@
   /* Only the SVG scrolls vertically */
 }
 
+.chart-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--color-bg-card);
+  border-bottom: 1px solid var(--color-border-light);
+  width: max-content;
+  min-width: 1000px;
+  overflow: visible;
+  isolation: isolate;
+}
+
 .timeline-svg {
   width: 100%;
   height: auto;
   min-width: 1000px;
   /* Ensure a minimum readable width */
+}
+
+.timeline-svg-pinned {
+  min-height: 0;
+  display: block;
+}
+
+.timeline-svg-body {
+  display: block;
 }
 
 .details-sidebar {
