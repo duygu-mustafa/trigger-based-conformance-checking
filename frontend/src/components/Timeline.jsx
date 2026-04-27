@@ -1,4 +1,14 @@
 import React, { useState } from 'react';
+import clockIcon from '../static/clock.svg';
+import controlFlowIcon from '../static/control_flow.svg';
+import dataIcon from '../static/data.svg';
+
+const getConstraintIcon = (cid) => {
+  if (cid.includes('-DP-')) return dataIcon;
+  if (cid.includes('-TM-')) return clockIcon;
+  if (cid.includes('-CF-') || cid.includes('COMPOSITE')) return controlFlowIcon;
+  return controlFlowIcon;
+};
 
 const Timeline = ({ data }) => {
   const { events, conformance, constraint_definitions } = data;
@@ -593,7 +603,10 @@ const Timeline = ({ data }) => {
                     return (
                       <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--color-error-text)', fontWeight: 'bold', fontSize: '12px' }}>
+                            <img src={getConstraintIcon(cid)} alt="constraint icon" style={{ width: '20px', height: '20px', opacity: 0.8 }} />
+                            <span>{cid}: {def?.label || 'Unknown rule'}</span>
+                          </div>
                           {renderStatusBadge('Violated')}
                         </div>
                         {detail ? (
@@ -623,8 +636,9 @@ const Timeline = ({ data }) => {
                     <h4 style={{ color: 'var(--color-accent)', paddingBottom: '5px' }}>Composite Failure Intervention Check</h4>
                     <div style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
-                          {compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
+                          <img src={getConstraintIcon(compositeRuleId)} alt="constraint icon" style={{ width: '20px', height: '20px', opacity: 0.8 }} />
+                          <span>{compositeRuleId}: {getConstraintDefinition(compositeRuleId)?.label || 'At least one failure intervention must occur after SBT failure'}</span>
                         </div>
                         {renderStatusBadge(satisfied ? 'Satisfied' : 'Violated')}
                       </div>
@@ -668,7 +682,10 @@ const Timeline = ({ data }) => {
                         return (
                           <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                              <div style={{ color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--color-satisfied-text)', fontWeight: 'bold', fontSize: '12px' }}>
+                                <img src={getConstraintIcon(cid)} alt="constraint icon" style={{ width: '20px', height: '20px', opacity: 0.8 }} />
+                                <span>{cid}: {def?.label || 'Unknown rule'}</span>
+                              </div>
                               {renderStatusBadge('Satisfied')}
                             </div>
                             {detail ? (
@@ -704,7 +721,10 @@ const Timeline = ({ data }) => {
                         return (
                           <div key={cid} style={{ marginBottom: '10px', padding: '8px', background: '#ffffff', border: '1px solid var(--color-border-light)', borderRadius: '4px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                              <div style={{ color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>{cid}: {def?.label || 'Unknown rule'}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--color-accent)', fontWeight: 'bold', fontSize: '12px' }}>
+                                <img src={getConstraintIcon(cid)} alt="constraint icon" style={{ width: '20px', height: '20px', opacity: 0.8 }} />
+                                <span>{cid}: {def?.label || 'Unknown rule'}</span>
+                              </div>
                               {renderStatusBadge('Vacuous')}
                             </div>
                             <div style={{ fontSize: '11px', marginTop: '4px' }}>
