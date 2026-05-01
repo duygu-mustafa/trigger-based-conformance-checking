@@ -254,11 +254,11 @@ const MiniBarChart = ({ items, emptyMessage, getValue, getPercentage, toneClass 
   );
 };
 
-const ContrastBarChart = ({ items, emptyMessage, mode = 'violation' }) => {
+const ContrastBarChart = ({ items, mode = 'violation' }) => {
   if (!items || items.length === 0) {
     return (
       <div className="bar-list">
-        <p className="summary-empty">{emptyMessage}</p>
+        <p className="summary-empty">No constraints have data for this mode.</p>
       </div>
     );
   }
@@ -267,16 +267,18 @@ const ContrastBarChart = ({ items, emptyMessage, mode = 'violation' }) => {
 
   return (
     <div className="contrast-list">
+      <div className="contrast-legend">
+        <div className="legend-item"><span className="swatch success"></span> Successful Trials</div>
+        <div className="legend-item"><span className="swatch failure"></span> Failed Trials</div>
+        <div className="legend-hint">Length = % of that group {isViolation ? 'violating' : 'satisfying'} the rule</div>
+      </div>
+      
       {items.map((item) => {
         const icon = getConstraintIcon(item.constraint_id);
-        
-        // Rates depend on mode but order is now always Success then Failure
         const rateSuccess = isViolation ? (item.violation_rate_success ?? 0) : (item.satisfaction_rate_success ?? 0);
         const rateFailure = isViolation ? (item.violation_rate_failure ?? 0) : (item.satisfaction_rate_failure ?? 0);
         const lift = isViolation ? (item.lift_failure ?? 1) : (item.lift_success ?? 1);
-
-        const colorSuccess = isViolation ? 'success-fill' : 'success-fill'; // Both green in their context
-        const colorFailure = isViolation ? 'failure-fill' : 'failure-fill';
+        const delta = Math.abs(rateFailure - rateSuccess);
 
         return (
           <div key={item.constraint_id} className="contrast-row">
@@ -287,25 +289,37 @@ const ContrastBarChart = ({ items, emptyMessage, mode = 'violation' }) => {
               </div>
               <div className="lift-metrics">
                 <div className={`lift-tag ${isViolation ? (lift > 1.2 ? 'high-lift' : lift < 0.8 ? 'low-lift' : '') : (lift > 1.2 ? 'high-success-lift' : lift < 0.8 ? 'low-success-lift' : '')}`}>
-                  {isViolation ? 'Failure Lift' : 'Success Lift'}: {lift.toFixed(2)}x
+                   {isViolation ? 'Failure Lift' : 'Success Lift'}: <strong>{lift.toFixed(2)}x</strong>
+                </div>
+                <div className="delta-tag">
+                   {delta > 0.01 && <span className="delta-val">Δ {formatPercent(delta)}</span>}
                 </div>
               </div>
             </div>
             
-            <div className="dual-track">
-              <div className="track-layer">
-                <div 
-                  className={`track-fill success-fill`} 
-                  style={{ width: `${rateSuccess * 100}%` }}
-                />
-                <span className="track-text">Success: {formatPercent(rateSuccess)}</span>
-              </div>
-              <div className="track-layer">
-                <div 
-                  className={`track-fill failure-fill`} 
-                  style={{ width: `${rateFailure * 100}%` }}
-                />
-                <span className="track-text">Failure: {formatPercent(rateFailure)}</span>
+            <div className="dual-track-container">
+              <div className="dual-track">
+                 {/* Scale Grid */}
+                <div className="track-grid">
+                  {[0, 25, 50, 75, 100].map(v => <div key={v} className="grid-line" style={{ left: `${v}%` }}><span>{v}%</span></div>)}
+                </div>
+                
+                <div className="track-layer">
+                  <div 
+                    className="track-fill success-fill" 
+                    style={{ width: `${rateSuccess * 100}%` }}
+                  >
+                    <span className={`rate-label ${rateSuccess < 0.2 ? 'is-low' : ''}`}>Success: {formatPercent(rateSuccess)}</span>
+                  </div>
+                </div>
+                <div className="track-layer">
+                  <div 
+                    className="track-fill failure-fill" 
+                    style={{ width: `${rateFailure * 100}%` }}
+                  >
+                    <span className={`rate-label ${rateFailure < 0.2 ? 'is-low' : ''}`}>Failure: {formatPercent(rateFailure)}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
