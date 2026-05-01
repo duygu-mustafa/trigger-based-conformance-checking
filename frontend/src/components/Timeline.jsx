@@ -494,6 +494,24 @@ const Timeline = ({ data }) => {
                   </g>
                 );
               })}
+
+              {/* Episode Boundary Guidelines (Header) */}
+              {conformance.map((episode, i) => {
+                const xStart = getX(episode.episode_start);
+                const xEnd = getX(episode.episode_end);
+                return (
+                  <g key={`guide-pinned-${i}`} style={{ pointerEvents: 'none' }}>
+                    <line 
+                      x1={xStart} y1={paddingTop - 10} x2={xStart} y2={paddingTop + rowHeight * measurementRowCount + 20} 
+                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                    />
+                    <line 
+                      x1={xEnd} y1={paddingTop - 10} x2={xEnd} y2={paddingTop + rowHeight * measurementRowCount + 20} 
+                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                    />
+                  </g>
+                );
+              })}
             </svg>
           </div>
 
@@ -585,6 +603,24 @@ const Timeline = ({ data }) => {
                       />
                     )}
                   </g>
+                </g>
+              );
+            })}
+
+            {/* Episode Boundary Guidelines (Above bars) */}
+            {conformance.map((episode, i) => {
+              const xStart = getX(episode.episode_start);
+              const xEnd = getX(episode.episode_end);
+              return (
+                <g key={`guide-${i}`} style={{ pointerEvents: 'none' }}>
+                  <line 
+                    x1={xStart} y1={0} x2={xStart} y2={paddingTop + rowHeight * conformance.length} 
+                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                  />
+                  <line 
+                    x1={xEnd} y1={0} x2={xEnd} y2={paddingTop + rowHeight * conformance.length} 
+                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                  />
                 </g>
               );
             })}

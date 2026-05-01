@@ -598,6 +598,37 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   const [sortBy, setSortBy] = useState('total_mandatory_violations');
   const [analysisMode, setAnalysisMode] = useState('violation'); // 'violation' or 'satisfaction'
   const [selectedConstraintId, setSelectedConstraintId] = useState(null);
+  const [forensicsSidebarWidth, setForensicsSidebarWidth] = useState(550);
+  const isResizing = React.useRef(false);
+
+  const startResizing = (e) => {
+    isResizing.current = true;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const stopResizing = () => {
+    isResizing.current = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'default';
+    document.body.style.userSelect = 'auto';
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isResizing.current) return;
+    // Calculate new width relative to the section start
+    const section = document.querySelector('.forensics-layout');
+    if (section) {
+      const rect = section.getBoundingClientRect();
+      const newWidth = e.clientX - rect.left;
+      if (newWidth > 200 && newWidth < 800) {
+        setForensicsSidebarWidth(newWidth);
+      }
+    }
+  };
 
   const topViolations = useMemo(
     () => {
@@ -691,27 +722,41 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
           </div>
         </div>
         <div className="forensics-layout">
-          <div className="forensics-master">
-            <h4>Most Frequent Violations</h4>
+          <div className="forensics-master" style={{ width: forensicsSidebarWidth, flex: 'none' }}>
+            <div className="master-header">
+              <h4>Most Frequent {analysisMode === 'violation' ? 'Violations' : 'Satisfactions'}</h4>
+              <span className="header-hint">Rate</span>
+            </div>
             <div className="forensics-list">
-              {topViolations.slice(0, 10).map(v => (
-                <div 
-                  key={v.constraint_id} 
-                  className={`forensics-row ${selectedConstraint?.constraint_id === v.constraint_id ? 'active' : ''}`}
-                  onClick={() => setSelectedConstraintId(v.constraint_id)}
-                >
-                  <div className="row-main">
-                    <img src={getConstraintIcon(v.constraint_id)} alt="" className="row-icon" />
-                    <span className="row-label" title={v.constraint_label}>{v.constraint_label}</span>
+              {topViolations.slice(0, 15).map(v => {
+                const rate = analysisMode === 'violation' ? v.episode_share : (v.count_satisfied / (summaryData?.total_episodes || 1));
+                return (
+                  <div 
+                    key={v.constraint_id} 
+                    className={`forensics-row ${selectedConstraint?.constraint_id === v.constraint_id ? 'active' : ''}`}
+                    onClick={() => setSelectedConstraintId(v.constraint_id)}
+                  >
+                    <div className="row-bar-bg" style={{ 
+                      width: `${rate * 100}%`,
+                      backgroundColor: '#94a3b8',
+                    }} />
+                    <div className="row-content">
+                      <div className="row-main">
+                        <img src={getConstraintIcon(v.constraint_id)} alt="" className="row-icon" />
+                        <span className="row-label" title={v.constraint_label}>{v.constraint_label}</span>
+                      </div>
+                      <div className="row-meta">
+                        <span className="row-percent">{formatPercent(rate)}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="row-meta">
-                    <span className="row-count">{v.count} episodes</span>
-                    <span className="row-percent">{formatPercent(v.episode_share)}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
+          
+          <div className="forensics-resizer" onMouseDown={startResizing} />
+
           <div className="forensics-detail">
             <ConstraintDetailView constraint={selectedConstraint} itemLabels={summaryData?.item_labels} />
           </div>
