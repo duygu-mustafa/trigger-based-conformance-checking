@@ -93,6 +93,27 @@ const Histogram = ({
       <p className="chart-label">{title}</p>
       <svg width={width} height={height} className="histogram-svg">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
+          {/* Y-axis ticks & label */}
+          {[0, 0.5, 1].map(p => {
+            const val = Math.round(p * maxBin);
+            const h = p * (innerH - barTopPadding);
+            const y = innerH - h;
+            return (
+              <g key={p}>
+                <line x1={-3} y1={y} x2={0} y2={y} stroke="#cbd5e1" strokeWidth="1" />
+                <text x={-6} y={y} textAnchor="end" fontSize="8" fill="#94a3b8" alignmentBaseline="middle" fontWeight="600">{val}</text>
+              </g>
+            );
+          })}
+          <text 
+            x={-margin.left + 5} y={-10} 
+            fontSize="8" 
+            fill="#94a3b8" 
+            fontWeight="700" 
+            textAnchor="start"
+          >
+            COUNT
+          </text>
           {/* Clinical Zone Shading - only render when thresholds are defined */}
           {(expectedMin !== null || expectedMax !== null) && (() => {
             const zRange = zMax - zMin;
