@@ -1,5 +1,8 @@
-"""CLI for granular per-SBT conformance checking with improved attribution.
-Deduplicated trial timestamps to prevent redundant record generation.
+"""CLI for trigger-episode conformance checking.
+
+Each stay is split into episodes using `InvasiveVentilationStarted` as trigger.
+Within each episode, conformance is evaluated and reported even if no SBT attempt
+was recorded.
 """
 
 from __future__ import annotations
@@ -12,16 +15,161 @@ import yaml
 from tqdm import tqdm
 
 from conformance.batch_runner import BatchConformanceRunner
-from conformance.results import ConformanceOutcome, TraceResult
+from conformance.results import ConformanceOutcome
 from conformance.rules import (
     build_failure_correction_model,
     build_readiness_assessment_model,
     build_sbt_execution_model,
 )
-from conformance.types import DeclareModel, DeclareTemplate
+from conformance.types import DeclareModel
 from conformance.checker import (
     evaluate_constraint
 )
+import json
+import math
+
+
+INT_COMPOSITE_ID = "INT-COMPOSITE-01"
+FAILURE_INTERVENTION_ACTIVITIES = {
+    "Bronchodilator_Admin",
+    "Diuretic_Admin",
+    "AfterloadReduction_Admin",
+    "ElectrolyteBG_Test",
+    "ElectrolyteCorrection_Admin",
+    "HormonalLab_Test",
+    "HormonalReplacement_Admin",
+}
+
+
+def _build_trigger_episodes(df_full: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    triggers = (
+        df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+        .drop_duplicates(subset=["timestamp"])
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+    if triggers.empty:
+        return []
+
+    trace_end_exclusive = df_full.iloc[-1]["timestamp"] + pd.Timedelta(seconds=1)
+    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    for idx, row in triggers.iterrows():
+        start_ts = row["timestamp"]
+        end_ts = (
+            triggers.iloc[idx + 1]["timestamp"]
+            if idx + 1 < len(triggers)
+            else trace_end_exclusive
+        )
+        windows.append((start_ts, end_ts))
+    return windows
+
+
+def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.Timestamp | None:
+    prior = df_full[df_full["timestamp"] < ts].copy()
+    if prior.empty:
+        return None
+
+    completed_failed = prior[
+        (prior["activity"] == "SBTCompleted")
+        & prior.get("value_raw", pd.Series(index=prior.index, dtype=object))
+        .astype(str)
+        .str.lower()
+        .isin(["no", "failure", "failed"])
+    ]
+    failures = pd.concat(
+        [
+            prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])],
+            completed_failed,
+        ],
+        axis=0,
+    ).sort_values("timestamp")
+    if failures.empty:
+        return None
+    return failures.iloc[-1]["timestamp"]
+
+
+def _sbt_failed_by_reventilation(
+    vent_starts: pd.DataFrame,
+    sbt_start: pd.Timestamp,
+    failure_window_hours: float = 48.0,
+) -> bool:
+    outcome_end = sbt_start + pd.Timedelta(hours=failure_window_hours)
+    matching_vent = vent_starts[
+        (vent_starts["timestamp"] > sbt_start)
+        & (vent_starts["timestamp"] <= outcome_end)
+    ]
+    return not matching_vent.empty
+
+
+def _find_latest_failed_sbt_start_before(
+    df_full: pd.DataFrame,
+    current_sbt_start: pd.Timestamp,
+) -> pd.Timestamp | None:
+    sbt_starts = (
+        df_full[df_full["activity"] == "SBTStarted"]
+        .drop_duplicates(subset=["timestamp"])
+        .sort_values("timestamp")
+    )
+    if sbt_starts.empty:
+        return None
+
+    prior_attempts = sbt_starts[sbt_starts["timestamp"] < current_sbt_start]
+    if prior_attempts.empty:
+        return None
+
+    vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+    latest_failed: pd.Timestamp | None = None
+    for _, row in prior_attempts.iterrows():
+        prior_start = row["timestamp"]
+        if _sbt_failed_by_reventilation(vent_starts, prior_start):
+            latest_failed = prior_start
+
+    return latest_failed
+
+
+def _evaluate_rc_tm_02_outcome(
+    df_full: pd.DataFrame,
+    current_sbt_start: pd.Timestamp | None,
+    min_gap_hours: float = 24.0,
+) -> tuple[ConformanceOutcome, float | None]:
+    if current_sbt_start is None:
+        return ConformanceOutcome.VACUOUS, None
+
+    prior_failed_start = _find_latest_failed_sbt_start_before(df_full, current_sbt_start)
+    if prior_failed_start is None:
+        # Activation condition is false: no prior failed SBT before this start.
+        return ConformanceOutcome.VACUOUS, None
+
+    gap_hours = float((current_sbt_start - prior_failed_start).total_seconds()) / 3600.0
+    outcome = ConformanceOutcome.SATISFIED if gap_hours >= min_gap_hours else ConformanceOutcome.VIOLATED
+    
+    # Return both outcome and the delay forensic
+    return outcome, gap_hours
+
+
+def _evaluate_composite_for_attempt(
+    df_full: pd.DataFrame,
+    sbt_start: pd.Timestamp,
+) -> tuple[bool, list[str], str | None]:
+    prior_failure_ts = _find_latest_failure_before(df_full, sbt_start)
+    if prior_failure_ts is None:
+        return False, [], "No prior SBT failure before this non-first attempt"
+
+    window_end = min(prior_failure_ts + pd.Timedelta(hours=24), sbt_start)
+    in_window = df_full[
+        (df_full["timestamp"] > prior_failure_ts)
+        & (df_full["timestamp"] < sbt_start)
+        & (df_full["timestamp"] <= window_end)
+        & (df_full["activity"].isin(FAILURE_INTERVENTION_ACTIVITIES))
+    ]
+    interventions = sorted(in_window["activity"].dropna().astype(str).unique().tolist())
+    if interventions:
+        return True, interventions, None
+    return (
+        False,
+        [],
+        "No qualifying failure intervention between prior failure and current SBT start",
+    )
 
 def _load_constraint_id_lookup(model_path: Path) -> dict[str, str]:
     with model_path.open("r", encoding="utf-8") as f:
@@ -57,10 +205,121 @@ def _build_combined_model() -> DeclareModel:
             model.add(constraint)
     return model
 
+def export_to_frontend(runner, stay_ids, results_df, output_dir):
+    """Export filtered clinical records and conformance results to JSON for the React frontend."""
+    print(f"Exporting JSON for frontend visualization to {output_dir}...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Load item whitelist from dictionary to filter out noise measurements
+    with Path("configs/item_dictionary.yaml").open("r") as f:
+        item_dict = yaml.safe_load(f)
+    
+    whitelist_ids = set()
+    for source in item_dict.get("sources", {}).values():
+        whitelist_ids.update(str(k) for k in source.keys())
+    
+    # Also whitelist derived ventilation/sbt IDs
+    whitelist_ids.update(["sbt_status", "sbt_outcome", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
+    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed"]
+
+    # 2. Extract constraint definitions keyed by canonical IDs for frontend lookup.
+    constraint_defs = {}
+    for c in runner.model.constraints:
+        cid = getattr(c, "id", None) or c.label
+        if not cid:
+            continue
+        constraint_defs[str(cid)] = {
+            "id": str(cid),
+            "label": c.label or str(cid),
+            "description": getattr(c, "description", "") or "",
+            "rationale": getattr(c, "rationale", "") or "",
+            "template": c.template.name if hasattr(c, "template") else None,
+            "activation": c.activation if hasattr(c, "activation") else None,
+            "target": c.target if hasattr(c, "target") else None,
+            "semantics": getattr(c, "semantics", None),
+            "activation_condition": getattr(c, "activation_condition_raw", None),
+            "target_condition": getattr(c, "target_condition_raw", None),
+            "observation_window_hours": getattr(c, "observation_window_hours", None),
+            "min_gap_hours": (c.time_condition.min_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.min_seconds is not None) else None,
+            "max_gap_hours": (c.time_condition.max_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.max_seconds is not None) else None,
+        }
+
+    # 3. Process each stay
+    for stay_id in tqdm(stay_ids, desc="Exporting JSON"):
+        # Get only whitelisted events:
+        # - Core activities (Ventilation, SBTs)
+        # - True modeled activities (mapped or derived)
+        # - Measurements for items specifically defined in our clinical dictionary
+        df_stay = runner.con.execute(
+            f"""
+            SELECT * FROM events 
+            WHERE {runner._batch_key_column} = ?
+              AND (
+                activity IN ({','.join(['?' for _ in core_activities])})
+                OR (attrs LIKE '%"mapped_activity"%' OR attrs LIKE '%"derived_activity"%')
+                OR (itemid IN ({','.join(['?' for _ in whitelist_ids])}))
+              )
+            """,
+            [str(stay_id)] + core_activities + list(whitelist_ids),
+        ).df().sort_values("timestamp")
+        
+        # Format timestamps for JSON
+        df_stay["timestamp"] = pd.to_datetime(df_stay["timestamp"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Robustly replace NaN/NaT with None for valid JSON nulls
+        df_stay = df_stay.astype(object).where(pd.notnull(df_stay), None)
+        
+        # Get conformance results for this stay
+        stay_conformance_df = results_df[results_df["stay_id"] == stay_id].copy()
+        
+        # Parse violation_forensics and satisfaction_forensics JSON strings back to dict if present
+        for col in ["violation_forensics", "satisfaction_forensics"]:
+            if col in stay_conformance_df.columns:
+                def _parse_forensics(x):
+                    if not isinstance(x, str):
+                        return {}
+                    try:
+                        data = json.loads(x)
+                        # Recursively replace NaN with None in forensics dict
+                        def _clean(obj):
+                            if isinstance(obj, dict):
+                                return {k: _clean(v) for k, v in obj.items()}
+                            elif isinstance(obj, list):
+                                return [_clean(i) for i in obj]
+                            elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+                                return None
+                            return obj
+                        return _clean(data)
+                    except:
+                        return {}
+                stay_conformance_df[col] = stay_conformance_df[col].apply(_parse_forensics)
+
+        stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
+        stay_conformance = stay_conformance_df.to_dict(orient="records")
+        
+        # Final JSON structure
+        case_json = {
+            "case_id": str(stay_id),
+            "events": df_stay.to_dict(orient="records"),
+            "conformance": stay_conformance,
+            "constraint_definitions": constraint_defs
+        }
+        
+        output_file = output_dir / f"case_{stay_id}.json"
+        with output_file.open("w", encoding="utf-8") as f:
+            json.dump(case_json, f, indent=2, default=str)
+
+    # 4. Export a manifest so the frontend can load cases dynamically
+    manifest = {"cases": [str(sid) for sid in stay_ids]}
+    with (output_dir / "manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"Frontend export complete.")
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=Path("data/icu_event_log.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("data/results/main_per_sbt.csv"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/trigger_results.csv"))
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -72,7 +331,7 @@ def main() -> None:
     constraint_id_lookup = _load_combined_constraint_id_lookup(model_paths)
     
     stay_ids = runner.get_stay_ids()
-    print(f"Processing {len(stay_ids)} stays for per-SBT analysis...")
+    print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
 
     output_rows = []
     for stay_id in tqdm(stay_ids):
@@ -82,90 +341,196 @@ def main() -> None:
             [str(stay_id)],
         ).df().sort_values("timestamp")
         
-        if df_full.empty: continue
-        
-        # KEY FIX: Deduplicate SBTStarted events at identical timestamps
-        sbt_starts_all = df_full[df_full["activity"] == "SBTStarted"].sort_values("timestamp")
-        sbt_starts = sbt_starts_all.drop_duplicates(subset=["timestamp"]).copy()
-        
-        if sbt_starts.empty: continue
-        
-        intubations = df_full[df_full["activity"] == "Intubation"]
-        
-        # 2. Iterate through each unique SBT trial
-        sbt_list = sbt_starts.reset_index(drop=True)
-        for i, sbt_row in sbt_list.iterrows():
-            start_ts = sbt_row["timestamp"]
-            # Window for reintubation: 48h
-            outcome_end = start_ts + pd.Timedelta(hours=48)
-            
-            # Window for rule attribution: until next SBT or end of trace
-            next_start_ts = sbt_list.loc[i+1, "timestamp"] if i+1 < len(sbt_list) else df_full.iloc[-1]["timestamp"] + pd.Timedelta(seconds=1)
+        if df_full.empty:
+            continue
+        df_full = df_full.copy()
+        df_full["timestamp"] = pd.to_datetime(df_full["timestamp"], errors="coerce")
+        df_full = df_full.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if df_full.empty:
+            continue
 
-            # Clinical Outcome
-            matching_intub = intubations[(intubations["timestamp"] > start_ts) & (intubations["timestamp"] <= outcome_end)]
-            outcome_val = "Failure (Reintubated <48h)" if not matching_intub.empty else "Success (No Reintub <48h)"
+        episodes = _build_trigger_episodes(df_full)
+        if not episodes:
+            continue
 
-            # Sub-trace for this attempt: events until next SBT start
-            df_attempt = df_full[df_full["timestamp"] < next_start_ts].copy()
-            
-            violated = []
-            satisfied = []
-            
+        sbt_starts = (
+            df_full[df_full["activity"] == "SBTStarted"]
+            .drop_duplicates(subset=["timestamp"])
+            .sort_values("timestamp")
+        )
+        vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+
+        attempt_index = 0
+        for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
+            episode_df = df_full[
+                (df_full["timestamp"] >= episode_start)
+                & (df_full["timestamp"] < episode_end)
+            ].copy()
+            if episode_df.empty:
+                continue
+
+            sbt_in_episode = sbt_starts[
+                (sbt_starts["timestamp"] >= episode_start)
+                & (sbt_starts["timestamp"] < episode_end)
+            ]
+            sbt_start: pd.Timestamp | None = None
+            if not sbt_in_episode.empty:
+                sbt_start = sbt_in_episode.iloc[0]["timestamp"]
+                attempt_index += 1
+
+            sbt_end: pd.Timestamp | None = None
+            if sbt_start is not None:
+                outcome_end = sbt_start + pd.Timedelta(hours=48)
+                # Failure if a NEW invasive ventilation episode starts within 48h
+                matching_vent = vent_starts[
+                    (vent_starts["timestamp"] > sbt_start)
+                    & (vent_starts["timestamp"] <= outcome_end)
+                ]
+                
+                if not matching_vent.empty:
+                    outcome_val = "Failure (Reventilated <48h)"
+                    # SBT ended when ventilation was restarted
+                    sbt_end = matching_vent.iloc[0]["timestamp"]
+                else:
+                    # Right-censored case: Check the very last activity in the stay
+                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"])].sort_values("timestamp").iloc[-1:]
+                    if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":
+                         outcome_val = "Failure (Last State: Invasive Vent)"
+                    else:
+                         outcome_val = "Success (No Revent <48h / Last State: SBT)"
+                    # SBT ended at episode end (either successful or right-censored)
+                    sbt_end = episode_end
+            else:
+                outcome_val = "No SBT Attempt"
+
+            mandatory_violated: list[str] = []
+            mandatory_satisfied: list[str] = []
+            mandatory_vacuous: list[str] = []
+            informational_violated: list[str] = []
+            informational_satisfied: list[str] = []
+            informational_vacuous: list[str] = []
+            composite_interventions: list[str] = []
+            violation_forensics: dict[str, dict] = {}
+            satisfaction_forensics: dict[str, dict] = {}
+
             for constraint in runner.model.constraints:
-                canon_id = constraint_id_lookup.get(constraint.label, constraint.label or constraint.id)
+                raw_constraint_id = getattr(constraint, "id", None) or constraint.label
+                canon_id = constraint_id_lookup.get(raw_constraint_id, raw_constraint_id)
+                if not canon_id and constraint.label:
+                    canon_id = constraint_id_lookup.get(constraint.label, constraint.label)
                 if not canon_id:
-                    canon_id = constraint.id
-                
-                # Check metrics for this trail prefix
-                res = evaluate_constraint(case_id=str(stay_id), trace_df=df_attempt, constraint=constraint)
-                
-                triggered_now = False
-                if res.activation_ts:
-                    try:
-                        act_ts = pd.to_datetime(res.activation_ts)
-                        # Specific to this SBT window
-                        if start_ts <= act_ts < next_start_ts:
-                            triggered_now = True
-                    except:
-                        pass
-                
-                if constraint.template == DeclareTemplate.EXISTENCE:
-                    if res.outcome == ConformanceOutcome.SATISFIED:
-                        satisfied_previously = False
-                        if i > 0:
-                            # Evaluate prefix of previous trial to see if it was already satisfied
-                            # (Avoids double-counting requirements met earlier)
-                            df_prev = df_full[df_full["timestamp"] < start_ts]
-                            res_prev = evaluate_constraint(case_id=str(stay_id), trace_df=df_prev, constraint=constraint)
-                            if res_prev.outcome == ConformanceOutcome.SATISFIED:
-                                satisfied_previously = True
-                        if not satisfied_previously:
-                            satisfied.append(canon_id)
-                    elif res.outcome == ConformanceOutcome.VIOLATED:
-                        violated.append(canon_id)
-                
-                elif triggered_now:
-                    if res.outcome == ConformanceOutcome.VIOLATED:
-                        violated.append(canon_id)
-                    elif res.outcome == ConformanceOutcome.SATISFIED:
-                        satisfied.append(canon_id)
+                    continue
+
+                if canon_id == INT_COMPOSITE_ID:
+                    continue
+
+                is_failure_rule = canon_id.startswith("INT-")
+                if canon_id == "RC-TM-02":
+                    outcome, gap_hours = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
+                    res = None
+                    # Create a dummy result-like object for manual rules
+                    manual_forensics = {"deltas": {"gap_hours": gap_hours}, "delay_seconds": gap_hours * 3600} if gap_hours is not None else None
+                else:
+                    res = evaluate_constraint(
+                        case_id=str(stay_id),
+                        trace_df=episode_df,
+                        constraint=constraint,
+                    )
+                    outcome = res.outcome
+                    manual_forensics = None
+
+                if outcome == ConformanceOutcome.VACUOUS:
+                    target_vacuous = mandatory_vacuous
+                    if is_failure_rule:
+                        target_vacuous = informational_vacuous
+                    target_vacuous.append(canon_id)
+                    continue
+
+                target_violated = mandatory_violated
+                target_satisfied = mandatory_satisfied
+                if is_failure_rule:
+                    target_violated = informational_violated
+                    target_satisfied = informational_satisfied
+
+                if outcome == ConformanceOutcome.VIOLATED:
+                    target_violated.append(canon_id)
+                    f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                    if f_data:
+                        violation_forensics[canon_id] = f_data
+                elif outcome == ConformanceOutcome.SATISFIED:
+                    target_satisfied.append(canon_id)
+                    f_data = manual_forensics if manual_forensics else ({"deltas": res.satisfaction_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                    if f_data:
+                        satisfaction_forensics[canon_id] = f_data
+
+            # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
+            composite_reason = None
+            if sbt_start is not None and attempt_index > 1:
+                composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
+                    df_full=df_full,
+                    sbt_start=sbt_start,
+                )
+                if composite_ok:
+                    mandatory_satisfied.append(INT_COMPOSITE_ID)
+                else:
+                    mandatory_violated.append(INT_COMPOSITE_ID)
+
+            # Find actual ventilation end within this trigger window
+            vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp")
+            vent_end: pd.Timestamp | None = None
+            if not vent_end_rows.empty:
+                vent_end = vent_end_rows.iloc[0]["timestamp"]
+            else:
+                # If ongoing, use the last timestamp in the stay
+                vent_end = df_full["timestamp"].max()
 
             output_rows.append({
                 "stay_id": stay_id,
-                "sbt_attempt": i + 1,
-                "sbt_start": str(start_ts),
+                "episode_index": episode_idx,
+                "episode_start": str(episode_start),
+                "episode_end": str(episode_end),
+                "ventilation_start": str(episode_start),
+                "ventilation_end": str(vent_end),
+                "sbt_attempt": attempt_index if sbt_start is not None else "",
+                "sbt_start": str(sbt_start) if sbt_start is not None else "",
+                "sbt_end": str(sbt_end) if sbt_end is not None else "",
                 "sbt_outcome": outcome_val,
-                "violated_constraints": ";".join(sorted(set(violated))),
-                "satisfied_constraints": ";".join(sorted(set(satisfied))),
-                "num_violations": len(violated),
-                "num_satisfactions": len(satisfied),
+                "mandatory_violated_constraints": ";".join(sorted(set(mandatory_violated))),
+                "mandatory_satisfied_constraints": ";".join(sorted(set(mandatory_satisfied))),
+                "mandatory_vacuous_constraints": ";".join(sorted(set(mandatory_vacuous))),
+                "info_violated_constraints": ";".join(sorted(set(informational_violated))),
+                "info_satisfied_constraints": ";".join(sorted(set(informational_satisfied))),
+                "info_vacuous_constraints": ";".join(sorted(set(informational_vacuous))),
+                "composite_interventions": ";".join(composite_interventions),
+                "composite_note": composite_reason or "",
+                "violation_forensics": json.dumps(violation_forensics),
+                "satisfaction_forensics": json.dumps(satisfaction_forensics),
+                "num_mandatory_violations": len(set(mandatory_violated)),
+                "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
             })
 
     output_df = pd.DataFrame(output_rows)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     output_df.to_csv(args.output, index=False)
-    print(f"Saved granular per-SBT results to {args.output}")
+    print(f"Saved trigger-episode conformance results to {args.output}")
+
+    # --- AUTOMATIC FRONTEND EXPORT ---
+    # Calculate path relative to this script's location to be robust
+    base_path = Path(__file__).resolve().parent
+    frontend_data_dir = base_path / "frontend" / "public" / "data"
+    
+    export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
+    
+    # --- AUTOMATIC SUMMARY GENERATION ---
+    from derive.generate_summary import build_summary
+    case_files = sorted(frontend_data_dir.glob("case_*.json"))
+    if case_files:
+        summary = build_summary(case_files, frontend_data_dir)
+        summary_file = frontend_data_dir / "summary.json"
+        with summary_file.open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+            f.write("\n")
+        print(f"Global summary generated at {summary_file}")
 
 if __name__ == "__main__":
     main()

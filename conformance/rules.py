@@ -201,7 +201,9 @@ def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> Dec
     }:
         target = activation
 
-    return DeclareConstraint(
+    raw_id = str(raw["id"]) if raw.get("id") is not None else None
+
+    constraint = DeclareConstraint(
         template=template,
         activation=activation,
         target=target,
@@ -211,9 +213,25 @@ def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> Dec
         label=(
             str(raw["label"])
             if raw.get("label") is not None
-            else (str(raw["id"]) if raw.get("id") is not None else None)
+            else raw_id
         ),
     )
+
+    # Attach additional metadata used by downstream exporters/UI.
+    constraint.id = raw_id or constraint.label
+    constraint.description = str(raw.get("description") or "")
+    constraint.rationale = str(raw.get("rationale") or "")
+    constraint.semantics = raw.get("semantics")
+    constraint.activation_condition_raw = activation_cond
+    constraint.target_condition_raw = correlation_cond
+    obs_window = raw.get("observation_window_hours")
+    if obs_window is not None:
+        try:
+            constraint.observation_window_hours = float(obs_window)
+        except (TypeError, ValueError):
+            constraint.observation_window_hours = obs_window
+
+    return constraint
 
 
 def load_model_from_yaml(path: str | Path) -> DeclareModel:

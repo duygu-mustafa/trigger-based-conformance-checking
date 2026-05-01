@@ -1,0 +1,84 @@
+:root {
+  --color-text-main: #0f1f2e;
+  /* deep navy-black, clinical and sharp */
+  --color-text-muted: #4a6278;
+  /* cool blue-gray muted text */
+  --color-bg-page: #eef2f7;
+  /* clean cool gray-blue page bg */
+  --color-bg-card: #ffffff;
+
+  /* Activities */
+  --color-vent: #d6246e;
+  /* slightly deeper pink-red, less garish */
+  --color-sbt: #1976d2;
+  /* deeper, more clinical blue */
+  --color-meas: #f0a500;
+  /* muted amber — readable without harshness */
+
+  /* Status Row Colors */
+  --color-success: #2e7d32;
+  /* deeper, more serious green */
+  --color-success-bg: #e8f5e9;
+  /* very light clinical green */
+  --color-success-bg-hover: #c8e6c9;
+
+  --color-violation: #c62828;
+  /* deep clinical red, not orange-toned */
+  --color-violation-bg: #fdecea;
+  --color-violation-bg-hover: #f9cdd0;
+  --color-error-text: #b71c1c;
+
+  --color-neutral: #546e7a;
+  /* blue-gray neutral */
+  --color-neutral-bg: #f0f4f8;
+  /* cool light surface */
+  --color-neutral-bg-hover: #dce6f0;
+
+  /* UI Elements */
+  --color-border: #b0bec5;
+  /* cool blue-gray border, more defined */
+  --color-border-light: #cfd8dc;
+  --color-accent: #0d3c6e;
+  /* deep navy — headers, badges, focus rings */
+  --color-satisfied-text: #1b5e20;
+  /* deep clinical green for satisfied labels */
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+
+  font-family:
+    "Inter",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f3f7fc 0%, #e9f0f9 100%);
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+  width: 100%;
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: var(--color-text-muted);
+}

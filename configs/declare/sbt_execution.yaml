@@ -65,9 +65,9 @@ model:
         > 24 h. Triggers direct extubation to preventative NIV.
       expression: "high_risk_flag == True AND ventilation_duration_hours > 24"
 
-    sbt_success_window:
-      description: "SBT duration falls within the valid 30-120 min success window."
-      expression: "sbt_duration_min >= 30 AND sbt_duration_min <= 120"
+    # sbt_success_window:
+    #   description: "SBT duration falls within the valid 30-120 min success window."
+    #   expression: "sbt_duration_min >= 30 AND sbt_duration_min <= 120"
 
   # ── Constraints ───────────────────────────────────────────────────────────
 
@@ -75,88 +75,72 @@ model:
 
     # ── Control-Flow ─────────────────────────────────────────────────────────
 
-    - id: SBT-CF-01
-      label: "SBT must eventually be completed or stopped"
-      template: RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      rationale: >
-        Every initiated SBT must produce an outcome record (itemid 224717).
-        Prevents unclosed SBT windows in the event log.
+    # - id: SBT-CF-01
+    #   label: "SBT must eventually be completed"
+    #   template: RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   rationale: >
+    #     Every initiated SBT must produce an outcome record (itemid sbt_outcome).
+    #     Prevents unclosed SBT windows in the event log.
 
-    - id: SBT-CF-02
-      label: "SBT completion must follow SBT start"
-      template: PRECEDENCE
-      activation: SBTStarted
-      target: SBTCompleted
-      rationale: >
-        Control-flow ordering: an SBT completion event cannot be recorded
-        without a preceding SBT initiation.
+    # - id: SBT-CF-02
+    #   label: "SBT completion must follow SBT start"
+    #   template: PRECEDENCE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   rationale: >
+    #     Control-flow ordering: an SBT completion event cannot be recorded
+    #     without a preceding SBT initiation.
 
-    - id: SBT-CF-03
-      label: "SBT stop must follow SBT start"
-      template: PRECEDENCE
-      activation: SBTStarted
-      target: SBTStopped
-      rationale: "An SBT can only be stopped after it has been started."
-
-    - id: SBT-CF-04
-      label: "SBT completion and SBT stop are mutually exclusive"
-      template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      target: SBTStopped
-      rationale: >
-        A trial cannot have both a completion outcome and a stop event within
-        the same SBT episode. Encodes clinical exclusivity of these outcomes.
-
-    - id: SBT-CF-05
-      label: "After SBT failure, ventilatory support must resume"
-      template: RESPONSE
-      activation: SBTFailed
-      target: VentilatorySupportResumed # CHECK activity definition
-      rationale: >
-        If the SBT fails, the patient must receive non-fatiguing ventilatory
-        support. Absence of this event after failure is a protocol deviation.
+    # - id: SBT-CF-05
+    #   label: "After SBT failure, ventilatory support must resume"
+    #   template: RESPONSE
+    #   activation: SBTFailed
+    #   target: VentilatorySupportResumed # CHECK activity definition
+    #   rationale: >
+    #     If the SBT fails, the patient must receive non-fatiguing ventilatory
+    #     support. Absence of this event after failure is a protocol deviation.
 
     # ── Data-Perspective (MP-Declare) ─────────────────────────────────────────
 
-    - id: SBT-DP-01
-      label: "SBT duration must be 30-120 min for a valid success"
-      template: MP_RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      target_condition: "sbt_success_window"
-      semantics: TARGET_VIOLATION
-      rationale: >
-        Tolerance of 30-120 min is required for SBT success per guideline.
-        Completions outside this window are flagged for review.
+    # - id: SBT-DP-01
+    #   label: "SBT duration must be 30-120 min for a valid success"
+    #   template: MP_RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   target_condition: "sbt_success_window"
+    #   semantics: TARGET_VIOLATION
+    #   rationale: >
+    #     Tolerance of 30-120 min is required for SBT success per guideline.
+    #     Completions outside this window are flagged for review.
 
     - id: SBT-DP-02
       label: "No SBT success when respiratory rate failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      activation_condition: "rr_failure AND items[224717] == 'Yes'"
+      activation_condition: "rr_failure AND items['sbt_outcome'] == 'Success'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         RR > 35 breaths/min during the trial is an SBT failure criterion.
-        A Yes completion value co-occurring with this violation is a
+        A Success outcome co-occurring with this violation is a
         documentation inconsistency.
 
     - id: SBT-DP-03
       label: "No SBT success when SpO2 failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      activation_condition: "spo2_failure AND items[224717] == 'Yes'"
+      activation_condition: "spo2_failure AND items['sbt_outcome'] == 'Success'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Persistent SpO2 < 92% (or < 88% in chronic lung disease) is a
-        failure criterion; a positive completion is contradictory.
+        failure criterion; a positive outcome is contradictory.
 
     - id: SBT-DP-04
       label: "No SBT success when haemodynamic failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      activation_condition: "hemodynamic_failure AND items[224717] == 'Yes'" # CHECK: paper says "with signs of hypoperfusion (appearance of cyanosis or mottling)"
+      activation_condition: "hemodynamic_failure AND items['sbt_outcome'] == 'Success'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         HR > 140 bpm or SBP > 180 mmHg during the trial contradicts
@@ -166,54 +150,53 @@ model:
       label: "No SBT success when mental status failure criterion met"
       template: NOT_CO_EXISTENCE
       activation: SBTCompleted
-      activation_condition: "mental_status_failure AND items[224717] == 'Yes'"
+      activation_condition: "mental_status_failure AND items['sbt_outcome'] == 'Success'"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
         during the trial is a failure criterion.
 
-    - id: SBT-DP-06
-      label: "PSV mode used when ventilation duration > 24 h"
-      template: MP_EXISTENCE
-      activation: SBTStarted
-      activation_condition: "psv_indicated"
-      activation_condition: "vent_mode == 'PSV'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
-        rather than T-piece.
+    # - id: SBT-DP-06
+    #   label: "PSV mode used when ventilation duration > 24 h"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "psv_indicated AND ('PSV' not in vent_mode)"
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
+    #     rather than T-piece.
 
-    - id: SBT-DP-07
-      label: "High-risk patients extubated to preventative NIV"
-      template: MP_RESPONSE
-      activation: SBTCompleted
-      activation_condition: "high_risk_extubation AND items[224717] == 'Yes'"
-      target: NIVInitiated
-      semantics: TARGET_VIOLATION
-      rationale: >
-        Patients at high risk of extubation failure who pass the SBT should
-        be extubated directly to preventative non-invasive ventilation (NIV).
+    # - id: SBT-DP-07
+    #   label: "High-risk patients extubated to preventative NIV"
+    #   template: MP_RESPONSE
+    #   activation: SBTCompleted
+    #   activation_condition: "high_risk_extubation AND items[224717] == 'Yes'"
+    #   target: NIVInitiated
+    #   semantics: TARGET_VIOLATION
+    #   rationale: >
+    #     Patients at high risk of extubation failure who pass the SBT should
+    #     be extubated directly to preventative non-invasive ventilation (NIV).
 
     # ── Temporal ──────────────────────────────────────────────────────────────
 
-    - id: SBT-TM-01
-      label: "SBT completion recorded within 3 h of SBT start"
-      template: TIMED_RESPONSE
-      activation: SBTStarted
-      target: SBTCompleted
-      max_gap_hours: 3
-      rationale: >
-        Maximum SBT duration is 120 min; completion should be charted within
-        3 h (allowing brief documentation delay). Longer gaps indicate
-        missing outcome records.
+    # - id: SBT-TM-01
+    #   label: "SBT completion recorded within 3 h of SBT start"
+    #   template: TIMED_RESPONSE
+    #   activation: SBTStarted
+    #   target: SBTCompleted
+    #   max_gap_hours: 3
+    #   rationale: >
+    #     Maximum SBT duration is 120 min; completion should be charted within
+    #     3 h (allowing brief documentation delay). Longer gaps indicate
+    #     missing outcome records.
 
-    - id: SBT-TM-02
-      label: "Failure criterion triggers SBT stop within 30 min"
-      template: TIMED_RESPONSE
-      activation: FailureCriterionMet
-      target: SBTStopped
-      max_gap_hours: 0.5
-      rationale: >
-        On detection of any SBT failure criterion, the trial must be stopped
-        promptly. A delay > 30 min after a failure criterion is a clinical
-        safety violation.
+    # - id: SBT-TM-02
+    #   label: "Failure criterion triggers SBT stop within 30 min"
+    #   template: TIMED_RESPONSE
+    #   activation: FailureCriterionMet
+    #   target: SBTStopped
+    #   max_gap_hours: 0.5
+    #   rationale: >
+    #     On detection of any SBT failure criterion, the trial must be stopped
+    #     promptly. A delay > 30 min after a failure criterion is a clinical
+    #     safety violation.

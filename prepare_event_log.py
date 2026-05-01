@@ -205,6 +205,12 @@ def main() -> None:
         help="Random seed for reproducible stay sampling.",
     )
     parser.add_argument(
+        "--pin-stay-id",
+        action="append",
+        default=["35616431", "30031915"],
+        help="Stay id to always include in the sampled set. Repeatable.",
+    )
+    parser.add_argument(
         "--memory-limit",
         type=str,
         default="4GB",
@@ -255,19 +261,38 @@ def main() -> None:
             INNER JOIN read_parquet('{sample_path}') s
                 ON r.stay_id = s.stay_id
             WHERE r.stay_id IS NOT NULL
+            ORDER BY r.stay_id
             """
         ).fetchall()
         candidate_stays = [int(row[0]) for row in rows]
+        candidate_stays.sort()
 
         if not candidate_stays:
             raise RuntimeError("No overlapping stay_ids found between input and sample-source")
 
-        k = min(args.sample_size, len(candidate_stays))
+        pinned_stays: list[int] = []
+        if args.pin_stay_id:
+            candidate_set = set(candidate_stays)
+            missing = []
+            for raw_stay_id in args.pin_stay_id:
+                stay_id = int(raw_stay_id)
+                if stay_id not in candidate_set:
+                    missing.append(stay_id)
+                elif stay_id not in pinned_stays:
+                    pinned_stays.append(stay_id)
+            if missing:
+                missing_text = ", ".join(str(stay_id) for stay_id in missing)
+                raise ValueError(
+                    f"Pinned stay_id(s) not found in overlap candidates: {missing_text}"
+                )
+
+        remaining_candidates = [stay_id for stay_id in candidate_stays if stay_id not in pinned_stays]
+        k = min(args.sample_size, len(remaining_candidates))
         rng = random.Random(args.sample_seed)
-        stay_ids = rng.sample(candidate_stays, k)
+        stay_ids = pinned_stays + rng.sample(remaining_candidates, k)
 
         print(
-            f"Selected {len(stay_ids)} random stays "
+            f"Selected {len(stay_ids)} stays "
             f"(from {len(candidate_stays)} overlap candidates)"
         )
 
@@ -285,6 +310,7 @@ def main() -> None:
             raise RuntimeError("No event-log rows were generated from input")
 
         _export_event_log(output_con, args.output)
+        _export_event_log(output_con, Path("data/icu_event_log_sbt_test.csv"))
         print(f"Saved event log: {args.output}")
     finally:
         source_con.close()

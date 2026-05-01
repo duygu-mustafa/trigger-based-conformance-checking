@@ -85,7 +85,11 @@ def _coerce_value(value_num: object, value_raw: object) -> object:
         return txt
 
 
-def _build_items_snapshot(trace_df: pd.DataFrame, ts: pd.Timestamp) -> dict[int, object]:
+def _build_items_snapshot(
+    trace_df: pd.DataFrame,
+    ts: pd.Timestamp,
+    observation_window_hours: float | None = None,
+) -> dict[int, object]:
     """Build a snapshot of medical items (key-value mapping) up to a given timestamp.
 
     Extracts the latest value for each unique item ID observed up to the specified time.
@@ -99,8 +103,11 @@ def _build_items_snapshot(trace_df: pd.DataFrame, ts: pd.Timestamp) -> dict[int,
         Dictionary mapping item IDs (int) to their latest values as of timestamp ts.
         Empty dict if no items found or itemid column missing.
     """
-    # Filter events up to the specified timestamp
+    # Filter events up to the specified timestamp.
     upto = trace_df[trace_df["timestamp"] <= ts]
+    if observation_window_hours is not None and observation_window_hours > 0:
+        lower_bound = ts - pd.Timedelta(hours=float(observation_window_hours))
+        upto = upto[upto["timestamp"] >= lower_bound]
     if upto.empty or "itemid" not in upto.columns:
         return {}
 
@@ -116,11 +123,20 @@ def _build_items_snapshot(trace_df: pd.DataFrame, ts: pd.Timestamp) -> dict[int,
     # Build dictionary with coerced values
     out: dict[int, object] = {}
     for _, row in latest.iterrows():
+        itemid_raw = row["itemid"]
+        value = _coerce_value(row.get("value_num"), row.get("value_raw"))
+
+        # Preserve the original key so string-based item IDs like
+        # 'pao2fio2ratio' remain addressable in data conditions.
+        out[itemid_raw] = value
+
+        # Also expose a numeric alias when the item ID is numeric or a
+        # digit-only string so existing rules using integer references still work.
         try:
-            itemid = int(row["itemid"])
+            numeric_itemid = int(itemid_raw)
         except (TypeError, ValueError):
             continue
-        out[itemid] = _coerce_value(row.get("value_num"), row.get("value_raw"))
+        out[numeric_itemid] = value
     return out
 
 
@@ -175,6 +191,7 @@ def _build_eval_context(
     trace_df: pd.DataFrame,
     eval_ts: pd.Timestamp,
     activation_ts: pd.Timestamp | None = None,
+    observation_window_hours: float | None = None,
 ) -> dict[str, object]:
     """Build a comprehensive evaluation context for data condition checking.
 
@@ -199,11 +216,15 @@ def _build_eval_context(
             - sbt_duration_min: Float minutes of current SBT duration
     """
     # Get snapshot of medical items (measurements) at evaluation time
-    items = _build_items_snapshot(trace_df, eval_ts)
+    items = _build_items_snapshot(
+        trace_df,
+        eval_ts,
+        observation_window_hours=observation_window_hours,
+    )
 
-    # Find key clinical milestones
-    intubation_ts = _first_ts(trace_df, "Intubation", eval_ts)
-    invasive_vent_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
+    # Find key clinical milestones (using derived start instead of intubation item)
+    intubation_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
+    invasive_vent_ts = intubation_ts
 
     # Calculate time elapsed since clinical events
     hours_since_intubation = (
@@ -215,8 +236,8 @@ def _build_eval_context(
         else 0.0
     )
 
-    # Item 225792 contains documented ventilation duration; use if it's larger
-    documented_vent_minutes = items.get(225792)
+    # Use derived ventilation duration if available as a virtual item
+    documented_vent_minutes = items.get('derived_invasive_ventilation_start')
     if isinstance(documented_vent_minutes, (float, int)) and not math.isnan(float(documented_vent_minutes)):
         ventilation_duration_hours = max(ventilation_duration_hours, float(documented_vent_minutes) / 60.0)
 
@@ -229,7 +250,7 @@ def _build_eval_context(
             or (prior["activity"] == "SBTStopped").any()
             or (
                 (prior["activity"] == "SBTCompleted")
-                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("no")
+                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("failure")
             ).any()
         )
 
@@ -277,7 +298,8 @@ def _to_python_expression(expression: str) -> str:
     expr = re.sub(r"\bTRUE\b", " True ", expr, flags=re.IGNORECASE)
     expr = re.sub(r"\bFALSE\b", " False ", expr, flags=re.IGNORECASE)
     # Convert item access from Declare syntax to function call
-    expr = re.sub(r"items\[(\d+)\]", r"__item(\1)", expr)
+    # Supports both numeric items[220210] and string items['sbt_outcome']
+    expr = re.sub(r"items\[['\"]?(\w+)['\"]?\]", r"__item('\1')", expr)
     return expr
 
 
@@ -286,7 +308,25 @@ def _evaluate_data_condition(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
-) -> tuple[bool, str | None]:
+    observation_window_hours: float | None = None,
+) -> tuple[bool, str | None, dict[str, float]]:
+    value, _, error, values = _evaluate_data_condition_status(
+        trace_df,
+        row,
+        expression,
+        activation_ts=activation_ts,
+        observation_window_hours=observation_window_hours,
+    )
+    return value, error, values
+
+
+def _evaluate_data_condition_status(
+    trace_df: pd.DataFrame,
+    row: pd.Series,
+    expression: str,
+    activation_ts: pd.Timestamp | None = None,
+    observation_window_hours: float | None = None,
+) -> tuple[bool, bool, str | None, dict[str, float]]:
     """Evaluate a data condition expression against event log state at a point in time.
 
     Parses and executes a Declare data condition (e.g., "items[225792] > 10") in the
@@ -300,22 +340,55 @@ def _evaluate_data_condition(
         activation_ts: Optional explicit timestamp for SBT activation tracking.
 
     Returns:
-        Tuple of (evaluation_result, error_message):
+        Tuple of (evaluation_result, is_vacuous, error_message, values):
             - evaluation_result: True/False if condition evaluates to boolean
+            - is_vacuous: True when the condition cannot be evaluated because
+              required items are missing from the observation window
             - error_message: String describing any evaluation error, or None if successful
+            - values: Dictionary mapping item IDs or variable names to their extracted values
     """
     # Empty expressions always evaluate to true
     if not expression.strip():
-        return True, None
+        return True, False, None, {}
 
     # Build context with all clinical variables at evaluation time
     eval_ts = row["timestamp"]
-    ctx = _build_eval_context(trace_df, eval_ts=eval_ts, activation_ts=activation_ts)
+    ctx = _build_eval_context(
+        trace_df,
+        eval_ts=eval_ts,
+        activation_ts=activation_ts,
+        observation_window_hours=observation_window_hours,
+    )
     items = ctx["items"]
+    
+    # Track values used in the expression for delta analysis
+    extracted_values = {}
+
+    # If a bounded observation window is requested, only treat the condition as
+    # vacuous when every referenced item is missing from the observation window.
+    # Partial data should still be allowed to satisfy OR-based rules.
+    if observation_window_hours is not None:
+        refs = re.findall(r"items\[['\"]?(\w+)['\"]?\]", expression)
+        if refs:
+            all_missing = True
+            for ref in refs:
+                if ref.isdigit():
+                    if int(ref) not in items:
+                        continue
+                elif ref not in items:
+                    continue
+                all_missing = False
+                break
+            if all_missing:
+                return False, True, None, {}
 
     # Helper function to safely retrieve item values
-    def __item(itemid: int) -> object:
-        return items.get(int(itemid), math.nan)
+    def __item(itemid: str | int) -> object:
+        # Support both numeric and string keys
+        key = int(itemid) if isinstance(itemid, str) and itemid.isdigit() else itemid
+        val = items.get(key, math.nan)
+        extracted_values[str(key)] = val
+        return val
 
     # Set up local namespace with all available variables for eval()
     local_scope = {
@@ -330,24 +403,29 @@ def _evaluate_data_condition(
         "True": True,
         "False": False,
     }
+    
+    # Also add non-item variables to extracted values
+    for k in ["hours_since_intubation", "ventilation_duration_hours", "sbt_duration_min"]:
+        extracted_values[k] = local_scope[k]
 
     # Convert to Python syntax and evaluate
     py_expr = _to_python_expression(expression)
     try:
         value = eval(py_expr, {"__builtins__": {}}, local_scope)
     except Exception as exc:
-        return False, f"Condition evaluation failed: {exc}"
+        return False, False, f"Condition evaluation failed: {exc}", extracted_values
 
     # Ensure boolean result
     if isinstance(value, bool):
-        return value, None
-    return bool(value), None
+        return value, False, None, extracted_values
+    return bool(value), False, None, extracted_values
 
 
 def _filter_activation_rows(
     trace_df: pd.DataFrame,
     activation_rows: pd.DataFrame,
     constraint: DeclareConstraint,
+    observation_window_hours: float | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Filter activation rows based on activation condition expression.
 
@@ -375,7 +453,12 @@ def _filter_activation_rows(
     eval_error: str | None = None
 
     for idx, row in activation_rows.iterrows():
-        ok, err = _evaluate_data_condition(trace_df, row, expr)
+        ok, err, _ = _evaluate_data_condition(
+            trace_df,
+            row,
+            expr,
+            observation_window_hours=observation_window_hours,
+        )
         if err is not None and eval_error is None:
             eval_error = err
         if ok:
@@ -409,7 +492,28 @@ def _evaluate_constraint_impl(
         ConstraintResult object with outcome, counts, and violation details.
     """
     # Create constraint identifier for tracking results
-    cid = constraint.label or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+    cid = (
+        getattr(constraint, "id", None)
+        or constraint.label
+        or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+    )
+
+    def _observation_window_hours() -> float | None:
+        raw = getattr(constraint, "observation_window_hours", None)
+        if raw is not None:
+            try:
+                val = float(raw)
+                if val > 0:
+                    return val
+            except (TypeError, ValueError):
+                pass
+
+        # Backward-compatible fallback for readiness data rules.
+        if isinstance(cid, str) and cid.startswith("RC-DP-"):
+            return 24.0
+        return None
+
+    observation_window_hours = _observation_window_hours()
 
     def _rows_for(activity: str | None) -> pd.DataFrame:
         if activity is None:
@@ -420,7 +524,12 @@ def _evaluate_constraint_impl(
         rows = _rows_for(constraint.activation)
         if rows.empty:
             return rows, None
-        return _filter_activation_rows(trace_df, rows, constraint)
+        return _filter_activation_rows(
+            trace_df,
+            rows,
+            constraint,
+            observation_window_hours=observation_window_hours,
+        )
 
     def _target_matches(
         target_row: pd.Series,
@@ -430,12 +539,12 @@ def _evaluate_constraint_impl(
         require_before: bool,
         require_adjacent: bool,
         directional_time: bool,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, float | None, dict[str, float]]:
         target_ts = target_row["timestamp"]
         if require_after and not (target_ts > activation_ts):
-            return False, None
+            return False, None, None, {}
         if require_before and not (target_ts < activation_ts):
-            return False, None
+            return False, None, None, {}
 
         if require_adjacent:
             # Adjacency is guaranteed by caller selecting the direct predecessor/successor.
@@ -444,21 +553,21 @@ def _evaluate_constraint_impl(
         delta_seconds = float((target_ts - activation_ts).total_seconds())
         time_delta = delta_seconds if directional_time else abs(delta_seconds)
         if not _within_time_window(time_delta, constraint):
-            return False, None
+            return False, None, time_delta, {}
 
         if constraint.correlation_cond is not None:
-            corr_ok, corr_err = _evaluate_data_condition(
+            corr_ok, corr_err, corr_values = _evaluate_data_condition(
                 trace_df,
                 target_row,
                 constraint.correlation_cond.expression,
                 activation_ts=activation_ts,
             )
             if corr_err is not None:
-                return False, corr_err
+                return False, corr_err, time_delta, corr_values
             if not corr_ok:
-                return False, None
+                return False, None, time_delta, corr_values
 
-        return True, None
+        return True, None, time_delta, {}
 
     # ============ EXISTENCE / ABSENCE / EXACTLY / INIT (unary) ============
     if constraint.template == DeclareTemplate.EXISTENCE:
@@ -470,15 +579,47 @@ def _evaluate_constraint_impl(
             expr = constraint.activation_cond.expression
             violated = 0
             first_eval_error = None
+            saw_vacuous = False
+            evaluable_rows = 0
+            violation_deltas = {}
+            satisfaction_deltas = {}
 
             for _, row in act_rows.iterrows():
-                cond_true, eval_err = _evaluate_data_condition(trace_df, row, expr)
+                cond_true, is_vacuous, eval_err, vals = _evaluate_data_condition_status(
+                    trace_df,
+                    row,
+                    expr,
+                    observation_window_hours=observation_window_hours,
+                )
                 if eval_err is not None and first_eval_error is None:
                     first_eval_error = eval_err
+                if is_vacuous:
+                    saw_vacuous = True
+                    continue
+                evaluable_rows += 1
                 if cond_true:
                     violated += 1
+                    violation_deltas = vals
+                else:
+                    # Capture satisfying values for distribution analysis
+                    satisfaction_deltas = vals
 
-            ok = violated == 0
+            if violated > 0:
+                ok = False
+            elif evaluable_rows == 0 and saw_vacuous:
+                return ConstraintResult(
+                    case_id=case_id,
+                    constraint_id=cid,
+                    outcome=ConformanceOutcome.VACUOUS,
+                    num_activations=int(len(act_rows)),
+                    num_fulfilled=0,
+                    num_violated=0,
+                    activation_ts=str(act_rows.iloc[0]["timestamp"]),
+                    violation_reason=first_eval_error or "No data in observation window",
+                )
+            else:
+                ok = True
+
             return ConstraintResult(
                 case_id=case_id,
                 constraint_id=cid,
@@ -487,6 +628,8 @@ def _evaluate_constraint_impl(
                 num_fulfilled=int(len(act_rows) - violated),
                 num_violated=int(violated),
                 activation_ts=str(act_rows.iloc[0]["timestamp"]),
+                violation_deltas=violation_deltas if not ok else {},
+                satisfaction_deltas=satisfaction_deltas if ok else {},
                 violation_reason=(
                     None if ok else "Activation condition evaluated to true for one or more events"
                 )
@@ -546,11 +689,13 @@ def _evaluate_constraint_impl(
         first_row = trace_df.sort_values("timestamp").iloc[0]
         ok = bool(first_row["activity"] == constraint.activation)
         eval_error = None
+        violation_deltas = {}
         if ok and constraint.activation_cond is not None:
-            ok, eval_error = _evaluate_data_condition(
+            ok, eval_error, violation_deltas = _evaluate_data_condition(
                 trace_df,
                 first_row,
                 constraint.activation_cond.expression,
+                observation_window_hours=observation_window_hours,
             )
 
         return ConstraintResult(
@@ -561,6 +706,8 @@ def _evaluate_constraint_impl(
             num_fulfilled=1 if ok else 0,
             num_violated=0 if ok else 1,
             activation_ts=str(first_row["timestamp"]),
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=violation_deltas if ok else {},
             violation_reason=(None if ok else "First event does not satisfy INIT")
             if eval_error is None
             else eval_error,
@@ -586,6 +733,8 @@ def _evaluate_constraint_impl(
         first_violation_ts = None
         first_match_target_ts = None
         first_corr_error = None
+        violation_deltas = {}
+        delay_seconds = None
 
         for i, (_, act_row) in enumerate(act_rows.iterrows()):
             act_ts = act_row["timestamp"]
@@ -607,8 +756,10 @@ def _evaluate_constraint_impl(
                     candidates = candidates[candidates["timestamp"] < next_act_ts]
 
             matched = False
+            best_effort_forensics = None
+            
             for _, target_row in candidates.iterrows():
-                ok_match, corr_error = _target_matches(
+                ok_match, corr_error, delta, vals = _target_matches(
                     target_row,
                     act_ts,
                     require_after=True,
@@ -617,10 +768,17 @@ def _evaluate_constraint_impl(
                     in {DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.NOT_CHAIN_RESPONSE},
                     directional_time=True,
                 )
+                
+                # Keep track of the first target we see for forensics if we never find a valid match
+                if best_effort_forensics is None:
+                    best_effort_forensics = (delta, vals)
+                    
                 if corr_error is not None and first_corr_error is None:
                     first_corr_error = corr_error
                 if ok_match:
                     matched = True
+                    if delay_seconds is None:
+                        delay_seconds = delta
                     if first_match_target_ts is None:
                         first_match_target_ts = str(target_row["timestamp"])
                     break
@@ -633,10 +791,25 @@ def _evaluate_constraint_impl(
 
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                # Capture satisfaction forensics
+                if best_effort_forensics:
+                    _, satisfaction_deltas = best_effort_forensics
+                elif matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
                     first_violation_ts = str(act_ts)
+                    if not matched and not is_negative:
+                        if best_effort_forensics:
+                            delay_seconds, violation_deltas = best_effort_forensics
+                        else:
+                            _, _, _, violation_deltas = _evaluate_data_condition_status(
+                                trace_df, act_row, "True"
+                            )
+                    elif matched and is_negative:
+                        violation_deltas = vals
+                        delay_seconds = delta
 
         ok = violated == 0
         return ConstraintResult(
@@ -648,6 +821,9 @@ def _evaluate_constraint_impl(
             num_violated=int(violated),
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else first_violation_ts,
             target_ts=first_match_target_ts,
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
+            delay_seconds=delay_seconds,
             violation_reason=(
                 None
                 if ok
@@ -682,12 +858,14 @@ def _evaluate_constraint_impl(
         first_match_target_ts = None
         first_corr_error = None
         is_negative = constraint.template == DeclareTemplate.NOT_RESPONDED_EXISTENCE
+        violation_deltas = {}
+        satisfaction_deltas = {}
 
         for _, act_row in act_rows.iterrows():
             act_ts = act_row["timestamp"]
             matched = False
             for _, target_row in target_rows.iterrows():
-                ok_match, corr_error = _target_matches(
+                ok_match, corr_error, delta, vals = _target_matches(
                     target_row,
                     act_ts,
                     require_after=False,
@@ -705,10 +883,14 @@ def _evaluate_constraint_impl(
 
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                if matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
                     first_violation_ts = str(act_ts)
+                    if matched and is_negative:
+                        violation_deltas = vals
 
         ok = violated == 0
         return ConstraintResult(
@@ -720,6 +902,8 @@ def _evaluate_constraint_impl(
             num_violated=int(violated),
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else first_violation_ts,
             target_ts=first_match_target_ts,
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
             violation_reason=(
                 None
                 if ok
@@ -759,6 +943,8 @@ def _evaluate_constraint_impl(
         first_violation_ts = None
         first_match_activation_ts = None
         first_corr_error = None
+        violation_deltas = {}
+        delay_seconds = None
 
         for _, target_row in target_rows.iterrows():
             target_ts = target_row["timestamp"]
@@ -779,7 +965,7 @@ def _evaluate_constraint_impl(
 
             matched = False
             for _, act_row in candidates.iterrows():
-                ok_match, corr_error = _target_matches(
+                ok_match, corr_error, delta, vals = _target_matches(
                     target_row,
                     act_row["timestamp"],
                     require_after=True,
@@ -802,10 +988,19 @@ def _evaluate_constraint_impl(
             }
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                if matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
                     first_violation_ts = str(target_ts)
+                    if not matched and not is_negative:
+                        _, _, _, violation_deltas = _evaluate_data_condition_status(
+                            trace_df, target_row, "True"
+                        )
+                    elif matched and is_negative:
+                        violation_deltas = vals
+                        delay_seconds = delta
 
         ok = violated == 0
         return ConstraintResult(
@@ -817,6 +1012,9 @@ def _evaluate_constraint_impl(
             num_violated=int(violated),
             activation_ts=first_match_activation_ts,
             target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else first_violation_ts,
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
+            delay_seconds=delay_seconds,
             violation_reason=(
                 None
                 if ok
@@ -841,10 +1039,11 @@ def _evaluate_constraint_impl(
         target_rows = _rows_for(constraint.target)
 
         first_corr_error = None
+        violation_deltas = {}
         if constraint.correlation_cond is not None and not target_rows.empty:
             keep_target_idx: list[int] = []
             for idx, row in target_rows.iterrows():
-                ok_corr, corr_err = _evaluate_data_condition(
+                ok_corr, corr_err, corr_vals = _evaluate_data_condition(
                     trace_df,
                     row,
                     constraint.correlation_cond.expression,
@@ -853,6 +1052,7 @@ def _evaluate_constraint_impl(
                     first_corr_error = corr_err
                 if ok_corr:
                     keep_target_idx.append(idx)
+                    violation_deltas = corr_vals # Last matched
             target_rows = target_rows.loc[keep_target_idx] if keep_target_idx else target_rows.iloc[0:0]
 
         if constraint.template == DeclareTemplate.CO_EXISTENCE:
@@ -882,6 +1082,7 @@ def _evaluate_constraint_impl(
             num_violated=int(len(act_rows)) if violated else 0,
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else None,
             target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else None,
+            violation_deltas=violation_deltas if violated else {},
             violation_reason=("Both activities co-exist in trace" if violated else None)
             if activation_eval_error is None and first_corr_error is None
             else (activation_eval_error or first_corr_error),
@@ -952,6 +1153,12 @@ def _evaluate_constraint_impl(
             num_violated=response_result.num_violated + precedence_result.num_violated,
             activation_ts=response_result.activation_ts or precedence_result.activation_ts,
             target_ts=response_result.target_ts or precedence_result.target_ts,
+            violation_deltas=(
+                response_result.violation_deltas or precedence_result.violation_deltas
+            ) if outcome == ConformanceOutcome.VIOLATED else {},
+            delay_seconds=(
+                response_result.delay_seconds or precedence_result.delay_seconds
+            ) if outcome == ConformanceOutcome.VIOLATED else None,
             violation_reason=(
                 None
                 if outcome != ConformanceOutcome.VIOLATED
@@ -1207,7 +1414,11 @@ def evaluate_constraint(
     """Dispatch constraint evaluation to a template-specific evaluator function."""
     evaluator = _TEMPLATE_EVALUATORS.get(constraint.template)
     if evaluator is None:
-        cid = constraint.label or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+        cid = (
+            getattr(constraint, "id", None)
+            or constraint.label
+            or f"{constraint.template.value}:{constraint.activation}:{constraint.target}"
+        )
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
