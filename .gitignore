@@ -21,5 +21,6 @@ pycache__/
 __pycache__/
 
 *.ipynb
+*.log
 
 node_modules/
