@@ -777,6 +777,8 @@ def _evaluate_constraint_impl(
                     first_corr_error = corr_error
                 if ok_match:
                     matched = True
+                    if delay_seconds is None:
+                        delay_seconds = delta
                     if first_match_target_ts is None:
                         first_match_target_ts = str(target_row["timestamp"])
                     break
@@ -821,7 +823,7 @@ def _evaluate_constraint_impl(
             target_ts=first_match_target_ts,
             violation_deltas=violation_deltas if not ok else {},
             satisfaction_deltas=satisfaction_deltas if ok else {},
-            delay_seconds=delay_seconds if not ok else None,
+            delay_seconds=delay_seconds,
             violation_reason=(
                 None
                 if ok
@@ -1012,7 +1014,7 @@ def _evaluate_constraint_impl(
             target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else first_violation_ts,
             violation_deltas=violation_deltas if not ok else {},
             satisfaction_deltas=satisfaction_deltas if ok else {},
-            delay_seconds=delay_seconds if not ok else None,
+            delay_seconds=delay_seconds,
             violation_reason=(
                 None
                 if ok

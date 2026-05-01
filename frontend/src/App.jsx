@@ -4,7 +4,7 @@ import Timeline from './components/Timeline'
 import SummaryView from './components/SummaryView'
 
 function App() {
-  const [activeView, setActiveView] = useState('timeline')
+  const [activeView, setActiveView] = useState('summary')
   const [caseIds, setCaseIds] = useState([])
   const [caseId, setCaseId] = useState('')
   const [caseData, setCaseData] = useState(null)
@@ -90,17 +90,17 @@ function App() {
           <div className="view-toggle" role="tablist" aria-label="Dashboard views">
             <button
               type="button"
-              className={activeView === 'timeline' ? 'view-tab active' : 'view-tab'}
-              onClick={() => setActiveView('timeline')}
-            >
-              Patient Timeline
-            </button>
-            <button
-              type="button"
               className={activeView === 'summary' ? 'view-tab active' : 'view-tab'}
               onClick={() => setActiveView('summary')}
             >
               Global Summary
+            </button>
+            <button
+              type="button"
+              className={activeView === 'timeline' ? 'view-tab active' : 'view-tab'}
+              onClick={() => setActiveView('timeline')}
+            >
+              Patient Timeline
             </button>
           </div>
         </div>

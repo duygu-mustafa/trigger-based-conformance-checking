@@ -133,11 +133,15 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
             # Collect forensics
             v_forensics = ep.get("violation_forensics") or {}
             for cid, data in v_forensics.items():
-                violation_forensics_agg[cid].append(data)
+                d_copy = dict(data)
+                d_copy["outcome"] = ep.get("sbt_outcome")
+                violation_forensics_agg[cid].append(d_copy)
 
             s_forensics = ep.get("satisfaction_forensics") or {}
             for cid, data in s_forensics.items():
-                satisfaction_forensics_agg[cid].append(data)
+                d_copy = dict(data)
+                d_copy["outcome"] = ep.get("sbt_outcome")
+                satisfaction_forensics_agg[cid].append(d_copy)
 
     total_stays = len(stay_to_episodes)
     total_episodes = len(all_episodes)
@@ -201,14 +205,30 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
         
         # Collect forensics statistics
         def summarize_agg(aggregated):
-            delays = [f.get("delay_seconds") for f in aggregated if f.get("delay_seconds") is not None]
+            delays = []
+            delay_outcomes = []
             delta_distributions = defaultdict(list)
+            delta_outcomes = defaultdict(list)
+            
             for f in aggregated:
+                d_sec = f.get("delay_seconds")
+                outcome = f.get("outcome")
+                if d_sec is not None:
+                    delays.append(float(d_sec))
+                    delay_outcomes.append(outcome)
+                
                 d = f.get("deltas") or {}
                 for k, v in d.items():
                     if isinstance(v, (int, float)):
                         delta_distributions[k].append(float(v))
-            return {"delays": delays, "delta_distributions": dict(delta_distributions)}
+                        delta_outcomes[k].append(outcome)
+            
+            return {
+                "delays": delays, 
+                "delay_outcomes": delay_outcomes,
+                "delta_distributions": dict(delta_distributions),
+                "delta_outcomes": dict(delta_outcomes)
+            }
 
         forensics_v = summarize_agg(violation_forensics_agg[cid])
         forensics_s = summarize_agg(satisfaction_forensics_agg[cid])

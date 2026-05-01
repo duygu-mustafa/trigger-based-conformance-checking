@@ -312,8 +312,44 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
   const delaysV = forensicsV.delays || [];
   const delaysS = forensicsS.delays || [];
   
+  const outcomesV = forensicsV.delay_outcomes || [];
+  const outcomesS = forensicsS.delay_outcomes || [];
+  
   const deltasV = forensicsV.delta_distributions || {};
   const deltasS = forensicsS.delta_distributions || {};
+  
+  const allDelaysHours = useMemo(() => [...delaysV, ...delaysS].map(d => d / 3600), [delaysV, delaysS]);
+  
+  const isTimingConstraint = constraint.constraint_id === 'RC-TM-03';
+  
+  const timingStats = useMemo(() => {
+    if (!isTimingConstraint || (delaysV.length === 0 && delaysS.length === 0)) return null;
+    
+    const combinedData = [];
+    delaysV.forEach((d, i) => combinedData.push({ h: d / 3600, outcome: outcomesV[i] }));
+    delaysS.forEach((d, i) => combinedData.push({ h: d / 3600, outcome: outcomesS[i] }));
+
+    const getStats = (subset, totalCount) => {
+      if (subset.length === 0) return { count: 0, pct: 0, successPct: 0 };
+      const successCount = subset.filter(p => p.outcome?.toLowerCase().includes('success')).length;
+      return {
+        count: subset.length,
+        pct: (subset.length / totalCount) * 100,
+        successPct: (successCount / subset.length) * 100
+      };
+    };
+
+    const tooEarly = combinedData.filter(p => p.h < 48);
+    const tooLate = combinedData.filter(p => p.h > 72);
+    const onTime = combinedData.filter(p => p.h >= 48 && p.h <= 72);
+    const total = combinedData.length;
+    
+    return {
+      tooEarly: getStats(tooEarly, total),
+      tooLate: getStats(tooLate, total),
+      onTime: getStats(onTime, total)
+    };
+  }, [isTimingConstraint, delaysV, outcomesV, delaysS, outcomesS]);
 
   // Find all unique keys across V and S deltas
   const allDeltaKeys = Array.from(new Set([...Object.keys(deltasV), ...Object.keys(deltasS)]));
@@ -372,13 +408,47 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
 
       <div className="forensics-charts">
         <Histogram 
-          data={[...delaysV, ...delaysS].map(d => d / 3600)} 
+          data={allDelaysHours} 
           title="Timing Distribution (All Episodes)" 
           unit="h" 
           color="#64748b"
           expectedMin={constraint.min_gap_hours}
           expectedMax={constraint.max_gap_hours}
         />
+
+        {timingStats && (
+          <div className="timing-breakdown-card">
+            <label>Clinical Timing Breakdown</label>
+            <div className="breakdown-summary">
+              Total Evaluated Episodes: <strong>{timingStats.tooEarly.count + timingStats.onTime.count + timingStats.tooLate.count}</strong>
+            </div>
+            <div className="breakdown-bar">
+              <div className="segment early" style={{ width: `${timingStats.tooEarly.pct}%` }} title={`Too Early: ${timingStats.tooEarly.count} episodes`}>
+                {timingStats.tooEarly.pct > 5 && <span>{timingStats.tooEarly.pct.toFixed(0)}%</span>}
+              </div>
+              <div className="segment on-time" style={{ width: `${timingStats.onTime.pct}%` }} title={`On Time: ${timingStats.onTime.count} episodes`}>
+                {timingStats.onTime.pct > 5 && <span>{timingStats.onTime.pct.toFixed(0)}%</span>}
+              </div>
+              <div className="segment late" style={{ width: `${timingStats.tooLate.pct}%` }} title={`Too Late: ${timingStats.tooLate.count} episodes`}>
+                {timingStats.tooLate.pct > 5 && <span>{timingStats.tooLate.pct.toFixed(0)}%</span>}
+              </div>
+            </div>
+            <div className="breakdown-legend">
+              <div className="legend-item">
+                <span className="dot early"></span> Too Early (&lt;48h): <strong>{timingStats.tooEarly.count}</strong> ({timingStats.tooEarly.pct.toFixed(1)}%)
+                <span className="outcome-link">{timingStats.tooEarly.successPct.toFixed(0)}% success</span>
+              </div>
+              <div className="legend-item">
+                <span className="dot on-time"></span> On Time (48-72h): <strong>{timingStats.onTime.count}</strong> ({timingStats.onTime.pct.toFixed(1)}%)
+                <span className="outcome-link">{timingStats.onTime.successPct.toFixed(0)}% success</span>
+              </div>
+              <div className="legend-item">
+                <span className="dot late"></span> Too Late (&gt;72h): <strong>{timingStats.tooLate.count}</strong> ({timingStats.tooLate.pct.toFixed(1)}%)
+                <span className="outcome-link">{timingStats.tooLate.successPct.toFixed(0)}% success</span>
+              </div>
+            </div>
+          </div>
+        )}
         
         {allDeltaKeys
           .filter(key => !['ventilation_duration_hours', 'hours_since_intubation', 'sbt_duration_min'].includes(key))
