@@ -131,21 +131,20 @@ def _evaluate_rc_tm_02_outcome(
     df_full: pd.DataFrame,
     current_sbt_start: pd.Timestamp | None,
     min_gap_hours: float = 24.0,
-) -> ConformanceOutcome:
+) -> tuple[ConformanceOutcome, float | None]:
     if current_sbt_start is None:
-        return ConformanceOutcome.VACUOUS
+        return ConformanceOutcome.VACUOUS, None
 
     prior_failed_start = _find_latest_failed_sbt_start_before(df_full, current_sbt_start)
     if prior_failed_start is None:
         # Activation condition is false: no prior failed SBT before this start.
-        return ConformanceOutcome.VACUOUS
+        return ConformanceOutcome.VACUOUS, None
 
     gap_hours = float((current_sbt_start - prior_failed_start).total_seconds()) / 3600.0
-    return (
-        ConformanceOutcome.SATISFIED
-        if gap_hours >= min_gap_hours
-        else ConformanceOutcome.VIOLATED
-    )
+    outcome = ConformanceOutcome.SATISFIED if gap_hours >= min_gap_hours else ConformanceOutcome.VIOLATED
+    
+    # Return both outcome and the delay forensic
+    return outcome, gap_hours
 
 
 def _evaluate_composite_for_attempt(
@@ -241,6 +240,8 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
             "activation_condition": getattr(c, "activation_condition_raw", None),
             "target_condition": getattr(c, "target_condition_raw", None),
             "observation_window_hours": getattr(c, "observation_window_hours", None),
+            "min_gap_hours": (c.time_condition.min_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.min_seconds is not None) else None,
+            "max_gap_hours": (c.time_condition.max_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.max_seconds is not None) else None,
         }
 
     # 3. Process each stay
@@ -271,26 +272,27 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         # Get conformance results for this stay
         stay_conformance_df = results_df[results_df["stay_id"] == stay_id].copy()
         
-        # Parse violation_forensics JSON string back to dict if present
-        if "violation_forensics" in stay_conformance_df.columns:
-            def _parse_forensics(x):
-                if not isinstance(x, str):
-                    return {}
-                try:
-                    data = json.loads(x)
-                    # Recursively replace NaN with None in forensics dict
-                    def _clean(obj):
-                        if isinstance(obj, dict):
-                            return {k: _clean(v) for k, v in obj.items()}
-                        elif isinstance(obj, list):
-                            return [_clean(i) for i in obj]
-                        elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-                            return None
-                        return obj
-                    return _clean(data)
-                except:
-                    return {}
-            stay_conformance_df["violation_forensics"] = stay_conformance_df["violation_forensics"].apply(_parse_forensics)
+        # Parse violation_forensics and satisfaction_forensics JSON strings back to dict if present
+        for col in ["violation_forensics", "satisfaction_forensics"]:
+            if col in stay_conformance_df.columns:
+                def _parse_forensics(x):
+                    if not isinstance(x, str):
+                        return {}
+                    try:
+                        data = json.loads(x)
+                        # Recursively replace NaN with None in forensics dict
+                        def _clean(obj):
+                            if isinstance(obj, dict):
+                                return {k: _clean(v) for k, v in obj.items()}
+                            elif isinstance(obj, list):
+                                return [_clean(i) for i in obj]
+                            elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+                                return None
+                            return obj
+                        return _clean(data)
+                    except:
+                        return {}
+                stay_conformance_df[col] = stay_conformance_df[col].apply(_parse_forensics)
 
         stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
         stay_conformance = stay_conformance_df.to_dict(orient="records")
@@ -409,6 +411,7 @@ def main() -> None:
             informational_vacuous: list[str] = []
             composite_interventions: list[str] = []
             violation_forensics: dict[str, dict] = {}
+            satisfaction_forensics: dict[str, dict] = {}
 
             for constraint in runner.model.constraints:
                 raw_constraint_id = getattr(constraint, "id", None) or constraint.label
@@ -423,8 +426,10 @@ def main() -> None:
 
                 is_failure_rule = canon_id.startswith("INT-")
                 if canon_id == "RC-TM-02":
-                    outcome = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
+                    outcome, gap_hours = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
                     res = None
+                    # Create a dummy result-like object for manual rules
+                    manual_forensics = {"deltas": {"gap_hours": gap_hours}, "delay_seconds": gap_hours * 3600} if gap_hours is not None else None
                 else:
                     res = evaluate_constraint(
                         case_id=str(stay_id),
@@ -432,6 +437,7 @@ def main() -> None:
                         constraint=constraint,
                     )
                     outcome = res.outcome
+                    manual_forensics = None
 
                 if outcome == ConformanceOutcome.VACUOUS:
                     target_vacuous = mandatory_vacuous
@@ -448,13 +454,14 @@ def main() -> None:
 
                 if outcome == ConformanceOutcome.VIOLATED:
                     target_violated.append(canon_id)
-                    if res:
-                        violation_forensics[canon_id] = {
-                            "deltas": res.violation_deltas,
-                            "delay_seconds": res.delay_seconds
-                        }
+                    f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                    if f_data:
+                        violation_forensics[canon_id] = f_data
                 elif outcome == ConformanceOutcome.SATISFIED:
                     target_satisfied.append(canon_id)
+                    f_data = manual_forensics if manual_forensics else ({"deltas": res.satisfaction_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                    if f_data:
+                        satisfaction_forensics[canon_id] = f_data
 
             # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
             composite_reason = None
@@ -497,6 +504,7 @@ def main() -> None:
                 "composite_interventions": ";".join(composite_interventions),
                 "composite_note": composite_reason or "",
                 "violation_forensics": json.dumps(violation_forensics),
+                "satisfaction_forensics": json.dumps(satisfaction_forensics),
                 "num_mandatory_violations": len(set(mandatory_violated)),
                 "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
             })
@@ -512,6 +520,17 @@ def main() -> None:
     frontend_data_dir = base_path / "frontend" / "public" / "data"
     
     export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
+    
+    # --- AUTOMATIC SUMMARY GENERATION ---
+    from derive.generate_summary import build_summary
+    case_files = sorted(frontend_data_dir.glob("case_*.json"))
+    if case_files:
+        summary = build_summary(case_files, frontend_data_dir)
+        summary_file = frontend_data_dir / "summary.json"
+        with summary_file.open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+            f.write("\n")
+        print(f"Global summary generated at {summary_file}")
 
 if __name__ == "__main__":
     main()

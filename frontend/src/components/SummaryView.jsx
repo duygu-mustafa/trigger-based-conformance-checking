@@ -5,11 +5,191 @@ import controlFlowIcon from '../static/control_flow.svg';
 
 const formatPercent = (ratio) => `${(Number(ratio || 0) * 100).toFixed(1)}%`;
 
-const getConstraintIcon = (id) => {
-  if (id.includes('-TM-')) return clockIcon;
-  if (id.includes('-DP-')) return dataIcon;
-  if (id.includes('-CF-') || id.includes('COMPOSITE')) return controlFlowIcon;
-  return null;
+const Histogram = ({ 
+  data, 
+  title, 
+  unit = '', 
+  color = '#64748b', 
+  expectedMin = null,
+  expectedMax = null,
+  inverted = false
+}) => {
+  if (!data || data.length === 0) return null;
+  
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  
+  const binConfig = useMemo(() => {
+    const zones = [];
+    const addZone = (start, end, count) => {
+      if (end <= start || count <= 0) return;
+      const step = (end - start) / count;
+      for (let i = 0; i < count; i++) {
+        zones.push({ s: start + i * step, e: start + (i + 1) * step });
+      }
+    };
+
+    const bounds = [min, max];
+    if (expectedMin !== null) bounds.push(expectedMin);
+    if (expectedMax !== null) bounds.push(expectedMax);
+
+    let dMin = Math.min(...bounds);
+    let dMax = Math.max(...bounds);
+
+    const rawRange = dMax - dMin;
+    const buffer = (rawRange * 0.1) || 5;
+
+    // Only extend if ANY threshold is tight against either data boundary
+    const nearEdge = (val, edge) => Math.abs(val - edge) < rawRange * 0.05;
+    
+    if (expectedMin !== null) {
+      if (nearEdge(expectedMin, dMin)) dMin -= buffer;
+      if (nearEdge(expectedMin, dMax)) dMax += buffer;
+    }
+    if (expectedMax !== null) {
+      if (nearEdge(expectedMax, dMin)) dMin -= buffer;
+      if (nearEdge(expectedMax, dMax)) dMax += buffer;
+    }
+
+    // Prevent negative axis for timing/physiological values if they were originally positive
+    if (min >= 0 && dMin < 0) dMin = 0;
+
+    const zMin = dMin;
+    const zMax = dMax;
+
+    const limit1 = expectedMin !== null ? expectedMin : zMin;
+    const limit2 = expectedMax !== null ? expectedMax : zMax;
+
+    // Distribute bins: 4 for early, 12 for safe/primary, 4 for late
+    addZone(zMin, limit1, 4);
+    addZone(limit1, limit2, 12);
+    addZone(limit2, zMax, 4);
+
+    // If no bins were added (e.g. range 0), add a single bin
+    if (zones.length === 0) zones.push({ s: min - 1, e: max + 1 });
+
+    const binsArr = new Array(zones.length).fill(0);
+    data.forEach(v => {
+      const idx = zones.findIndex(z => v >= z.s && v <= z.e);
+      if (idx !== -1) binsArr[idx]++;
+      else if (v < zones[0].s) binsArr[0]++;
+      else if (v > zones[zones.length - 1].e) binsArr[zones.length - 1]++;
+    });
+
+    return { zones, binsArr, zMin, zMax };
+  }, [data, min, max, expectedMin, expectedMax]);
+
+  const { zones, binsArr, zMin, zMax } = binConfig;
+  const maxBin = Math.max(...binsArr, 1);
+  const width = 450;
+  const height = 220; // Slightly taller
+  const margin = { top: 25, bottom: 35, left: 15, right: 15 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+  const barTopPadding = 15; // Space at top of bars to see background
+
+  return (
+    <div className="forensics-histogram">
+      <p className="chart-label">{title}</p>
+      <svg width={width} height={height} className="histogram-svg">
+        <g transform={`translate(${margin.left}, ${margin.top})`}>
+          {/* Clinical Zone Shading - only render when thresholds are defined */}
+          {(expectedMin !== null || expectedMax !== null) && (() => {
+            const zRange = zMax - zMin;
+            if (zRange === 0) return null;
+
+            const xSafeStart = expectedMin !== null ? ((expectedMin - zMin) / zRange) * innerW : 0;
+            const xSafeEnd = expectedMax !== null ? ((expectedMax - zMin) / zRange) * innerW : innerW;
+
+            const safeColor = inverted ? "#ef4444" : "#22c55e";
+            const dangerColor = inverted ? "#22c55e" : "#ef4444";
+
+            return (
+              <>
+                {xSafeStart > 0 && <rect x={0} y={0} width={xSafeStart} height={innerH} fill={dangerColor} fillOpacity="0.12" />}
+                <rect x={xSafeStart} y={0} width={Math.max(0, xSafeEnd - xSafeStart)} height={innerH} fill={safeColor} fillOpacity="0.12" />
+                {xSafeEnd < innerW && <rect x={xSafeEnd} y={0} width={innerW - xSafeEnd} height={innerH} fill={dangerColor} fillOpacity="0.12" />}
+              </>
+            );
+          })()}
+
+          {binsArr.map((count, i) => {
+            const z = zones[i];
+            const zMin = zones[0].s;
+            const zMax = zones[zones.length - 1].e;
+            const zRange = zMax - zMin;
+            
+            const h = (count / maxBin) * (innerH - barTopPadding);
+            const x = ((z.s - zMin) / zRange) * innerW;
+            const w = ((z.e - z.s) / zRange) * innerW;
+            const y = innerH - h;
+            
+            return (
+              <rect
+                key={i}
+                x={x + 1}
+                y={y}
+                width={Math.max(1, w - 2)}
+                height={h}
+                fill={color}
+                fillOpacity={0.8}
+                rx="1"
+              >
+                <title>{`Range: ${z.s.toFixed(1)}-${z.e.toFixed(1)}${unit}\nCount: ${count}`}</title>
+              </rect>
+            );
+          })}
+        </g>
+
+        {/* X-Axis Ticks & Labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map((p) => {
+          const zMin = zones[0].s;
+          const zMax = zones[zones.length - 1].e;
+          const val = zMin + p * (zMax - zMin);
+          const x = margin.left + p * innerW;
+          return (
+            <g key={p}>
+              <line 
+                x1={x} y1={height - margin.bottom} 
+                x2={x} y2={height - margin.bottom + 5} 
+                stroke="#e2e8f0" 
+              />
+              <text 
+                x={x} y={height - 5} 
+                textAnchor={p === 0 ? 'start' : p === 1 ? 'end' : 'middle'}
+                fontSize="9" 
+                fill="#94a3b8" 
+                fontWeight="600"
+              >
+                {val.toFixed(1)}{unit}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Vertical Threshold Markers */}
+        {[expectedMin, expectedMax].map((thresh, i) => {
+          if (thresh === null) return null;
+          const zMin = zones[0].s;
+          const zMax = zones[zones.length - 1].e;
+          const zRange = zMax - zMin;
+          if (zRange === 0) return null;
+          const x = margin.left + ((thresh - zMin) / zRange) * innerW;
+          if (x < margin.left || x > width - margin.right) return null;
+          return (
+            <line 
+              key={i}
+              x1={x} y1={margin.top} 
+              x2={x} y2={height - margin.bottom} 
+              stroke="#10b981" 
+              strokeWidth="2" 
+              strokeDasharray="4 2" 
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
 };
 
 const MiniBarChart = ({ items, emptyMessage, getValue, getPercentage, toneClass = '', subtitle }) => {
@@ -119,6 +299,130 @@ const ContrastBarChart = ({ items, emptyMessage, mode = 'violation' }) => {
   );
 };
 
+const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
+  if (!constraint) return (
+    <div className="detail-empty">
+      <p>Select a constraint to view violation details</p>
+    </div>
+  );
+
+  const forensicsV = constraint.forensics?.violation || constraint.forensics || {};
+  const forensicsS = constraint.forensics?.satisfaction || {};
+  
+  const delaysV = forensicsV.delays || [];
+  const delaysS = forensicsS.delays || [];
+  
+  const deltasV = forensicsV.delta_distributions || {};
+  const deltasS = forensicsS.delta_distributions || {};
+
+  // Find all unique keys across V and S deltas
+  const allDeltaKeys = Array.from(new Set([...Object.keys(deltasV), ...Object.keys(deltasS)]));
+  
+  const inferThresholds = (key, c) => {
+    const expr = c.activation_condition || c.target_condition || '';
+    if (!expr) return { min: null, max: null, inverted: false };
+    
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(?:items\\s*\\[\\s*['"]?${escapedKey}['"]?\\s*\\]|\\b${escapedKey}\\b)\\s*(>=|>|<=|<)\\s*([0-9.]+)`, 'gi');
+    
+    let minThresh = null;
+    let maxThresh = null;
+    let match;
+    while ((match = pattern.exec(expr)) !== null) {
+      const op = match[1];
+      const val = parseFloat(match[2]);
+      if (op === '>=' || op === '>') minThresh = val;
+      else if (op === '<=' || op === '<') maxThresh = val;
+    }
+    
+    // Only invert if it's an explicit "Avoid" or "Violation" rule
+    const lowerExpr = expr.trim().toLowerCase();
+    const isInverted = lowerExpr.includes('violation') || lowerExpr.includes('avoid');
+    
+    return { min: minThresh, max: maxThresh, inverted: isInverted };
+  };
+
+  return (
+    <div className="forensics-detail-content">
+      <div className="detail-header">
+        <div className="header-top">
+          <div className="id-tag">{constraint.constraint_id}</div>
+          <span className="template-badge">{constraint.template}</span>
+        </div>
+        <h4>{constraint.constraint_label}</h4>
+        {constraint.rationale && <p className="rationale-text">{constraint.rationale}</p>}
+      </div>
+      
+      <div className="detail-stats-grid">
+        <div className="detail-stat">
+          <label>Total Violations</label>
+          <span className="val">{constraint.count}</span>
+        </div>
+        <div className="detail-stat">
+          <label>Affected Episodes</label>
+          <span className="val">{formatPercent(constraint.episode_share)}</span>
+        </div>
+        <div className="detail-stat">
+          <label>Failure Lift</label>
+          <span className={`val ${constraint.lift_failure > 1.2 ? 'text-danger' : ''}`}>
+            {constraint.lift_failure?.toFixed(2)}x
+          </span>
+        </div>
+      </div>
+
+      <div className="forensics-charts">
+        <Histogram 
+          data={[...delaysV, ...delaysS].map(d => d / 3600)} 
+          title="Timing Distribution (All Episodes)" 
+          unit="h" 
+          color="#64748b"
+          expectedMin={constraint.min_gap_hours}
+          expectedMax={constraint.max_gap_hours}
+        />
+        
+        {allDeltaKeys
+          .filter(key => !['ventilation_duration_hours', 'hours_since_intubation', 'sbt_duration_min'].includes(key))
+          .map((key) => {
+            const thresh = inferThresholds(key, constraint);
+            let combinedData = [...(deltasV[key] || []), ...(deltasS[key] || [])];
+            
+            // Auto-scale FiO2 from 0-1 to 0-100 for consistency with protocol thresholds
+            if (key.toLowerCase().includes('fio2')) {
+              combinedData = combinedData.map(v => (v > 0 && v <= 1) ? v * 100 : v);
+            }
+
+            return (
+              <Histogram 
+                key={key} 
+                data={combinedData} 
+                title={`Value Distribution: ${itemLabels[key] || key}`} 
+                unit="" 
+                color="#64748b"
+                expectedMin={thresh.min}
+                expectedMax={thresh.max}
+                inverted={thresh.inverted}
+              />
+            );
+          })}
+
+        {delaysV.length === 0 && allDeltaKeys.length === 0 && (
+          <div className="no-data-notice">
+             <p>No magnitude forensics available for this constraint.</p>
+             <p className="subtext">This can happen if the rule is Boolean (e.g., "Medication Present") or if the trace contains no numeric data for the relevant variables.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const getConstraintIcon = (id) => {
+  if (id.includes('-TM-')) return clockIcon;
+  if (id.includes('-DP-')) return dataIcon;
+  if (id.includes('-CF-') || id.includes('COMPOSITE')) return controlFlowIcon;
+  return null;
+};
+
 const OutcomeScatterPlot = ({ items, mode = 'violation' }) => {
   if (!items || items.length === 0) return <p className="summary-empty">No data available for plot.</p>;
 
@@ -193,10 +497,21 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState('total_mandatory_violations');
   const [analysisMode, setAnalysisMode] = useState('violation'); // 'violation' or 'satisfaction'
+  const [selectedConstraintId, setSelectedConstraintId] = useState(null);
 
   const topViolations = useMemo(
-    () => (summaryData?.violation_frequency || []).slice(0, 7),
+    () => {
+      const all = (summaryData?.violation_frequency || [])
+        .filter(v => v.count > 0)
+        .sort((a, b) => b.count - a.count);
+      return all;
+    },
     [summaryData]
+  );
+
+  const selectedConstraint = useMemo(
+    () => topViolations.find(v => v.constraint_id === selectedConstraintId) || topViolations[0],
+    [topViolations, selectedConstraintId]
   );
 
   const allCorrelationData = useMemo(() => {
@@ -268,33 +583,40 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
         </section>
       </div>
 
-      <div className="summary-charts-grid">
-        <div className="chart-card">
-          <div className="section-header">
-            <h3>Top Violated Constraints</h3>
+      <section className="summary-card forensics-explorer">
+        <div className="section-header">
+          <div className="title-group">
+            <h3>Violation Forensics Explorer</h3>
+            <p className="header-subtitle">Deep-dive into the magnitudes and timing of rule breaches</p>
           </div>
-          <MiniBarChart
-            items={topViolations}
-            emptyMessage="No violation data found."
-            toneClass="chart-violations"
-            getValue={(v) => formatPercent(v.episode_share)}
-            getPercentage={(v) => v.episode_share}
-          />
         </div>
-        <div className="chart-card">
-          <div className="section-header">
-            <h3>Unmet Readiness Criteria</h3>
+        <div className="forensics-layout">
+          <div className="forensics-master">
+            <h4>Most Frequent Violations</h4>
+            <div className="forensics-list">
+              {topViolations.slice(0, 10).map(v => (
+                <div 
+                  key={v.constraint_id} 
+                  className={`forensics-row ${selectedConstraint?.constraint_id === v.constraint_id ? 'active' : ''}`}
+                  onClick={() => setSelectedConstraintId(v.constraint_id)}
+                >
+                  <div className="row-main">
+                    <img src={getConstraintIcon(v.constraint_id)} alt="" className="row-icon" />
+                    <span className="row-label" title={v.constraint_label}>{v.constraint_label}</span>
+                  </div>
+                  <div className="row-meta">
+                    <span className="row-count">{v.count} episodes</span>
+                    <span className="row-percent">{formatPercent(v.episode_share)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <MiniBarChart
-            items={topUnmetReadinessCriteria}
-            emptyMessage="No unmet criteria found."
-            toneClass="chart-readiness"
-            subtitle="Criteria blocking SBT start"
-            getValue={(v) => formatPercent(v.episode_share)}
-            getPercentage={(v) => v.episode_share}
-          />
+          <div className="forensics-detail">
+            <ConstraintDetailView constraint={selectedConstraint} itemLabels={summaryData?.item_labels} />
+          </div>
         </div>
-      </div>
+      </section>
 
       <section className="summary-card correlation-deep-dive">
         <div className="section-header">

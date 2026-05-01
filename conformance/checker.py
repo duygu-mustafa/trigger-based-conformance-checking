@@ -582,6 +582,7 @@ def _evaluate_constraint_impl(
             saw_vacuous = False
             evaluable_rows = 0
             violation_deltas = {}
+            satisfaction_deltas = {}
 
             for _, row in act_rows.iterrows():
                 cond_true, is_vacuous, eval_err, vals = _evaluate_data_condition_status(
@@ -599,6 +600,9 @@ def _evaluate_constraint_impl(
                 if cond_true:
                     violated += 1
                     violation_deltas = vals
+                else:
+                    # Capture satisfying values for distribution analysis
+                    satisfaction_deltas = vals
 
             if violated > 0:
                 ok = False
@@ -625,6 +629,7 @@ def _evaluate_constraint_impl(
                 num_violated=int(violated),
                 activation_ts=str(act_rows.iloc[0]["timestamp"]),
                 violation_deltas=violation_deltas if not ok else {},
+                satisfaction_deltas=satisfaction_deltas if ok else {},
                 violation_reason=(
                     None if ok else "Activation condition evaluated to true for one or more events"
                 )
@@ -702,6 +707,7 @@ def _evaluate_constraint_impl(
             num_violated=0 if ok else 1,
             activation_ts=str(first_row["timestamp"]),
             violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=violation_deltas if ok else {},
             violation_reason=(None if ok else "First event does not satisfy INIT")
             if eval_error is None
             else eval_error,
@@ -750,6 +756,8 @@ def _evaluate_constraint_impl(
                     candidates = candidates[candidates["timestamp"] < next_act_ts]
 
             matched = False
+            best_effort_forensics = None
+            
             for _, target_row in candidates.iterrows():
                 ok_match, corr_error, delta, vals = _target_matches(
                     target_row,
@@ -760,6 +768,11 @@ def _evaluate_constraint_impl(
                     in {DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.NOT_CHAIN_RESPONSE},
                     directional_time=True,
                 )
+                
+                # Keep track of the first target we see for forensics if we never find a valid match
+                if best_effort_forensics is None:
+                    best_effort_forensics = (delta, vals)
+                    
                 if corr_error is not None and first_corr_error is None:
                     first_corr_error = corr_error
                 if ok_match:
@@ -776,18 +789,22 @@ def _evaluate_constraint_impl(
 
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                # Capture satisfaction forensics
+                if best_effort_forensics:
+                    _, satisfaction_deltas = best_effort_forensics
+                elif matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
                     first_violation_ts = str(act_ts)
-                    # For RESPONSE/CHAIN/ALT, if NOT matched, it's a violation.
-                    # We can't easily pinpoint exactly which data item caused a MISSING target,
-                    # but we can capture the context at the activation point.
                     if not matched and not is_negative:
-                         _, _, _, violation_deltas = _evaluate_data_condition_status(
-                            trace_df, act_row, "True"
-                        )
-                    # If it WAS matched but shouldn't have been (NOT_RESPONSE), capture target values.
+                        if best_effort_forensics:
+                            delay_seconds, violation_deltas = best_effort_forensics
+                        else:
+                            _, _, _, violation_deltas = _evaluate_data_condition_status(
+                                trace_df, act_row, "True"
+                            )
                     elif matched and is_negative:
                         violation_deltas = vals
                         delay_seconds = delta
@@ -803,6 +820,7 @@ def _evaluate_constraint_impl(
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else first_violation_ts,
             target_ts=first_match_target_ts,
             violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
             delay_seconds=delay_seconds if not ok else None,
             violation_reason=(
                 None
@@ -839,6 +857,7 @@ def _evaluate_constraint_impl(
         first_corr_error = None
         is_negative = constraint.template == DeclareTemplate.NOT_RESPONDED_EXISTENCE
         violation_deltas = {}
+        satisfaction_deltas = {}
 
         for _, act_row in act_rows.iterrows():
             act_ts = act_row["timestamp"]
@@ -862,6 +881,11 @@ def _evaluate_constraint_impl(
 
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                # Capture satisfaction forensics
+                if best_effort_forensics:
+                    _, satisfaction_deltas = best_effort_forensics
+                elif matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
@@ -880,6 +904,7 @@ def _evaluate_constraint_impl(
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else first_violation_ts,
             target_ts=first_match_target_ts,
             violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
             violation_reason=(
                 None
                 if ok
@@ -964,6 +989,11 @@ def _evaluate_constraint_impl(
             }
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
+                # Capture satisfaction forensics
+                if best_effort_forensics:
+                    _, satisfaction_deltas = best_effort_forensics
+                elif matched:
+                    satisfaction_deltas = vals
             else:
                 violated += 1
                 if first_violation_ts is None:
@@ -987,6 +1017,7 @@ def _evaluate_constraint_impl(
             activation_ts=first_match_activation_ts,
             target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else first_violation_ts,
             violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=satisfaction_deltas if ok else {},
             delay_seconds=delay_seconds if not ok else None,
             violation_reason=(
                 None

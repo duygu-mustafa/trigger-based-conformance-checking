@@ -45,6 +45,28 @@ def infer_input_dir(project_root: Path) -> Path:
     return src_dir
 
 
+def _load_item_labels(project_root: Path) -> dict[str, str]:
+    import yaml
+    path = project_root / "configs" / "item_dictionary.yaml"
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r") as f:
+            data = yaml.safe_load(f) or {}
+        labels = {}
+        sources = data.get("sources", {})
+        if isinstance(sources, dict):
+            for source_data in sources.values():
+                if isinstance(source_data, dict):
+                    for iid, label in source_data.items():
+                        # Use the label string, stripping comments
+                        clean_label = str(label).split("#")[0].strip()
+                        labels[str(iid)] = clean_label
+        return labels
+    except Exception:
+        return {}
+
+
 def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
     all_episodes: list[dict[str, Any]] = []
     stay_to_episodes: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -52,11 +74,16 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
     violation_stays: dict[str, set[str]] = defaultdict(set)
     readiness_counter: Counter[str] = Counter()
     constraint_labels: dict[str, str] = {}
+    constraint_metas: dict[str, dict[str, Any]] = {}
     
     # Track all seen constraints to include non-violated ones
     all_constraint_ids: set[str] = set()
     satisfied_counter: Counter[str] = Counter()
     vacuous_counter: Counter[str] = Counter()
+    
+    # Track forensics (magnitudes/delays)
+    violation_forensics_agg: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    satisfaction_forensics_agg: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for case_file in case_files:
         with case_file.open("r", encoding="utf-8") as handle:
@@ -74,6 +101,8 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
                 label = meta.get("label")
                 if label and cid not in constraint_labels:
                     constraint_labels[cid] = str(label)
+                if cid not in constraint_metas:
+                    constraint_metas[cid] = meta
 
         for episode in episodes:
             ep = dict(episode)
@@ -100,6 +129,15 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
             for cid in vac_list:
                 vacuous_counter[cid] += 1
                 all_constraint_ids.add(cid)
+
+            # Collect forensics
+            v_forensics = ep.get("violation_forensics") or {}
+            for cid, data in v_forensics.items():
+                violation_forensics_agg[cid].append(data)
+
+            s_forensics = ep.get("satisfaction_forensics") or {}
+            for cid, data in s_forensics.items():
+                satisfaction_forensics_agg[cid].append(data)
 
     total_stays = len(stay_to_episodes)
     total_episodes = len(all_episodes)
@@ -161,10 +199,31 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
         # Difference in rates
         rate_diff = round(rate_failure - rate_success, 4)
         
+        # Collect forensics statistics
+        def summarize_agg(aggregated):
+            delays = [f.get("delay_seconds") for f in aggregated if f.get("delay_seconds") is not None]
+            delta_distributions = defaultdict(list)
+            for f in aggregated:
+                d = f.get("deltas") or {}
+                for k, v in d.items():
+                    if isinstance(v, (int, float)):
+                        delta_distributions[k].append(float(v))
+            return {"delays": delays, "delta_distributions": dict(delta_distributions)}
+
+        forensics_v = summarize_agg(violation_forensics_agg[cid])
+        forensics_s = summarize_agg(satisfaction_forensics_agg[cid])
+
         violation_frequency.append(
             {
                 "constraint_id": cid,
                 "constraint_label": constraint_labels.get(cid, cid),
+                "rationale": constraint_metas.get(cid, {}).get("rationale", ""),
+                "template": constraint_metas.get(cid, {}).get("template", ""),
+                "activation_condition": constraint_metas.get(cid, {}).get("activation_condition"),
+                "target_condition": constraint_metas.get(cid, {}).get("target_condition"),
+                "min_gap_hours": constraint_metas.get(cid, {}).get("min_gap_hours"),
+                "max_gap_hours": constraint_metas.get(cid, {}).get("max_gap_hours"),
+                "observation_window_hours": constraint_metas.get(cid, {}).get("observation_window_hours"),
                 "count": count,
                 "count_success": count_success,
                 "count_failure": count_failure,
@@ -181,6 +240,10 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
                 "affected_stays": affected_stays,
                 "episode_share": round((count / total_episodes), 4) if total_episodes else 0.0,
                 "stay_share": round((affected_stays / total_stays), 4) if total_stays else 0.0,
+                "forensics": {
+                    "violation": forensics_v,
+                    "satisfaction": forensics_s
+                }
             }
         )
 
@@ -252,6 +315,9 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
             }
         )
 
+    # Load item labels for the frontend
+    item_labels = _load_item_labels(input_dir.parents[2])
+
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_dir": str(input_dir),
@@ -261,6 +327,7 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
         "readiness_bottlenecks": readiness_bottlenecks,
         "conformance_vs_outcome": conformance_vs_outcome,
         "stay_summaries": stay_summaries,
+        "item_labels": item_labels,
     }
     return summary
 

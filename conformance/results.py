@@ -24,6 +24,7 @@ class ConstraintResult:
     target_ts: Optional[str] = None
     violation_reason: Optional[str] = None
     violation_deltas: dict[str, float] = field(default_factory=dict)
+    satisfaction_deltas: dict[str, float] = field(default_factory=dict)
     delay_seconds: Optional[float] = None
 
 
