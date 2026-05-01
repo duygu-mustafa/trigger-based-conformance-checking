@@ -881,10 +881,7 @@ def _evaluate_constraint_impl(
 
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
-                # Capture satisfaction forensics
-                if best_effort_forensics:
-                    _, satisfaction_deltas = best_effort_forensics
-                elif matched:
+                if matched:
                     satisfaction_deltas = vals
             else:
                 violated += 1
@@ -989,10 +986,7 @@ def _evaluate_constraint_impl(
             }
             if (matched and not is_negative) or ((not matched) and is_negative):
                 fulfilled += 1
-                # Capture satisfaction forensics
-                if best_effort_forensics:
-                    _, satisfaction_deltas = best_effort_forensics
-                elif matched:
+                if matched:
                     satisfaction_deltas = vals
             else:
                 violated += 1
