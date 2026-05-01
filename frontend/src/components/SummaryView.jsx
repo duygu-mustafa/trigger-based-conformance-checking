@@ -76,11 +76,16 @@ const Histogram = ({
       else if (v > zones[zones.length - 1].e) binsArr[zones.length - 1]++;
     });
 
-    return { zones, binsArr, zMin, zMax };
+    const densities = binsArr.map((count, i) => {
+      const bWidth = zones[i].e - zones[i].s;
+      return count / (bWidth || 1);
+    });
+
+    return { zones, binsArr, densities, zMin, zMax };
   }, [data, min, max, expectedMin, expectedMax]);
 
-  const { zones, binsArr, zMin, zMax } = binConfig;
-  const maxBin = Math.max(...binsArr, 1);
+  const { zones, binsArr, densities, zMin, zMax } = binConfig;
+  const maxDensity = Math.max(...densities, 0.000001);
   const width = 450;
   const height = 220; // Slightly taller
   const margin = { top: 25, bottom: 35, left: 15, right: 15 };
@@ -93,18 +98,7 @@ const Histogram = ({
       <p className="chart-label">{title}</p>
       <svg width={width} height={height} className="histogram-svg">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
-          {/* Y-axis ticks & label */}
-          {[0, 0.5, 1].map(p => {
-            const val = Math.round(p * maxBin);
-            const h = p * (innerH - barTopPadding);
-            const y = innerH - h;
-            return (
-              <g key={p}>
-                <line x1={-3} y1={y} x2={0} y2={y} stroke="#cbd5e1" strokeWidth="1" />
-                <text x={-6} y={y} textAnchor="end" fontSize="8" fill="#94a3b8" alignmentBaseline="middle" fontWeight="600">{val}</text>
-              </g>
-            );
-          })}
+          {/* Y-axis label (ticks removed for density) */}
           <text 
             x={-margin.left + 5} y={-10} 
             fontSize="8" 
@@ -112,7 +106,7 @@ const Histogram = ({
             fontWeight="700" 
             textAnchor="start"
           >
-            COUNT
+            DENSITY
           </text>
           {/* Clinical Zone Shading - only render when thresholds are defined */}
           {(expectedMin !== null || expectedMax !== null) && (() => {
@@ -136,12 +130,13 @@ const Histogram = ({
 
           {binsArr.map((count, i) => {
             const z = zones[i];
-            const zMin = zones[0].s;
-            const zMax = zones[zones.length - 1].e;
-            const zRange = zMax - zMin;
+            const density = densities[i];
+            const zMin_val = zones[0].s;
+            const zMax_val = zones[zones.length - 1].e;
+            const zRange = zMax_val - zMin_val;
             
-            const h = (count / maxBin) * (innerH - barTopPadding);
-            const x = ((z.s - zMin) / zRange) * innerW;
+            const h = (density / maxDensity) * (innerH - barTopPadding);
+            const x = ((z.s - zMin_val) / zRange) * innerW;
             const w = ((z.e - z.s) / zRange) * innerW;
             const y = innerH - h;
             
