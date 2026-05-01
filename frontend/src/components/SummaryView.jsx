@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import clockIcon from '../static/clock.svg';
 import dataIcon from '../static/data.svg';
 import controlFlowIcon from '../static/control_flow.svg';
@@ -599,7 +599,14 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   const [analysisMode, setAnalysisMode] = useState('violation'); // 'violation' or 'satisfaction'
   const [selectedConstraintId, setSelectedConstraintId] = useState(null);
   const [forensicsSidebarWidth, setForensicsSidebarWidth] = useState(550);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const isResizing = React.useRef(false);
+
+  // Reset to page 1 when searching or sorting
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, sortBy]);
 
   const startResizing = (e) => {
     isResizing.current = true;
@@ -670,7 +677,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
     [summaryData]
   );
 
-  const stayRows = useMemo(() => {
+  const allFilteredStays = useMemo(() => {
     const rows = [...(summaryData?.stay_summaries || [])];
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -686,6 +693,13 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
 
     return filtered;
   }, [summaryData, query, sortBy]);
+
+  const totalResults = allFilteredStays.length;
+  const totalPages = Math.ceil(totalResults / pageSize);
+  const stayRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return allFilteredStays.slice(start, start + pageSize);
+  }, [allFilteredStays, currentPage, pageSize]);
 
   const outcomeStats = summaryData?.conformance_vs_outcome || {};
   const successStats = outcomeStats.success || {};
@@ -861,6 +875,41 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
             <p className="summary-empty">No stays match the current filter.</p>
           ) : null}
         </div>
+
+        {/* Pagination Controls */}
+        {totalResults > 0 && (
+          <div className="table-pagination">
+            <div className="pagination-info">
+              Showing <strong>{((currentPage - 1) * pageSize) + 1}</strong> to <strong>{Math.min(currentPage * pageSize, totalResults)}</strong> of <strong>{totalResults}</strong> stays
+            </div>
+            <div className="pagination-controls">
+              <div className="page-size-selector">
+                <label>Rows per page:</label>
+                <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+              <button 
+                className="pag-btn" 
+                disabled={currentPage === 1} 
+                onClick={() => setCurrentPage(prev => prev - 1)}
+              >
+                Previous
+              </button>
+              <span className="page-num">Page <strong>{currentPage}</strong> of {totalPages}</span>
+              <button 
+                className="pag-btn" 
+                disabled={currentPage === totalPages} 
+                onClick={() => setCurrentPage(prev => prev + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );
