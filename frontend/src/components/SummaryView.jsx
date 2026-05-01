@@ -451,7 +451,7 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
         )}
         
         {allDeltaKeys
-          .filter(key => !['ventilation_duration_hours', 'hours_since_intubation', 'sbt_duration_min'].includes(key))
+          .filter(key => !['ventilation_duration_hours', 'hours_since_intubation', 'sbt_duration_min', 'gap_hours'].includes(key))
           .map((key) => {
             const thresh = inferThresholds(key, constraint);
             let combinedData = [...(deltasV[key] || []), ...(deltasS[key] || [])];
