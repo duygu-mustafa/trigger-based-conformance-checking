@@ -52,6 +52,11 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
     violation_stays: dict[str, set[str]] = defaultdict(set)
     readiness_counter: Counter[str] = Counter()
     constraint_labels: dict[str, str] = {}
+    
+    # Track all seen constraints to include non-violated ones
+    all_constraint_ids: set[str] = set()
+    satisfied_counter: Counter[str] = Counter()
+    vacuous_counter: Counter[str] = Counter()
 
     for case_file in case_files:
         with case_file.open("r", encoding="utf-8") as handle:
@@ -63,6 +68,7 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
         definitions = payload.get("constraint_definitions") or {}
         if isinstance(definitions, dict):
             for cid, meta in definitions.items():
+                all_constraint_ids.add(cid)
                 if not isinstance(meta, dict):
                     continue
                 label = meta.get("label")
@@ -76,23 +82,102 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
             all_episodes.append(ep)
             stay_to_episodes[ep_stay_id].append(ep)
 
-            for cid in parse_constraint_list(ep.get("mandatory_violated_constraints")):
+            v_list = parse_constraint_list(ep.get("mandatory_violated_constraints"))
+            s_list = parse_constraint_list(ep.get("mandatory_satisfied_constraints"))
+            vac_list = parse_constraint_list(ep.get("mandatory_vacuous_constraints"))
+            
+            for cid in v_list:
                 violation_counter[cid] += 1
                 violation_stays[cid].add(ep_stay_id)
+                all_constraint_ids.add(cid)
                 if cid.startswith("RC-DP-"):
                     readiness_counter[cid] += 1
+            
+            for cid in s_list:
+                satisfied_counter[cid] += 1
+                all_constraint_ids.add(cid)
+                
+            for cid in vac_list:
+                vacuous_counter[cid] += 1
+                all_constraint_ids.add(cid)
 
     total_stays = len(stay_to_episodes)
     total_episodes = len(all_episodes)
 
+    # Group episodes by outcome to get baseline counts
+    grouped: dict[str, list[dict[str, Any]]] = {"success": [], "failure": [], "unknown": []}
+    for ep in all_episodes:
+        grouped[classify_outcome(ep.get("sbt_outcome"))].append(ep)
+
+    num_success = len(grouped["success"])
+    num_failure = len(grouped["failure"])
+
     violation_frequency: list[dict[str, Any]] = []
-    for cid, count in violation_counter.most_common():
+    # Count violations per outcome type
+    violation_outcome_counter: dict[str, Counter[str]] = {
+        "success": Counter(),
+        "failure": Counter(),
+        "unknown": Counter()
+    }
+    
+    for ep in all_episodes:
+        outcome = classify_outcome(ep.get("sbt_outcome"))
+        for cid in parse_constraint_list(ep.get("mandatory_violated_constraints")):
+            violation_outcome_counter[outcome][cid] += 1
+
+    # Iterate over ALL seen constraints, not just violated ones
+    for cid in sorted(all_constraint_ids):
+        count = violation_counter[cid]
         affected_stays = len(violation_stays[cid])
+        count_success = violation_outcome_counter["success"][cid]
+        count_failure = violation_outcome_counter["failure"][cid]
+        count_vacuous = vacuous_counter[cid]
+        count_satisfied = satisfied_counter[cid]
+        
+        # Calculate probabilities
+        rate_success = round(count_success / num_success, 4) if num_success > 0 else 0.0
+        rate_failure = round(count_failure / num_failure, 4) if num_failure > 0 else 0.0
+        
+        # Lift = P(V|F) / P(V)
+        # We only calculate lift if there are SOME violations overall
+        total_v = count_success + count_failure
+        prob_v = total_v / (num_success + num_failure) if (num_success + num_failure) > 0 else 0.0
+        lift_failure = round(rate_failure / prob_v, 3) if prob_v > 0 else 1.0
+        
+        # Satisfaction Metrics
+        # P(S|Success) = count_satisfied_success / num_success
+        # But we need to count satisfactions per outcome
+        # Let's add that logic
+        count_sat_success = sum(1 for ep in grouped["success"] if cid in parse_constraint_list(ep.get("mandatory_satisfied_constraints")))
+        count_sat_failure = sum(1 for ep in grouped["failure"] if cid in parse_constraint_list(ep.get("mandatory_satisfied_constraints")))
+        
+        rate_sat_success = round(count_sat_success / num_success, 4) if num_success > 0 else 0.0
+        rate_sat_failure = round(count_sat_failure / num_failure, 4) if num_failure > 0 else 0.0
+        
+        total_s = count_sat_success + count_sat_failure
+        prob_s = total_s / (num_success + num_failure) if (num_success + num_failure) > 0 else 0.0
+        lift_success = round(rate_sat_success / prob_s, 3) if prob_s > 0 else 1.0
+
+        # Difference in rates
+        rate_diff = round(rate_failure - rate_success, 4)
+        
         violation_frequency.append(
             {
                 "constraint_id": cid,
                 "constraint_label": constraint_labels.get(cid, cid),
                 "count": count,
+                "count_success": count_success,
+                "count_failure": count_failure,
+                "count_vacuous": count_vacuous,
+                "count_satisfied": count_satisfied,
+                "violation_rate_success": rate_success,
+                "violation_rate_failure": rate_failure,
+                "satisfaction_rate_success": rate_sat_success,
+                "satisfaction_rate_failure": rate_sat_failure,
+                "lift_success": lift_success,
+                "vacuous_share": round(count_vacuous / total_episodes, 4) if total_episodes else 0.0,
+                "lift_failure": lift_failure,
+                "rate_diff": rate_diff,
                 "affected_stays": affected_stays,
                 "episode_share": round((count / total_episodes), 4) if total_episodes else 0.0,
                 "stay_share": round((affected_stays / total_stays), 4) if total_stays else 0.0,
@@ -109,10 +194,6 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
                 "episode_share": round((count / total_episodes), 4) if total_episodes else 0.0,
             }
         )
-
-    grouped: dict[str, list[dict[str, Any]]] = {"success": [], "failure": [], "unknown": []}
-    for ep in all_episodes:
-        grouped[classify_outcome(ep.get("sbt_outcome"))].append(ep)
 
     conformance_vs_outcome: dict[str, dict[str, Any]] = {}
     for key in ("success", "failure", "unknown"):

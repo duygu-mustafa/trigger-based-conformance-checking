@@ -23,6 +23,8 @@ class ConstraintResult:
     activation_ts: Optional[str] = None
     target_ts: Optional[str] = None
     violation_reason: Optional[str] = None
+    violation_deltas: dict[str, float] = field(default_factory=dict)
+    delay_seconds: Optional[float] = None
 
 
 @dataclass

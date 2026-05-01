@@ -26,6 +26,7 @@ from conformance.checker import (
     evaluate_constraint
 )
 import json
+import math
 
 
 INT_COMPOSITE_ID = "INT-COMPOSITE-01"
@@ -269,6 +270,28 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         
         # Get conformance results for this stay
         stay_conformance_df = results_df[results_df["stay_id"] == stay_id].copy()
+        
+        # Parse violation_forensics JSON string back to dict if present
+        if "violation_forensics" in stay_conformance_df.columns:
+            def _parse_forensics(x):
+                if not isinstance(x, str):
+                    return {}
+                try:
+                    data = json.loads(x)
+                    # Recursively replace NaN with None in forensics dict
+                    def _clean(obj):
+                        if isinstance(obj, dict):
+                            return {k: _clean(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [_clean(i) for i in obj]
+                        elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+                            return None
+                        return obj
+                    return _clean(data)
+                except:
+                    return {}
+            stay_conformance_df["violation_forensics"] = stay_conformance_df["violation_forensics"].apply(_parse_forensics)
+
         stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
         stay_conformance = stay_conformance_df.to_dict(orient="records")
         
@@ -385,6 +408,7 @@ def main() -> None:
             informational_satisfied: list[str] = []
             informational_vacuous: list[str] = []
             composite_interventions: list[str] = []
+            violation_forensics: dict[str, dict] = {}
 
             for constraint in runner.model.constraints:
                 raw_constraint_id = getattr(constraint, "id", None) or constraint.label
@@ -400,6 +424,7 @@ def main() -> None:
                 is_failure_rule = canon_id.startswith("INT-")
                 if canon_id == "RC-TM-02":
                     outcome = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
+                    res = None
                 else:
                     res = evaluate_constraint(
                         case_id=str(stay_id),
@@ -423,6 +448,11 @@ def main() -> None:
 
                 if outcome == ConformanceOutcome.VIOLATED:
                     target_violated.append(canon_id)
+                    if res:
+                        violation_forensics[canon_id] = {
+                            "deltas": res.violation_deltas,
+                            "delay_seconds": res.delay_seconds
+                        }
                 elif outcome == ConformanceOutcome.SATISFIED:
                     target_satisfied.append(canon_id)
 
@@ -466,6 +496,7 @@ def main() -> None:
                 "info_vacuous_constraints": ";".join(sorted(set(informational_vacuous))),
                 "composite_interventions": ";".join(composite_interventions),
                 "composite_note": composite_reason or "",
+                "violation_forensics": json.dumps(violation_forensics),
                 "num_mandatory_violations": len(set(mandatory_violated)),
                 "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
             })
