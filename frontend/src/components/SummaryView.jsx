@@ -521,7 +521,7 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
   return (
     <div className="forensics-detail-content">
       <div className="detail-header">
-        <div className="header-top">
+        <div className="header-top" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div className="id-tag">{constraint.constraint_id}</div>
           <span className="template-badge">{constraint.template}</span>
         </div>
