@@ -14,62 +14,95 @@ const Histogram = ({
   expectedMax = null,
   inverted = false
 }) => {
-  if (!data || data.length === 0) return null;
-  
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const [zoomRange, setZoomRange] = useState(null); // [min, max] or null
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState(null);
+  const [selectionEnd, setSelectionEnd] = useState(null);
+  const svgRef = useRef(null);
+
+  // Reset zoom when data changes
+  useEffect(() => {
+    setZoomRange(null);
+  }, [data]);
+
+  const validData = useMemo(() => (data || []).filter(v => typeof v === 'number' && !isNaN(v)), [data]);
+
+  const initialMin = validData.length > 0 ? Math.min(...validData) : 0;
+  const initialMax = validData.length > 0 ? Math.max(...validData) : 1;
   
   const binConfig = useMemo(() => {
+    if (validData.length === 0 || !data || data.length === 0) return { zones: [], binsArr: [], densities: [], zMin: 0, zMax: 1 };
+    
     const zones = [];
     const addZone = (start, end, count) => {
-      if (end <= start || count <= 0) return;
+      if (typeof start !== 'number' || typeof end !== 'number' || isNaN(start) || isNaN(end) || end <= start || count <= 0) return;
       const step = (end - start) / count;
       for (let i = 0; i < count; i++) {
         zones.push({ s: start + i * step, e: start + (i + 1) * step });
       }
     };
 
-    const bounds = [min, max];
-    if (expectedMin !== null) bounds.push(expectedMin);
-    if (expectedMax !== null) bounds.push(expectedMax);
+    let dMin = zoomRange ? zoomRange[0] : initialMin;
+    let dMax = zoomRange ? zoomRange[1] : initialMax;
 
-    let dMin = Math.min(...bounds);
-    let dMax = Math.max(...bounds);
+    const bounds = [];
+    if (typeof dMin === 'number' && !isNaN(dMin)) bounds.push(dMin);
+    if (typeof dMax === 'number' && !isNaN(dMax)) bounds.push(dMax);
+    if (expectedMin !== null && !isNaN(expectedMin)) bounds.push(expectedMin);
+    if (expectedMax !== null && !isNaN(expectedMax)) bounds.push(expectedMax);
+
+    if (bounds.length === 0) return { zones: [], binsArr: [], densities: [], zMin: 0, zMax: 1 };
+
+    dMin = Math.min(...bounds);
+    dMax = Math.max(...bounds);
 
     const rawRange = dMax - dMin;
-    const buffer = (rawRange * 0.1) || 5;
+    const buffer = (rawRange * 0.1) || (initialMax === initialMin ? 1 : 5);
 
     // Only extend if ANY threshold is tight against either data boundary
     const nearEdge = (val, edge) => Math.abs(val - edge) < rawRange * 0.05;
     
-    if (expectedMin !== null) {
-      if (nearEdge(expectedMin, dMin)) dMin -= buffer;
-      if (nearEdge(expectedMin, dMax)) dMax += buffer;
-    }
-    if (expectedMax !== null) {
-      if (nearEdge(expectedMax, dMin)) dMin -= buffer;
-      if (nearEdge(expectedMax, dMax)) dMax += buffer;
-    }
+    if (!zoomRange) {
+      if (expectedMin !== null && !isNaN(expectedMin)) {
+        if (nearEdge(expectedMin, dMin)) dMin -= buffer;
+        if (nearEdge(expectedMin, dMax)) dMax += buffer;
+      }
+      if (expectedMax !== null && !isNaN(expectedMax)) {
+        if (nearEdge(expectedMax, dMin)) dMin -= buffer;
+        if (nearEdge(expectedMax, dMax)) dMax += buffer;
+      }
 
-    // Prevent negative axis for timing/physiological values if they were originally positive
-    if (min >= 0 && dMin < 0) dMin = 0;
+      // Prevent negative axis for timing/physiological values if they were originally positive
+      if (initialMin >= 0 && dMin < 0) dMin = 0;
+    }
 
     const zMin = dMin;
     const zMax = dMax;
 
-    const limit1 = expectedMin !== null ? expectedMin : zMin;
-    const limit2 = expectedMax !== null ? expectedMax : zMax;
+    const limit1 = (expectedMin !== null && !isNaN(expectedMin)) ? expectedMin : zMin;
+    const limit2 = (expectedMax !== null && !isNaN(expectedMax)) ? expectedMax : zMax;
 
     // Distribute bins: 4 for early, 12 for safe/primary, 4 for late
-    addZone(zMin, limit1, 4);
-    addZone(limit1, limit2, 12);
-    addZone(limit2, zMax, 4);
+    let l1 = Math.min(limit1, limit2);
+    let l2 = Math.max(limit1, limit2);
+
+    // Keep l1 and l2 within [zMin, zMax]
+    l1 = Math.max(zMin, Math.min(zMax, l1));
+    l2 = Math.max(zMin, Math.min(zMax, l2));
+
+    addZone(zMin, l1, 4);
+    addZone(l1, l2, 12);
+    addZone(l2, zMax, 4);
 
     // If no bins were added (e.g. range 0), add a single bin
-    if (zones.length === 0) zones.push({ s: min - 1, e: max + 1 });
+    if (zones.length === 0) {
+      const s = (typeof initialMin === 'number' && !isNaN(initialMin)) ? initialMin - 1 : -1;
+      const e = (typeof initialMax === 'number' && !isNaN(initialMax)) ? initialMax + 1 : 1;
+      zones.push({ s, e });
+    }
 
     const binsArr = new Array(zones.length).fill(0);
-    data.forEach(v => {
+    validData.forEach(v => {
       const idx = zones.findIndex(z => v >= z.s && v <= z.e);
       if (idx !== -1) binsArr[idx]++;
       else if (v < zones[0].s) binsArr[0]++;
@@ -81,11 +114,15 @@ const Histogram = ({
       return count / (bWidth || 1);
     });
 
-    return { zones, binsArr, densities, zMin, zMax };
-  }, [data, min, max, expectedMin, expectedMax]);
+    return { zones: zones || [], binsArr: binsArr || [], densities: densities || [], zMin, zMax };
+  }, [validData, initialMin, initialMax, expectedMin, expectedMax, zoomRange]);
 
-  const { zones, binsArr, densities, zMin, zMax } = binConfig;
-  const maxDensity = Math.max(...densities, 0.000001);
+  const config = binConfig || { zones: [], binsArr: [], densities: [], zMin: 0, zMax: 1 };
+  const { zones = [], binsArr = [], densities = [], zMin = 0, zMax = 1 } = config;
+
+  if (!data || data.length === 0) return null;
+
+  const maxDensity = densities.length > 0 ? Math.max(...densities, 0.000001) : 0.000001;
   const width = 450;
   const height = 220; // Slightly taller
   const margin = { top: 25, bottom: 35, left: 15, right: 15 };
@@ -93,11 +130,84 @@ const Histogram = ({
   const innerH = height - margin.top - margin.bottom;
   const barTopPadding = 15; // Space at top of bars to see background
 
+  const getXFromEvent = (e) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left - margin.left;
+    return Math.max(0, Math.min(innerW, x));
+  };
+
+  const handleMouseDown = (e) => {
+    const x = getXFromEvent(e);
+    setSelectionStart(x);
+    setSelectionEnd(x);
+    setIsSelecting(true);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isSelecting) return;
+    setSelectionEnd(getXFromEvent(e));
+  };
+
+  const handleMouseUp = () => {
+    if (!isSelecting) return;
+    setIsSelecting(false);
+    
+    if (Math.abs(selectionEnd - selectionStart) > 5) {
+      const xMin = Math.min(selectionStart, selectionEnd);
+      const xMax = Math.max(selectionStart, selectionEnd);
+      const valMin = zMin + (xMin / innerW) * (zMax - zMin);
+      const valMax = zMin + (xMax / innerW) * (zMax - zMin);
+      setZoomRange([valMin, valMax]);
+    }
+  };
+
+  const resetZoom = () => setZoomRange(null);
+
   return (
     <div className="forensics-histogram">
-      <p className="chart-label">{title}</p>
-      <svg width={width} height={height} className="histogram-svg">
+      <div className="chart-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <p className="chart-label">{title}</p>
+        {zoomRange && (
+          <button 
+            onClick={resetZoom}
+            style={{ 
+              fontSize: '10px', 
+              padding: '2px 6px', 
+              background: '#f1f5f9', 
+              border: '1px solid #e2e8f0',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              marginBottom: '4px'
+            }}
+          >
+            Reset Zoom
+          </button>
+        )}
+      </div>
+      <svg 
+        ref={svgRef}
+        width={width} 
+        height={height} 
+        className="histogram-svg"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => setIsSelecting(false)}
+        style={{ cursor: 'crosshair' }}
+      >
         <g transform={`translate(${margin.left}, ${margin.top})`}>
+          {isSelecting && (
+            <rect
+              x={Math.min(selectionStart, selectionEnd)}
+              y={0}
+              width={Math.abs(selectionEnd - selectionStart)}
+              height={innerH}
+              fill="rgba(59, 130, 246, 0.2)"
+              stroke="#3b82f6"
+              strokeDasharray="2 2"
+            />
+          )}
+
           {/* Y-axis label (ticks removed for density) */}
           <text 
             x={-margin.left + 5} y={-10} 
@@ -136,8 +246,8 @@ const Histogram = ({
             const zRange = zMax_val - zMin_val;
             
             const h = (density / maxDensity) * (innerH - barTopPadding);
-            const x = ((z.s - zMin_val) / zRange) * innerW;
-            const w = ((z.e - z.s) / zRange) * innerW;
+            const x = zRange === 0 ? 0 : ((z.s - zMin_val) / zRange) * innerW;
+            const w = zRange === 0 ? innerW : ((z.e - z.s) / zRange) * innerW;
             const y = innerH - h;
             
             return (
@@ -151,17 +261,17 @@ const Histogram = ({
                 fillOpacity={0.8}
                 rx="1"
               >
-                <title>{`Range: ${z.s.toFixed(1)}-${z.e.toFixed(1)}${unit}\nCount: ${count}`}</title>
+                <title>{`Range: ${(z.s || 0).toFixed(1)}-${(z.e || 0).toFixed(1)}${unit}\nCount: ${count}`}</title>
               </rect>
             );
           })}
         </g>
 
         {/* X-Axis Ticks & Labels */}
-        {[0, 0.25, 0.5, 0.75, 1].map((p) => {
-          const zMin = zones[0].s;
-          const zMax = zones[zones.length - 1].e;
-          const val = zMin + p * (zMax - zMin);
+        {zones.length > 0 && [0, 0.25, 0.5, 0.75, 1].map((p) => {
+          const zMin_val = zones[0].s ?? 0;
+          const zMax_val = zones[zones.length - 1].e ?? 1;
+          const val = zMin_val + p * (zMax_val - zMin_val);
           const x = margin.left + p * innerW;
           return (
             <g key={p}>
@@ -177,20 +287,20 @@ const Histogram = ({
                 fill="#94a3b8" 
                 fontWeight="600"
               >
-                {val.toFixed(1)}{unit}
+                {typeof val === 'number' && !isNaN(val) ? (val || 0).toFixed(1) : ''}{unit}
               </text>
             </g>
           );
         })}
 
         {/* Vertical Threshold Markers */}
-        {[expectedMin, expectedMax].map((thresh, i) => {
+        {zones.length > 0 && [expectedMin, expectedMax].map((thresh, i) => {
           if (thresh === null) return null;
-          const zMin = zones[0].s;
-          const zMax = zones[zones.length - 1].e;
-          const zRange = zMax - zMin;
+          const zMin_val = zones[0].s;
+          const zMax_val = zones[zones.length - 1].e;
+          const zRange = zMax_val - zMin_val;
           if (zRange === 0) return null;
-          const x = margin.left + ((thresh - zMin) / zRange) * innerW;
+          const x = margin.left + ((thresh - zMin_val) / zRange) * innerW;
           if (x < margin.left || x > width - margin.right) return null;
           return (
             <line 
@@ -289,7 +399,7 @@ const ContrastBarChart = ({ items, mode = 'violation' }) => {
               </div>
               <div className="lift-metrics">
                 <div className={`lift-tag ${isViolation ? (lift > 1.2 ? 'high-lift' : lift < 0.8 ? 'low-lift' : '') : (lift > 1.2 ? 'high-success-lift' : lift < 0.8 ? 'low-success-lift' : '')}`}>
-                   {isViolation ? 'Failure Lift' : 'Success Lift'}: <strong>{lift.toFixed(2)}x</strong>
+                   {isViolation ? 'Failure Lift' : 'Success Lift'}: <strong>{(lift || 1).toFixed(2)}x</strong>
                 </div>
                 <div className="delta-tag">
                    {delta > 0.01 && <span className="delta-val">Δ {formatPercent(delta)}</span>}
@@ -426,12 +536,12 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
         </div>
         <div className="detail-stat">
           <label>Affected Episodes</label>
-          <span className="val">{formatPercent(constraint.episode_share)}</span>
+          <span className="val">{formatPercent(constraint.episode_share || 0)}</span>
         </div>
         <div className="detail-stat">
           <label>Failure Lift</label>
           <span className={`val ${constraint.lift_failure > 1.2 ? 'text-danger' : ''}`}>
-            {constraint.lift_failure?.toFixed(2)}x
+            {(constraint.lift_failure || 1).toFixed(2)}x
           </span>
         </div>
       </div>
@@ -453,28 +563,28 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
               Total Evaluated Episodes: <strong>{timingStats.tooEarly.count + timingStats.onTime.count + timingStats.tooLate.count}</strong>
             </div>
             <div className="breakdown-bar">
-              <div className="segment early" style={{ width: `${timingStats.tooEarly.pct}%` }} title={`Too Early: ${timingStats.tooEarly.count} episodes`}>
-                {timingStats.tooEarly.pct > 5 && <span>{timingStats.tooEarly.pct.toFixed(0)}%</span>}
+              <div className="segment early" style={{ width: `${(timingStats.tooEarly.pct || 0)}%` }} title={`Too Early: ${timingStats.tooEarly.count} episodes`}>
+                {timingStats.tooEarly.pct > 5 && <span>{(timingStats.tooEarly.pct || 0).toFixed(0)}%</span>}
               </div>
-              <div className="segment on-time" style={{ width: `${timingStats.onTime.pct}%` }} title={`On Time: ${timingStats.onTime.count} episodes`}>
-                {timingStats.onTime.pct > 5 && <span>{timingStats.onTime.pct.toFixed(0)}%</span>}
+              <div className="segment on-time" style={{ width: `${(timingStats.onTime.pct || 0)}%` }} title={`On Time: ${timingStats.onTime.count} episodes`}>
+                {timingStats.onTime.pct > 5 && <span>{(timingStats.onTime.pct || 0).toFixed(0)}%</span>}
               </div>
-              <div className="segment late" style={{ width: `${timingStats.tooLate.pct}%` }} title={`Too Late: ${timingStats.tooLate.count} episodes`}>
-                {timingStats.tooLate.pct > 5 && <span>{timingStats.tooLate.pct.toFixed(0)}%</span>}
+              <div className="segment late" style={{ width: `${(timingStats.tooLate.pct || 0)}%` }} title={`Too Late: ${timingStats.tooLate.count} episodes`}>
+                {timingStats.tooLate.pct > 5 && <span>{(timingStats.tooLate.pct || 0).toFixed(0)}%</span>}
               </div>
             </div>
             <div className="breakdown-legend">
               <div className="legend-item">
-                <span className="dot early"></span> Too Early (&lt;48h): <strong>{timingStats.tooEarly.count}</strong> ({timingStats.tooEarly.pct.toFixed(1)}%)
-                <span className="outcome-link">{timingStats.tooEarly.successPct.toFixed(0)}% success</span>
+                <span className="dot early"></span> Too Early (&lt;48h): <strong>{timingStats.tooEarly.count}</strong> ({(timingStats.tooEarly.pct || 0).toFixed(1)}%)
+                <span className="outcome-link">{(timingStats.tooEarly.successPct || 0).toFixed(0)}% success</span>
               </div>
               <div className="legend-item">
-                <span className="dot on-time"></span> On Time (48-72h): <strong>{timingStats.onTime.count}</strong> ({timingStats.onTime.pct.toFixed(1)}%)
-                <span className="outcome-link">{timingStats.onTime.successPct.toFixed(0)}% success</span>
+                <span className="dot on-time"></span> On Time (48-72h): <strong>{timingStats.onTime.count}</strong> ({(timingStats.onTime.pct || 0).toFixed(1)}%)
+                <span className="outcome-link">{(timingStats.onTime.successPct || 0).toFixed(0)}% success</span>
               </div>
               <div className="legend-item">
-                <span className="dot late"></span> Too Late (&gt;72h): <strong>{timingStats.tooLate.count}</strong> ({timingStats.tooLate.pct.toFixed(1)}%)
-                <span className="outcome-link">{timingStats.tooLate.successPct.toFixed(0)}% success</span>
+                <span className="dot late"></span> Too Late (&gt;72h): <strong>{timingStats.tooLate.count}</strong> ({(timingStats.tooLate.pct || 0).toFixed(1)}%)
+                <span className="outcome-link">{(timingStats.tooLate.successPct || 0).toFixed(0)}% success</span>
               </div>
             </div>
           </div>
@@ -571,18 +681,18 @@ const OutcomeScatterPlot = ({ items, mode = 'violation' }) => {
                         : '#64748b';
 
             return (
-              <circle
-                key={item.constraint_id}
-                cx={x}
-                cy={y}
-                r="6"
-                fill={color}
-                stroke="#fff"
-                strokeWidth="1.5"
-                className="scatter-dot"
-              >
-                <title>{`${item.constraint_label}\nSuccess ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(xVal)}\nFailure ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(yVal)}\n${isViolation ? 'Failure Lift' : 'Success Lift'}: ${lift.toFixed(2)}x`}</title>
-              </circle>
+                <circle
+                  key={item.constraint_id}
+                  cx={x}
+                  cy={y}
+                  r="6"
+                  fill={color}
+                  stroke="#fff"
+                  strokeWidth="1.5"
+                  className="scatter-dot"
+                >
+                  <title>{`${item.constraint_label}\nSuccess ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(xVal)}\nFailure ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(yVal)}\n${isViolation ? 'Failure Lift' : 'Success Lift'}: ${(lift || 1).toFixed(2)}x`}</title>
+                </circle>
             );
           })}
         </g>
