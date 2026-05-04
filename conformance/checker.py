@@ -227,6 +227,12 @@ def _build_eval_context(
     invasive_vent_ts = intubation_ts
 
     # Calculate time elapsed since clinical events
+    # stay_start is the first event in the trace (trace_df is already sorted)
+    stay_start_ts = trace_df.iloc[0]["timestamp"] if not trace_df.empty else None
+    hours_since_stay_start = (
+        float((eval_ts - stay_start_ts).total_seconds()) / 3600.0 if stay_start_ts is not None else 0.0
+    )
+
     hours_since_intubation = (
         float((eval_ts - intubation_ts).total_seconds()) / 3600.0 if intubation_ts is not None else 0.0
     )
@@ -267,6 +273,7 @@ def _build_eval_context(
 
     return {
         "items": items,
+        "hours_since_stay_start": hours_since_stay_start,
         "hours_since_intubation": hours_since_intubation,
         "ventilation_duration_hours": ventilation_duration_hours,
         "previous_SBT_failed": bool(sbt_failed_prior),
@@ -393,6 +400,7 @@ def _evaluate_data_condition_status(
     # Set up local namespace with all available variables for eval()
     local_scope = {
         "__item": __item,
+        "hours_since_stay_start": ctx["hours_since_stay_start"],
         "hours_since_intubation": ctx["hours_since_intubation"],
         "ventilation_duration_hours": ctx["ventilation_duration_hours"],
         "previous_SBT_failed": ctx["previous_SBT_failed"],
@@ -405,7 +413,7 @@ def _evaluate_data_condition_status(
     }
     
     # Also add non-item variables to extracted values
-    for k in ["hours_since_intubation", "ventilation_duration_hours", "sbt_duration_min"]:
+    for k in ["hours_since_stay_start", "hours_since_intubation", "ventilation_duration_hours", "sbt_duration_min"]:
         extracted_values[k] = local_scope[k]
 
     # Convert to Python syntax and evaluate
@@ -552,8 +560,24 @@ def _evaluate_constraint_impl(
 
         delta_seconds = float((target_ts - activation_ts).total_seconds())
         time_delta = delta_seconds if directional_time else abs(delta_seconds)
-        if not _within_time_window(time_delta, constraint):
-            return False, None, time_delta, {}
+
+        # Custom logic for "Next Day" requirement in RC-TM-02
+        if cid == "RC-TM-02":
+            act_date = activation_ts.date()
+            target_date = target_ts.date()
+            # If target is on the same day or further than next day, it's not a "next day" match
+            if target_date <= act_date:
+                return False, None, time_delta, {}
+            # If target is after the next day, we might still consider it a match but the 
+            # constraint might want strictly NEXT day. Usually "sometime in the next day"
+            # implies the date is act_date + 1 day.
+            if (target_date - act_date).days != 1:
+                return False, None, time_delta, {}
+            # If it is the next day, it satisfies the "between 00:00 and 23:59" naturally by being on that date.
+            # We skip the normal _within_time_window check for this specific CID if date logic is preferred.
+        else:
+            if not _within_time_window(time_delta, constraint):
+                return False, None, time_delta, {}
 
         if constraint.correlation_cond is not None:
             corr_ok, corr_err, corr_values = _evaluate_data_condition(

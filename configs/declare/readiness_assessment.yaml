@@ -191,24 +191,21 @@ model:
         readiness determination.
 
     - id: RC-TM-02
-      label: "Repeated SBT attempts at least 24 h apart after failure"
+      label: "Repeated SBT attempts on the next calendar day after failure"
       template: TIMED_RESPONSE
       activation: SBTStarted
       target: SBTStarted
-      min_gap_hours: 24
       condition_on_activation: "previous_SBT_failed == True"
       rationale: >
-        After SBT failure, the next attempt must be separated by at least 24 h,
-        matched with spontaneous awakening trials (sedation vacations).
+        After SBT failure, the next attempt must be sometime on the next day
+        (between 00:00 and 23:59 of the following day).
 
     - id: RC-TM-03
-      label: "SBT should be attempted 48-72 h after invasive ventilation start"
-      template: TIMED_RESPONSE
-      activation: InvasiveVentilationStarted
-      target: SBTStarted
-      min_gap_hours: 48
-      max_gap_hours: 72
+      label: "SBT should be attempted max 72 h after stay start"
+      template: MP_EXISTENCE
+      activation: SBTStarted
+      activation_condition: "hours_since_stay_start > 72"
+      semantics: ACTIVATION_VIOLATION
       rationale: >
-        Trigger-based episodes require a weaning attempt to be documented after
-        an initial stabilization period and no later than 72 h from invasive
-        ventilation start.
+        Trigger-based episodes require a weaning attempt to be documented
+        no later than 72 h from the first recorded event in the stay.
