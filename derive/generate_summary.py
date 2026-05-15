@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pandas as pd
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,31 @@ def safe_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def safe_float_or_none(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip().upper() == "NA":
+            return None
+        converted = float(value)
+        if converted != converted:
+            return None
+        return converted
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    value_str = str(value).strip().lower()
+    return value_str in {"true", "t", "1", "yes", "y"}
 
 
 def infer_input_dir(project_root: Path) -> Path:
@@ -67,7 +93,39 @@ def _load_item_labels(project_root: Path) -> dict[str, str]:
         return {}
 
 
-def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
+def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | None = None) -> dict[str, Any]:
+    # Load stats if provided
+    stats_map = {}
+    if stats_csv and stats_csv.exists():
+        try:
+            df_stats = pd.read_csv(stats_csv)
+            # Map rule_name to a subset of statistical metrics
+            for _, row in df_stats.iterrows():
+                cid = str(row.get("rule_name", ""))
+                if cid:
+                    stats_map[cid] = {
+                        "n_exposed": safe_float_or_none(row.get("n_exposed")),
+                        "n_unexposed": safe_float_or_none(row.get("n_unexposed")),
+                        "a": safe_float_or_none(row.get("a")),
+                        "b": safe_float_or_none(row.get("b")),
+                        "c": safe_float_or_none(row.get("c")),
+                        "d": safe_float_or_none(row.get("d")),
+                        "fisher_p": safe_float_or_none(row.get("fisher_p")),
+                        "odds_ratio": safe_float_or_none(row.get("or")),
+                        "odds_ratio_low": safe_float_or_none(row.get("or_low")),
+                        "odds_ratio_high": safe_float_or_none(row.get("or_high")),
+                        "risk_ratio": safe_float_or_none(row.get("rr")),
+                        "rr_ci_low": safe_float_or_none(row.get("rr_low")),
+                        "rr_ci_high": safe_float_or_none(row.get("rr_high")),
+                        "p_value_raw": safe_float_or_none(row.get("fisher_p")),
+                        "p_value_bonf": safe_float_or_none(row.get("p_bonf")),
+                        "p_value_fdr": safe_float_or_none(row.get("p_fdr")),
+                        "is_significant_bonf": safe_bool(row.get("sig_bonf")),
+                        "is_significant": safe_bool(row.get("sig_fdr"))
+                    }
+        except Exception as e:
+            print(f"Warning: Failed to load stats CSV: {e}")
+
     all_episodes: list[dict[str, Any]] = []
     stay_to_episodes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     violation_counter: Counter[str] = Counter()
@@ -233,8 +291,7 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
         forensics_v = summarize_agg(violation_forensics_agg[cid])
         forensics_s = summarize_agg(satisfaction_forensics_agg[cid])
 
-        violation_frequency.append(
-            {
+        entry = {
                 "constraint_id": cid,
                 "constraint_label": constraint_labels.get(cid, cid),
                 "rationale": constraint_metas.get(cid, {}).get("rationale", ""),
@@ -265,7 +322,29 @@ def build_summary(case_files: list[Path], input_dir: Path) -> dict[str, Any]:
                     "satisfaction": forensics_s
                 }
             }
-        )
+        
+        # Merge stats for this constraint
+        entry.update(stats_map.get(cid, {
+            "n_exposed": None,
+            "n_unexposed": None,
+            "a": None,
+            "b": None,
+            "c": None,
+            "d": None,
+            "fisher_p": None,
+            "odds_ratio": None, 
+            "odds_ratio_low": None,
+            "odds_ratio_high": None,
+            "risk_ratio": None,
+            "rr_ci_low": None,
+            "rr_ci_high": None,
+            "p_value_raw": None,
+            "p_value_bonf": None,
+            "p_value_fdr": None, 
+            "is_significant_bonf": False,
+            "is_significant": False
+        }))
+        violation_frequency.append(entry)
 
     readiness_bottlenecks: list[dict[str, Any]] = []
     for cid, count in readiness_counter.most_common():
@@ -361,6 +440,12 @@ def main() -> None:
         help="Directory containing case_*.json files (default: frontend/public/data if present, else frontend/src/data)",
     )
     parser.add_argument(
+        "--stats-csv",
+        type=Path,
+        default=None,
+        help="Optional CSV file containing statistical results (OR/p-values)",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -376,7 +461,7 @@ def main() -> None:
     if not case_files:
         raise FileNotFoundError(f"No case_*.json files found in: {input_dir}")
 
-    summary = build_summary(case_files, input_dir)
+    summary = build_summary(case_files, input_dir, args.stats_csv)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8") as handle:

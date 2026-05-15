@@ -8,6 +8,7 @@ was recorded.
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -518,14 +519,32 @@ def main() -> None:
     # Calculate path relative to this script's location to be robust
     base_path = Path(__file__).resolve().parent
     frontend_data_dir = base_path / "frontend" / "public" / "data"
-    
+    stats_table_path = args.output.parent / "statistical_analysis_table.csv"
+    stats_summary_path = args.output.parent / "rule_statistics_R.csv"
+
+    r_script = base_path / "statistics_R.r"
+    if not r_script.exists():
+        raise FileNotFoundError(f"Missing R statistics script: {r_script}")
+
+    subprocess.run(
+        [
+            "Rscript",
+            str(r_script),
+            str(args.output),
+            str(stats_table_path),
+            str(stats_summary_path),
+        ],
+        check=True,
+        cwd=base_path,
+    )
+
     export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
-    
+
     # --- AUTOMATIC SUMMARY GENERATION ---
     from derive.generate_summary import build_summary
     case_files = sorted(frontend_data_dir.glob("case_*.json"))
     if case_files:
-        summary = build_summary(case_files, frontend_data_dir)
+        summary = build_summary(case_files, frontend_data_dir, stats_summary_path if stats_summary_path.exists() else None)
         summary_file = frontend_data_dir / "summary.json"
         with summary_file.open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
