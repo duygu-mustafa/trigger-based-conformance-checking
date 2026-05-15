@@ -58,7 +58,20 @@ python prepare_event_log.py \
 | `--sample-source` | `sbt_started_yes_stay_ids.parquet` | Parquet file with candidate stay_ids |
 | `--sample-size` | 1000 | Number of random stays to process |
 | `--sample-seed` | 42 | Random seed for reproducibility |
+| `--source-table-filter` | _none_ | Restrict stays to those that contain a given raw `source_table`, such as `ventilator_setting` |
 | `--memory-limit` | `4GB` | DuckDB memory limit |
+| `--resume` | off | Resume an interrupted run from checkpoint state and temp DB |
+| `--state-file` | `<output>.state.json` | Path to checkpoint state JSON |
+| `--backup-every` | 200 | Write periodic checkpoint exports every N processed stays (0 disables) |
+| `--backup-dir` | `<output_parent>/<output_stem>_checkpoints` | Directory for checkpoint export files |
+| `--seed-checkpoint` | _none_ | Seed the output table from an existing parquet checkpoint before continuing |
+| `--seed-skip-count` | _none_ | Skip the first N candidate stays when starting from a seeded checkpoint |
+
+To process only stays that have ventilator-setting rows in the materialized raw file, add:
+
+```bash
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --source-table-filter ventilator_setting
+```
 
 ### Processing Pipeline
 
@@ -99,6 +112,50 @@ The pipeline (`derive/pipeline.py`) performs these steps for each stay:
 ### Output
 - `icu_event_log.parquet` — Canonical event log ready for conformance checking
 - Temporary DuckDB files created and cleaned up automatically
+
+### Safe Long-Run Execution on Linux
+
+For long runs, use `tmux` so the process survives terminal disconnects.
+
+```bash
+tmux new -s eventlog
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --backup-every 200
+# detach with Ctrl+b then d
+```
+
+Reattach later:
+
+```bash
+tmux attach -t eventlog
+```
+
+If the job is interrupted, resume where it left off:
+
+```bash
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --resume
+```
+
+Alternative without tmux (`nohup`):
+
+```bash
+nohup python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --backup-every 200 > prepare_event_log.out 2>&1 &
+```
+
+Convenience launcher script (tmux first, nohup fallback):
+
+```bash
+./run_event_log_safe.sh
+./run_event_log_safe.sh --resume
+./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+```
+
+The script writes timestamped logs under `logs/`, starts in a detached `tmux` session when available, and supports pass-through options like `--input`, `--output`, `--backup-every`, `--state-file`, `--backup-dir`, `--memory-limit`, `--seed-checkpoint`, and `--seed-skip-count`.
+
+To restart from the 10,000-stay checkpoint and continue the full build, use:
+
+```bash
+./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+```
 
 ### Configuration Files
 - `configs/activity_mapping.yaml` — Maps raw source/itemid/value combinations to semantic activities
