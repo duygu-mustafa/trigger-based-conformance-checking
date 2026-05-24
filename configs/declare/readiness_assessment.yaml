@@ -191,14 +191,36 @@ model:
         readiness determination.
 
     - id: RC-TM-02
-      label: "Repeated SBT attempts on the next calendar day after failure"
-      template: TIMED_RESPONSE
-      activation: SBTStarted
+      label: "After SBT failure, the next SBT attempt must occur on the following calendar day"
+      template: MP_RESPONSE
+      activation: SBTFailed
       target: SBTStarted
-      condition_on_activation: "previous_SBT_failed == True"
+      correlation_condition: "date(target_ts) == date(activation_ts) + timedelta(days=1)"
+      semantics: TARGET_VIOLATION
       rationale: >
-        After SBT failure, the next attempt must be sometime on the next day
-        (between 00:00 and 23:59 of the following day).
+        A failed SBT creates an obligation for a repeated trial on the following
+        calendar day. Same-day retries and delays beyond the next day are treated
+        as deviations.
+
+    - id: RC-TM-02-early
+      label: "After SBT failure, the next SBT attempt must not occur on the same calendar day"
+      template: NOT_RESPONSE
+      activation: SBTFailed
+      target: SBTStarted
+      correlation_condition: "date(target_ts) == date(activation_ts)"
+      semantics: TARGET_VIOLATION
+      rationale: >
+        Same-day retries are too early and treated as deviations to avoid patient fatigue.
+
+    - id: RC-TM-02-late
+      label: "After SBT failure, the next SBT attempt must occur no later than the following calendar day"
+      template: MP_RESPONSE
+      activation: SBTFailed
+      target: SBTStarted
+      correlation_condition: "date(target_ts) <= date(activation_ts) + timedelta(days=1)"
+      semantics: TARGET_VIOLATION
+      rationale: >
+        Delaying the repeated trial beyond the next calendar day is treated as a deviation.
 
     - id: RC-TM-03
       label: "SBT should be attempted max 72 h after stay start"

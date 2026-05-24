@@ -174,3 +174,22 @@ constraints:
                                           'DEXAMETHASONE', 'LEVOTHYROXINE SODIUM'])
     max_gap_hours: 24
     semantics: TARGET_VIOLATION
+
+  - id: INT-SEQ-01
+    label: "Electrolyte correction must be preceded by electrolyte or blood gas testing"
+    template: PRECEDENCE
+    activation: ElectrolyteBG_Test
+    target: ElectrolyteCorrection_Admin
+    rationale: >
+      Post-SBT failure electrolyte replacement should be informed by
+      recent laboratory assessment of electrolytes or blood gases in
+      the same stay, rather than occurring without prior testing.
+  
+  - id: INT-SEQ-02
+    label: "Hormonal replacement must be preceded by hormonal diagnostic testing"
+    template: PRECEDENCE
+    activation: HormonalLab_Test
+    target: HormonalReplacement_Admin
+    rationale: >
+      Endocrine replacement after SBT failure should follow diagnostic
+      evaluation for adrenal or thyroid dysfunction.
