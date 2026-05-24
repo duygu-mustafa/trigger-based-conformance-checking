@@ -297,13 +297,34 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 
         stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
         stay_conformance = stay_conformance_df.to_dict(orient="records")
-        
+
+        # Build aggregated violated/satisfied rule lists for this case
+        def _parse_semicolon_list(val):
+            if not val:
+                return []
+            if isinstance(val, list):
+                return [str(v) for v in val]
+            try:
+                return [token.strip() for token in str(val).split(";") if token.strip()]
+            except Exception:
+                return []
+
+        violated_set: set[str] = set()
+        satisfied_set: set[str] = set()
+        for ep in stay_conformance:
+            violated_set.update(_parse_semicolon_list(ep.get("mandatory_violated_constraints")))
+            violated_set.update(_parse_semicolon_list(ep.get("info_violated_constraints")))
+            satisfied_set.update(_parse_semicolon_list(ep.get("mandatory_satisfied_constraints")))
+            satisfied_set.update(_parse_semicolon_list(ep.get("info_satisfied_constraints")))
+
         # Final JSON structure
         case_json = {
             "case_id": str(stay_id),
             "events": df_stay.to_dict(orient="records"),
             "conformance": stay_conformance,
-            "constraint_definitions": constraint_defs
+            "constraint_definitions": constraint_defs,
+            "violated_rules": sorted(list(violated_set)),
+            "satisfied_rules": sorted(list(satisfied_set)),
         }
         
         output_file = output_dir / f"case_{stay_id}.json"
@@ -520,7 +541,7 @@ def main() -> None:
     base_path = Path(__file__).resolve().parent
     frontend_data_dir = base_path / "frontend" / "public" / "data"
     stats_table_path = args.output.parent / "statistical_analysis_table.csv"
-    stats_summary_path = args.output.parent / "rule_statistics_R.csv"
+    stats_summary_path = args.output.parent / "rule_statistics_R2.csv"
 
     r_script = base_path / "statistics_R.r"
     if not r_script.exists():
@@ -538,7 +559,9 @@ def main() -> None:
         cwd=base_path,
     )
 
-    export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
+    # Filter to only stays with actual conformance results
+    stays_with_results = sorted(set(output_df["stay_id"].unique()))
+    export_to_frontend(runner, stays_with_results, output_df, frontend_data_dir)
 
     # --- AUTOMATIC SUMMARY GENERATION ---
     from derive.generate_summary import build_summary

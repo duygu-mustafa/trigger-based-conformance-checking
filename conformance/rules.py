@@ -182,7 +182,7 @@ def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> Dec
         "condition_on_activation",
         "guard",
     )
-    correlation_cond = _pick_first(raw, "correlation_cond", "target_condition")
+    correlation_cond = _pick_first(raw, "correlation_cond", "target_condition", "correlation_condition")
     activation_cond = _expand_condition_expr(activation_cond, condition_map)
     correlation_cond = _expand_condition_expr(correlation_cond, condition_map)
     time_condition = _build_time_condition(raw)

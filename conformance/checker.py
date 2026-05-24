@@ -315,6 +315,7 @@ def _evaluate_data_condition(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
+    target_ts: pd.Timestamp | None = None,
     observation_window_hours: float | None = None,
 ) -> tuple[bool, str | None, dict[str, float]]:
     value, _, error, values = _evaluate_data_condition_status(
@@ -322,6 +323,7 @@ def _evaluate_data_condition(
         row,
         expression,
         activation_ts=activation_ts,
+        target_ts=target_ts,
         observation_window_hours=observation_window_hours,
     )
     return value, error, values
@@ -332,19 +334,22 @@ def _evaluate_data_condition_status(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
+    target_ts: pd.Timestamp | None = None,
     observation_window_hours: float | None = None,
 ) -> tuple[bool, bool, str | None, dict[str, float]]:
     """Evaluate a data condition expression against event log state at a point in time.
 
     Parses and executes a Declare data condition (e.g., "items[225792] > 10") in the
     context of a specific event. Variables available in conditions include medical
-    items, time durations, and SBT history flags.
+    items, time durations, SBT history flags, and temporal references.
 
     Args:
         trace_df: Full event log DataFrame for building evaluation context.
         row: The event row at which to evaluate the condition.
         expression: Declare data condition expression string (e.g., "items[12345] == 'value'").
         activation_ts: Optional explicit timestamp for SBT activation tracking.
+        target_ts: Optional explicit timestamp for target event (for correlation conditions).
+        observation_window_hours: Optional window in hours for observation-based conditions.
 
     Returns:
         Tuple of (evaluation_result, is_vacuous, error_message, values):
@@ -397,9 +402,26 @@ def _evaluate_data_condition_status(
         extracted_values[str(key)] = val
         return val
 
+    # Helper functions for date arithmetic
+    def __date(ts: object) -> object:
+        """Extract date from a Timestamp or datetime object."""
+        if isinstance(ts, pd.Timestamp):
+            return ts.date()
+        if hasattr(ts, 'date'):
+            return ts.date()
+        return None
+    
+    def __timedelta(**kwargs) -> object:
+        """Create a timedelta object for date arithmetic."""
+        return pd.Timedelta(**kwargs)
+
     # Set up local namespace with all available variables for eval()
     local_scope = {
         "__item": __item,
+        "__date": __date,
+        "__timedelta": __timedelta,
+        "date": __date,
+        "timedelta": __timedelta,
         "hours_since_stay_start": ctx["hours_since_stay_start"],
         "hours_since_intubation": ctx["hours_since_intubation"],
         "ventilation_duration_hours": ctx["ventilation_duration_hours"],
@@ -408,6 +430,8 @@ def _evaluate_data_condition_status(
         "high_risk_flag": ctx["high_risk_flag"],
         "vent_mode": ctx["vent_mode"],
         "sbt_duration_min": ctx["sbt_duration_min"],
+        "activation_ts": activation_ts,
+        "target_ts": target_ts,
         "True": True,
         "False": False,
     }
@@ -561,23 +585,8 @@ def _evaluate_constraint_impl(
         delta_seconds = float((target_ts - activation_ts).total_seconds())
         time_delta = delta_seconds if directional_time else abs(delta_seconds)
 
-        # Custom logic for "Next Day" requirement in RC-TM-02
-        if cid == "RC-TM-02":
-            act_date = activation_ts.date()
-            target_date = target_ts.date()
-            # If target is on the same day or further than next day, it's not a "next day" match
-            if target_date <= act_date:
-                return False, None, time_delta, {}
-            # If target is after the next day, we might still consider it a match but the 
-            # constraint might want strictly NEXT day. Usually "sometime in the next day"
-            # implies the date is act_date + 1 day.
-            if (target_date - act_date).days != 1:
-                return False, None, time_delta, {}
-            # If it is the next day, it satisfies the "between 00:00 and 23:59" naturally by being on that date.
-            # We skip the normal _within_time_window check for this specific CID if date logic is preferred.
-        else:
-            if not _within_time_window(time_delta, constraint):
-                return False, None, time_delta, {}
+        if not _within_time_window(time_delta, constraint):
+            return False, None, time_delta, {}
 
         if constraint.correlation_cond is not None:
             corr_ok, corr_err, corr_values = _evaluate_data_condition(
@@ -585,6 +594,7 @@ def _evaluate_constraint_impl(
                 target_row,
                 constraint.correlation_cond.expression,
                 activation_ts=activation_ts,
+                target_ts=target_ts,
             )
             if corr_err is not None:
                 return False, corr_err, time_delta, corr_values
@@ -758,6 +768,7 @@ def _evaluate_constraint_impl(
         first_match_target_ts = None
         first_corr_error = None
         violation_deltas = {}
+        satisfaction_deltas = {}
         delay_seconds = None
 
         for i, (_, act_row) in enumerate(act_rows.iterrows()):

@@ -10,12 +10,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
 INPUT="data/icu_event_level_sbt.parquet"
-OUTPUT="data/icu_event_log.parquet"
+OUTPUT="data/icu_event_log_full.parquet"
 BACKUP_EVERY=200
 SESSION_NAME="eventlog"
 STATE_FILE=""
 BACKUP_DIR=""
 MEMORY_LIMIT=""
+SOURCE_TABLE_FILTER=""
 RESUME=0
 DRY_RUN=0
 FORCE_NOHUP=0
@@ -29,10 +30,11 @@ Usage:
 
 Options:
   --input PATH            Input raw events file (default: data/icu_event_level_sbt.parquet)
-  --output PATH           Output event log file (default: data/icu_event_log.parquet)
+  --output PATH           Output event log file (default: data/icu_event_log_full.parquet)
   --backup-every N        Backup checkpoint interval (default: 200)
   --resume                Resume from existing state/temp DB
   --state-file PATH       Custom state file path
+  --source-table-filter X  Restrict to a raw source_table; default is no filter (full dataset)
   --backup-dir PATH       Custom backup directory path
   --memory-limit VALUE    Pass through to --memory-limit (e.g., 4GB)
   --seed-checkpoint PATH  Seed the run from an existing parquet checkpoint
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --memory-limit)
       MEMORY_LIMIT="$2"
+      shift 2
+      ;;
+    --source-table-filter)
+      SOURCE_TABLE_FILTER="$2"
       shift 2
       ;;
     --seed-checkpoint)
@@ -145,7 +151,13 @@ mkdir -p "$LOG_DIR"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/prepare_event_log_${TIMESTAMP}.log"
 
-CMD=("$PYTHON_BIN" "$ROOT_DIR/prepare_event_log.py" "--input" "$INPUT" "--output" "$OUTPUT" "--backup-every" "$BACKUP_EVERY")
+CMD=("$PYTHON_BIN" "$ROOT_DIR/prepare_event_log.py" "--input" "$INPUT" "--output" "$OUTPUT" "--backup-every" "$BACKUP_EVERY" "--use-all-data")
+
+if [[ -n "$SOURCE_TABLE_FILTER" ]]; then
+  CMD+=("--source-table-filter" "$SOURCE_TABLE_FILTER")
+else
+  CMD+=("--source-table-filter" "")
+fi
 
 if [[ "$RESUME" -eq 1 ]]; then
   CMD+=("--resume")

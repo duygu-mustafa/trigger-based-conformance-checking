@@ -628,6 +628,9 @@ def main() -> None:
 
             processed_stays.add(stay_id)
             processed_count = len(processed_stays)
+            # Include any seeded skip count so checkpoint filenames reflect absolute progress
+            total_processed = processed_count + (effective_seed_skip_count or 0)
+
             _write_json_atomic(
                 state_path,
                 {
@@ -645,14 +648,15 @@ def main() -> None:
                 },
             )
 
-            if args.backup_every > 0 and created_table and (processed_count % args.backup_every == 0 or idx == len(pending_stay_ids)):
+            # Use absolute processed count (including seed offset) for export trigger and filename
+            if args.backup_every > 0 and created_table and (total_processed % args.backup_every == 0 or idx == len(pending_stay_ids)):
                 _export_checkpoint_backup(
                     output_con=output_con,
                     output_path=args.output,
                     backup_dir=backup_dir,
-                    processed_count=processed_count,
+                    processed_count=total_processed,
                 )
-                print(f"Checkpoint backup saved at processed={processed_count}: {backup_dir}")
+                print(f"Checkpoint backup saved at processed={total_processed}: {backup_dir}")
 
         if not created_table:
             raise RuntimeError("No event-log rows were generated from input")

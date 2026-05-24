@@ -390,6 +390,10 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
         for ep in episodes:
             violated_constraints.update(parse_constraint_list(ep.get("mandatory_violated_constraints")))
 
+        satisfied_constraints: set[str] = set()
+        for ep in episodes:
+            satisfied_constraints.update(parse_constraint_list(ep.get("mandatory_satisfied_constraints")))
+
         overall_outcome = "Mixed/Unknown"
         if success_count > 0 and failure_count == 0:
             overall_outcome = "Success"
@@ -411,6 +415,8 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
                 "avg_mandatory_violations": round((total_viol / len(episodes)), 3) if episodes else 0.0,
                 "avg_mandatory_satisfactions": round((total_sat / len(episodes)), 3) if episodes else 0.0,
                 "violated_constraints_count": len(violated_constraints),
+                "violated_constraints": sorted(list(violated_constraints)),
+                "satisfied_constraints": sorted(list(satisfied_constraints)),
             }
         )
 
