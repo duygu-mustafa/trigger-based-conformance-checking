@@ -12,6 +12,8 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   const [subTab, setSubTab] = useState('dashboard'); // 'dashboard' or 'stats'
   const [selectedConstraintId, setSelectedConstraintId] = useState(null);
   const [forensicsSidebarWidth, setForensicsSidebarWidth] = useState(550);
+  const [selectedRules, setSelectedRules] = useState([]);
+  const [ruleFilterMode, setRuleFilterMode] = useState('violated'); // 'violated' | 'satisfied' | 'both'
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const isResizing = React.useRef(false);
@@ -86,9 +88,23 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
     const rows = [...(summaryData?.stay_summaries || [])];
     const normalizedQuery = query.trim().toLowerCase();
 
-    const filtered = normalizedQuery
+    let filtered = normalizedQuery
       ? rows.filter(row => String(row.stay_id).toLowerCase().includes(normalizedQuery))
       : rows;
+
+    // Apply rule-based filtering (OR semantics)
+    if (selectedRules && selectedRules.length > 0) {
+      const sel = selectedRules;
+      filtered = filtered.filter(row => {
+        const v = row.violated_constraints || [];
+        const s = row.satisfied_constraints || [];
+        return sel.some(cid => {
+          if (ruleFilterMode === 'violated') return v.includes(cid);
+          if (ruleFilterMode === 'satisfied') return s.includes(cid);
+          return v.includes(cid) || s.includes(cid);
+        });
+      });
+    }
 
     filtered.sort((a, b) => {
       if (sortBy === 'stay_id') return String(a.stay_id).localeCompare(String(b.stay_id));
@@ -105,6 +121,27 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
     const start = (currentPage - 1) * pageSize;
     return allFilteredStays.slice(start, start + pageSize);
   }, [allFilteredStays, currentPage, pageSize]);
+
+  const openFirstMatch = () => {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery || allFilteredStays.length === 0) return;
+
+    const exactMatch = allFilteredStays.find(
+      (row) => String(row.stay_id).toLowerCase() === normalizedQuery.toLowerCase()
+    );
+    const target = exactMatch || allFilteredStays[0];
+
+    if (target) {
+      onSelectStay?.(String(target.stay_id));
+    }
+  };
+
+  const handleSearchKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      openFirstMatch();
+    }
+  };
 
   const outcomeStats = summaryData?.conformance_vs_outcome || {};
   const successStats = outcomeStats.success || {};
@@ -257,8 +294,17 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search stay ID..."
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search case ID..."
             />
+            <button
+              type="button"
+              className="pag-btn"
+              disabled={!query.trim() || totalResults === 0}
+              onClick={openFirstMatch}
+            >
+              Open first match
+            </button>
             <select
               className="summary-select"
               value={sortBy}
@@ -269,6 +315,26 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
               <option value="episodes">Sort: Episode Count</option>
               <option value="overall_outcome">Sort: Overall Outcome</option>
               <option value="stay_id">Sort: Stay ID</option>
+            </select>
+            <select
+              className="summary-select"
+              value={ruleFilterMode}
+              onChange={(e) => setRuleFilterMode(e.target.value)}
+            >
+              <option value="violated">Filter Mode: Violated</option>
+              <option value="satisfied">Filter Mode: Satisfied</option>
+              <option value="both">Filter Mode: Either</option>
+            </select>
+            <select
+              multiple
+              size={3}
+              className="summary-select"
+              value={selectedRules}
+              onChange={(e) => setSelectedRules(Array.from(e.target.selectedOptions).map(o => o.value))}
+            >
+              {(summaryData?.violation_frequency || []).map(v => (
+                <option key={v.constraint_id} value={v.constraint_id}>{v.constraint_id} — {v.constraint_label}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -283,6 +349,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
                 <th>Total Violations</th>
                 <th>Avg Violations</th>
                 <th>Unique Violated Constraints</th>
+                <th>Violations</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -295,6 +362,10 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
                   <td>{row.total_mandatory_violations}</td>
                   <td>{Number(row.avg_mandatory_violations || 0).toFixed(2)}</td>
                   <td>{row.violated_constraints_count}</td>
+                  <td>
+                    {(row.violated_constraints || []).slice(0,2).join(', ')}
+                    {((row.violated_constraints || []).length > 2) ? ` (+${(row.violated_constraints || []).length - 2})` : ''}
+                  </td>
                   <td>
                     <button
                       className="open-stay-button"

@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import Timeline from './components/Timeline'
 import SummaryView from './components/SummaryView'
+import RulesOverview from './components/RulesOverview'
 
 function App() {
   const [activeView, setActiveView] = useState('summary')
   const [caseIds, setCaseIds] = useState([])
   const [caseId, setCaseId] = useState('')
+  const [hasInitializedSelection, setHasInitializedSelection] = useState(false)
   const [caseData, setCaseData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [summaryData, setSummaryData] = useState(null)
@@ -20,21 +22,36 @@ function App() {
       .then(res => res.json())
       .then(data => {
         setCaseIds(data.cases)
-        if (data.cases.length > 0) {
-          // Prefer 35616431 as default if it exists
-          const preferredDefault = '35616431'
-          if (data.cases.includes(preferredDefault)) {
-            setCaseId(preferredDefault)
-          } else {
-            setCaseId(data.cases[0])
-          }
-        }
       })
       .catch(err => {
         console.error("Failed to load manifest:", err)
         setError("Could not load case manifest. Make sure you've run the conformance script.")
       })
   }, [])
+
+  useEffect(() => {
+    if (hasInitializedSelection || caseIds.length === 0) return
+
+    const params = new URLSearchParams(window.location.search)
+    const requestedCaseId = params.get('caseId')
+    const preferredDefault = '35616431'
+    const defaultCaseId = caseIds.includes(preferredDefault) ? preferredDefault : caseIds[0]
+    const initialCaseId = requestedCaseId && caseIds.includes(requestedCaseId)
+      ? requestedCaseId
+      : defaultCaseId
+
+    setCaseId(initialCaseId)
+    setActiveView(requestedCaseId && caseIds.includes(requestedCaseId) ? 'timeline' : 'summary')
+    setHasInitializedSelection(true)
+  }, [caseIds, hasInitializedSelection])
+
+  useEffect(() => {
+    if (!caseId || activeView !== 'timeline') return
+
+    const url = new URL(window.location.href)
+    url.searchParams.set('caseId', caseId)
+    window.history.replaceState({}, '', `${url.pathname}?${url.searchParams.toString()}${url.hash}`)
+  }, [activeView, caseId])
 
   useEffect(() => {
     fetch('/data/summary.json')
@@ -102,6 +119,13 @@ function App() {
             >
               Patient Timeline
             </button>
+            <button
+              type="button"
+              className={activeView === 'rules' ? 'view-tab active' : 'view-tab'}
+              onClick={() => setActiveView('rules')}
+            >
+              Rules Reference
+            </button>
           </div>
         </div>
         {activeView === 'timeline' ? (
@@ -121,7 +145,15 @@ function App() {
       </header>
 
       <main className="visualization-area">
-        {activeView === 'summary' ? (
+        {activeView === 'rules' ? (
+          summaryLoading ? (
+            <div className="loading-spinner">Loading rules reference...</div>
+          ) : summaryError ? (
+            <div className="error-message">{summaryError}</div>
+          ) : (
+            <RulesOverview summaryData={summaryData} />
+          )
+        ) : activeView === 'summary' ? (
           summaryLoading ? (
             <div className="loading-spinner">Loading global summary...</div>
           ) : summaryError ? (

@@ -131,9 +131,9 @@ const StatsDeepDive = ({ summaryData }) => {
                 <tr key={item.constraint_id} className={rowClass}>
                   <td>
                     <div className="rule-cell">
-                      <span className="id-badge">{item.constraint_id}</span>
-                      <span className="rule-label">{item.constraint_label}</span>
-                    </div>
+                          <span className="id-badge">{item.constraint_id}</span>{' '}
+                          <span className="rule-label">{item.constraint_label}</span>
+                        </div>
                   </td>
                   <td>{item.template}</td>
                   <td className="val-cell">{formatCount(item.n_exposed)}</td>
