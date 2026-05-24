@@ -1,27 +1,139 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { getConstraintIcon, formatPercent } from './SummaryView/utils';
 import ContrastBarChart from './SummaryView/ContrastBarChart';
 import ConstraintDetailView from './SummaryView/ConstraintDetailView';
 import OutcomeScatterPlot from './SummaryView/OutcomeScatterPlot';
 import StatsDeepDive from './SummaryView/StatsDeepDive';
 
+const DEFAULT_STAY_SORT_BY = 'total_mandatory_violations';
+const SORT_LABEL_MAP = {
+  total_mandatory_violations: 'Total Violations',
+  avg_mandatory_violations: 'Avg Violations',
+  episodes: 'Episode Count',
+  overall_outcome: 'Overall Outcome',
+  stay_id: 'Stay ID',
+};
+
+const RULE_MODE_LABEL_MAP = {
+  violated: 'Violated',
+  satisfied: 'Satisfied',
+  both: 'Either',
+};
+
 const SummaryView = ({ summaryData, onSelectStay }) => {
   const [query, setQuery] = useState('');
-  const [sortBy, setSortBy] = useState('total_mandatory_violations');
+  const [sortBy, setSortBy] = useState(DEFAULT_STAY_SORT_BY);
   const [analysisMode, setAnalysisMode] = useState('violation'); // 'violation' or 'satisfaction'
   const [subTab, setSubTab] = useState('dashboard'); // 'dashboard' or 'stats'
   const [selectedConstraintId, setSelectedConstraintId] = useState(null);
   const [forensicsSidebarWidth, setForensicsSidebarWidth] = useState(550);
   const [selectedRules, setSelectedRules] = useState([]);
+  const [ruleToAdd, setRuleToAdd] = useState('');
   const [ruleFilterMode, setRuleFilterMode] = useState('violated'); // 'violated' | 'satisfied' | 'both'
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [isRulePickerOpen, setIsRulePickerOpen] = useState(false);
   const isResizing = React.useRef(false);
+  const rulePickerButtonRef = useRef(null);
+  const rulePickerMenuRef = useRef(null);
+
+  const activeFilterChips = useMemo(() => {
+    const chips = [];
+    const trimmedQuery = query.trim();
+
+    if (trimmedQuery) {
+      chips.push({ label: 'Search', value: trimmedQuery });
+    }
+
+    if (sortBy !== DEFAULT_STAY_SORT_BY) {
+      chips.push({ label: 'Sort', value: SORT_LABEL_MAP[sortBy] || sortBy });
+    }
+
+    if (ruleFilterMode !== 'violated') {
+      chips.push({ label: 'Mode', value: RULE_MODE_LABEL_MAP[ruleFilterMode] || ruleFilterMode });
+    }
+
+    return chips;
+  }, [query, ruleFilterMode, selectedRules, sortBy]);
+
+  const ruleOptions = summaryData?.violation_frequency || [];
+  const selectedRuleDetails = useMemo(() => {
+    if (selectedRules.length === 0) return [];
+    const selectedSet = new Set(selectedRules);
+    return ruleOptions.filter((rule) => selectedSet.has(rule.constraint_id));
+  }, [ruleOptions, selectedRules]);
+
+  const availableRuleOptions = useMemo(() => {
+    const selectedSet = new Set(selectedRules);
+    return ruleOptions.filter((rule) => !selectedSet.has(rule.constraint_id));
+  }, [ruleOptions, selectedRules]);
+
+  useEffect(() => {
+    if (!ruleToAdd && availableRuleOptions.length > 0) {
+      setRuleToAdd(availableRuleOptions[0].constraint_id);
+    }
+    if (ruleToAdd && !availableRuleOptions.some((rule) => rule.constraint_id === ruleToAdd)) {
+      setRuleToAdd(availableRuleOptions[0]?.constraint_id || '');
+    }
+  }, [availableRuleOptions, ruleToAdd]);
+
+  useEffect(() => {
+    if (!isRulePickerOpen) return;
+
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (
+        rulePickerButtonRef.current?.contains(target) ||
+        rulePickerMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setIsRulePickerOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsRulePickerOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isRulePickerOpen]);
 
   // Reset to page 1 when searching or sorting
   useEffect(() => {
     setCurrentPage(1);
-  }, [query, sortBy]);
+  }, [query, sortBy, ruleFilterMode, selectedRules]);
+
+  const resetStayFilters = () => {
+    setQuery('');
+    setSortBy(DEFAULT_STAY_SORT_BY);
+    setRuleFilterMode('violated');
+    setSelectedRules([]);
+    setRuleToAdd('');
+    setCurrentPage(1);
+  };
+
+  const addSelectedRule = () => {
+    if (!ruleToAdd) return;
+    if (selectedRules.includes(ruleToAdd)) return;
+    setSelectedRules((prev) => [...prev, ruleToAdd]);
+    setRuleToAdd('');
+    setIsRulePickerOpen(false);
+  };
+
+  const selectedRuleToAdd = availableRuleOptions.find((rule) => rule.constraint_id === ruleToAdd)
+    || availableRuleOptions[0]
+    || null;
+
+  const removeSelectedRule = (constraintId) => {
+    setSelectedRules((prev) => prev.filter((ruleId) => ruleId !== constraintId));
+  };
 
   const startResizing = (e) => {
     isResizing.current = true;
@@ -113,7 +225,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
     });
 
     return filtered;
-  }, [summaryData, query, sortBy]);
+  }, [summaryData, query, ruleFilterMode, selectedRules, sortBy]);
 
   const totalResults = allFilteredStays.length;
   const totalPages = Math.ceil(totalResults / pageSize);
@@ -286,56 +398,186 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
       )}
 
       <section className="summary-card">
-        <div className="table-header-row">
-          <h3>Stay Explorer</h3>
-          <div className="table-controls">
-            <input
-              className="summary-input"
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Search case ID..."
-            />
-            <button
-              type="button"
-              className="pag-btn"
-              disabled={!query.trim() || totalResults === 0}
-              onClick={openFirstMatch}
-            >
-              Open first match
-            </button>
-            <select
-              className="summary-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-            >
-              <option value="total_mandatory_violations">Sort: Total Violations</option>
-              <option value="avg_mandatory_violations">Sort: Avg Violations</option>
-              <option value="episodes">Sort: Episode Count</option>
-              <option value="overall_outcome">Sort: Overall Outcome</option>
-              <option value="stay_id">Sort: Stay ID</option>
-            </select>
-            <select
-              className="summary-select"
-              value={ruleFilterMode}
-              onChange={(e) => setRuleFilterMode(e.target.value)}
-            >
-              <option value="violated">Filter Mode: Violated</option>
-              <option value="satisfied">Filter Mode: Satisfied</option>
-              <option value="both">Filter Mode: Either</option>
-            </select>
-            <select
-              multiple
-              size={3}
-              className="summary-select"
-              value={selectedRules}
-              onChange={(e) => setSelectedRules(Array.from(e.target.selectedOptions).map(o => o.value))}
-            >
-              {(summaryData?.violation_frequency || []).map(v => (
-                <option key={v.constraint_id} value={v.constraint_id}>{v.constraint_id} — {v.constraint_label}</option>
-              ))}
-            </select>
+        <div className="section-header stay-explorer-header">
+          <div className="title-group">
+            <h3>Stay Explorer</h3>
+            <p className="header-subtitle">Filter stays by case ID, ranking, and rule involvement before opening the timeline.</p>
+          </div>
+          <div className="stay-explorer-status">
+            <span className="stay-match-pill">
+              {totalResults} {totalResults === 1 ? 'match' : 'matches'}
+            </span>
+            {activeFilterChips.length > 0 ? (
+              <button
+                type="button"
+                className="stay-reset-btn"
+                onClick={resetStayFilters}
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="stay-filter-panel">
+          <div className="stay-filter-grid">
+            <div className="stay-filter-block stay-search-block">
+              <div className="stay-filter-label-row">
+                <span className="stay-filter-label">Search</span>
+                <span className="stay-filter-hint">Case ID or stay ID</span>
+              </div>
+              <div className="stay-search-row">
+                <input
+                  className="summary-input stay-search-input"
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder="Search case ID..."
+                />
+                <button
+                  type="button"
+                  className="pag-btn stay-primary-action"
+                  disabled={!query.trim() || totalResults === 0}
+                  onClick={openFirstMatch}
+                >
+                  Open first match
+                </button>
+              </div>
+            </div>
+
+            <div className="stay-filter-block stay-sort-block">
+              <div className="stay-filter-label-row">
+                <span className="stay-filter-label">Sort and mode</span>
+                <span className="stay-filter-hint">Rank and constrain the table</span>
+              </div>
+              <div className="stay-inline-controls">
+                <select
+                  className="summary-select stay-control-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                >
+                  <option value="total_mandatory_violations">Sort: Total Violations</option>
+                  <option value="avg_mandatory_violations">Sort: Avg Violations</option>
+                  <option value="episodes">Sort: Episode Count</option>
+                  <option value="overall_outcome">Sort: Overall Outcome</option>
+                  <option value="stay_id">Sort: Stay ID</option>
+                </select>
+                <select
+                  className="summary-select stay-control-select"
+                  value={ruleFilterMode}
+                  onChange={(e) => setRuleFilterMode(e.target.value)}
+                >
+                  <option value="violated">Filter Mode: Violated</option>
+                  <option value="satisfied">Filter Mode: Satisfied</option>
+                  <option value="both">Filter Mode: Either</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="stay-filter-block stay-rules-block">
+              <div className="stay-filter-label-row">
+                <span className="stay-filter-label">Rule filter</span>
+                <div className="stay-rule-meta">
+                  <span className="stay-filter-hint">{selectedRules.length} selected</span>
+                  {selectedRules.length > 0 ? (
+                    <button type="button" className="stay-clear-rules-btn" onClick={() => setSelectedRules([])}>
+                      Clear all
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="stay-rule-picker-row">
+                <div className="stay-rule-picker">
+                  <button
+                    ref={rulePickerButtonRef}
+                    type="button"
+                    className="summary-select stay-rule-picker-trigger"
+                    onClick={() => setIsRulePickerOpen((prev) => !prev)}
+                    disabled={availableRuleOptions.length === 0}
+                    aria-haspopup="listbox"
+                    aria-expanded={isRulePickerOpen}
+                  >
+                    <span className="stay-rule-picker-trigger-text">
+                      {selectedRuleToAdd ? (
+                        <>
+                          <span className="stay-rule-picker-trigger-id">{selectedRuleToAdd.constraint_id}</span>
+                          <span className="stay-rule-picker-trigger-label">{selectedRuleToAdd.constraint_label}</span>
+                        </>
+                      ) : (
+                        'No more rules available'
+                      )}
+                    </span>
+                    <span className="stay-rule-picker-caret" aria-hidden="true">▾</span>
+                  </button>
+                  {isRulePickerOpen && availableRuleOptions.length > 0 ? (
+                    <div ref={rulePickerMenuRef} className="stay-rule-picker-menu" role="listbox">
+                      {availableRuleOptions.map((rule) => {
+                        const isActive = rule.constraint_id === ruleToAdd;
+                        return (
+                          <button
+                            key={rule.constraint_id}
+                            type="button"
+                            className={`stay-rule-option ${isActive ? 'active' : ''}`}
+                            onClick={() => {
+                              setRuleToAdd(rule.constraint_id);
+                              setIsRulePickerOpen(false);
+                            }}
+                            title={`${rule.constraint_id} — ${rule.constraint_label}`}
+                          >
+                            <span className="stay-rule-option-id">{rule.constraint_id}</span>
+                            <span className="stay-rule-option-label">{rule.constraint_label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="pag-btn stay-add-rule-btn"
+                  onClick={addSelectedRule}
+                  disabled={!ruleToAdd || availableRuleOptions.length === 0}
+                >
+                  Add rule
+                </button>
+              </div>
+              <div className="selected-rule-chips" aria-label="Selected rules">
+                {selectedRuleDetails.length > 0 ? selectedRuleDetails.map((rule) => (
+                  <button
+                    key={rule.constraint_id}
+                    type="button"
+                    className="selected-rule-chip"
+                    onClick={() => removeSelectedRule(rule.constraint_id)}
+                    title={`Remove ${rule.constraint_id}`}
+                  >
+                    <span className="selected-rule-chip-id">{rule.constraint_id}</span>
+                    <span className="selected-rule-chip-label">{rule.constraint_label}</span>
+                    <span className="selected-rule-chip-remove">×</span>
+                  </button>
+                )) : (
+                  <div className="selected-rule-empty">
+                    No rules selected yet. Choose a rule and add it to narrow the table.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="stay-filter-footer">
+            <div className="active-filter-chips" aria-label="Active filters">
+              {activeFilterChips.length > 0 ? activeFilterChips.map((chip) => (
+                <span key={`${chip.label}:${chip.value}`} className="filter-chip">
+                  <span className="filter-chip-label">{chip.label}</span>
+                  <span className="filter-chip-value">{chip.value}</span>
+                </span>
+              )) : (
+                <span className="filter-chip filter-chip-muted">No active filters</span>
+              )}
+            </div>
+            <div className="stay-filter-note">
+              Press Enter in search to open the first match.
+            </div>
           </div>
         </div>
 
