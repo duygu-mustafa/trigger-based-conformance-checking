@@ -44,17 +44,15 @@ Transform raw ICU events into a canonical event log with automatic SBT derivatio
 ```bash
 python prepare_event_log.py \
   --input icu_event_level_sbt.parquet \
-  --output icu_event_log.parquet \
-  --sample-source sbt_started_yes_stay_ids.parquet \
-  --sample-size 1000 \
-  --sample-seed 42
+   --output icu_event_log_full.parquet \
+   --use-all-data
 ```
 
 ### Arguments
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--input` | `icu_event_level_sbt.parquet` | Raw ICU events (Parquet or CSV) |
-| `--output` | `icu_event_log.parquet` | Output canonical event log (Parquet or CSV) |
+| `--output` | `icu_event_log_full.parquet` | Output canonical event log (Parquet or CSV) |
 | `--sample-source` | `sbt_started_yes_stay_ids.parquet` | Parquet file with candidate stay_ids |
 | `--sample-size` | 1000 | Number of random stays to process |
 | `--sample-seed` | 42 | Random seed for reproducibility |
@@ -67,11 +65,13 @@ python prepare_event_log.py \
 | `--seed-checkpoint` | _none_ | Seed the output table from an existing parquet checkpoint before continuing |
 | `--seed-skip-count` | _none_ | Skip the first N candidate stays when starting from a seeded checkpoint |
 
-To process only stays that have ventilator-setting rows in the materialized raw file, add:
+To process the full dataset produced by the preparation script, add:
 
 ```bash
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --source-table-filter ventilator_setting
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data
 ```
+
+If you want to restrict the run to a specific raw source table, pass `--source-table-filter ventilator_setting` instead.
 
 ### Processing Pipeline
 
@@ -110,7 +110,7 @@ The pipeline (`derive/pipeline.py`) performs these steps for each stay:
    - Sorted by timestamp within each case
 
 ### Output
-- `icu_event_log.parquet` — Canonical event log ready for conformance checking
+- `icu_event_log_full.parquet` — Canonical event log ready for conformance checking
 - Temporary DuckDB files created and cleaned up automatically
 
 ### Safe Long-Run Execution on Linux
@@ -119,7 +119,7 @@ For long runs, use `tmux` so the process survives terminal disconnects.
 
 ```bash
 tmux new -s eventlog
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --backup-every 200
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200
 # detach with Ctrl+b then d
 ```
 
@@ -132,13 +132,13 @@ tmux attach -t eventlog
 If the job is interrupted, resume where it left off:
 
 ```bash
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --resume
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --resume
 ```
 
 Alternative without tmux (`nohup`):
 
 ```bash
-nohup python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log.parquet --backup-every 200 > prepare_event_log.out 2>&1 &
+nohup python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200 > prepare_event_log.out 2>&1 &
 ```
 
 Convenience launcher script (tmux first, nohup fallback):
@@ -149,7 +149,7 @@ Convenience launcher script (tmux first, nohup fallback):
 ./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
 ```
 
-The script writes timestamped logs under `logs/`, starts in a detached `tmux` session when available, and supports pass-through options like `--input`, `--output`, `--backup-every`, `--state-file`, `--backup-dir`, `--memory-limit`, `--seed-checkpoint`, and `--seed-skip-count`.
+The script writes timestamped logs under `logs/`, starts in a detached `tmux` session when available, and supports pass-through options like `--input`, `--output`, `--backup-every`, `--state-file`, `--backup-dir`, `--memory-limit`, `--source-table-filter`, `--seed-checkpoint`, and `--seed-skip-count`.
 
 To restart from the 10,000-stay checkpoint and continue the full build, use:
 
@@ -172,6 +172,14 @@ Execute declarative process-compliance rules against the event log and compute c
 python main.py
 ```
 
+To evaluate a checkpoint folder incrementally and write each checkpoint's results immediately, use:
+
+```bash
+python main_per_sbt_checkpoints.py \
+   --checkpoint-dir data/icu_event_log_checkpoints \
+   --results-dir data/results/checkpoint_trigger_results
+```
+
 ### What This Does
 
 The conformance checker (`main.py` and `conformance/checker.py`) performs these steps:
@@ -181,7 +189,7 @@ The conformance checker (`main.py` and `conformance/checker.py`) performs these 
    - Rules include: `readiness_assessment.yaml`, `failure_correction.yaml`, `sbt_execution.yaml`, `weights.yaml`
 
 2. **Load Event Log**
-   - Reads canonical event log from `icu_event_log.parquet`
+   - Reads canonical event log from `icu_event_log_full.parquet`
    - Extracts trace data: activities per case, with timestamps
 
 3. **Process Each Stay**
@@ -245,8 +253,8 @@ python database/materialize_all_icu_events.py --output icu_event_level_sbt.parqu
 # Step 2: Build event log (with SBT derivation and conformance gates)
 python prepare_event_log.py \
   --input icu_event_level_sbt.parquet \
-  --output icu_event_log.parquet \
-  --sample-size 1000
+   --output icu_event_log_full.parquet \
+   --use-all-data
 
 # Step 3: Run conformance checking
 python main.py
@@ -289,7 +297,7 @@ Raw ICU Events (icu_event_level_sbt.parquet)
   - Apply invasive-vent gate ← **Conformance Guard**
   - Map activities
        ↓
-Canonical Event Log (icu_event_log.parquet)
+Canonical Event Log (icu_event_log_full.parquet)
        ↓
 [main.py → conformance/checker.py]
   - Load declarative rules
