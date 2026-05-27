@@ -58,27 +58,35 @@
     sans-serif;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f3f7fc 0%, #e9f0f9 100%);
+  background:
+    radial-gradient(circle at top left, rgba(13, 60, 110, 0.08), transparent 32%),
+    radial-gradient(circle at top right, rgba(214, 36, 110, 0.06), transparent 28%),
+    linear-gradient(180deg, #f5f8fc 0%, #e9eff7 100%);
+  color: var(--color-text-main);
 }
 
 #root {
-  max-width: 1280px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 1.5rem;
   width: 100%;
 }
 
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: var(--color-text-muted);
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }

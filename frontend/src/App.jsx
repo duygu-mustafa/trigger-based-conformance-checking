@@ -3,6 +3,22 @@ import './App.css'
 import Timeline from './components/Timeline'
 import SummaryView from './components/SummaryView'
 import RulesOverview from './components/RulesOverview'
+import infoIcon from './static/info.png'
+
+const VIEW_META = {
+  summary: {
+    eyebrow: 'Population overview',
+    description: 'Scan aggregate conformance, outcome correlations, and stay-level filters before opening a timeline.',
+  },
+  timeline: {
+    eyebrow: 'Case investigation',
+    description: 'Inspect a single stay with event timing, episode outcomes, and measurement context.',
+  },
+  rules: {
+    eyebrow: 'Rules reference',
+    description: 'Reference the declarative guideline set and supporting definitions used by the analysis views.',
+  },
+}
 
 function App() {
   const [activeView, setActiveView] = useState('summary')
@@ -103,7 +119,13 @@ function App() {
     <div className="app-container">
       <header className="app-header">
         <div className="header-title-row">
-          <h1>Weaning Guideline Conformance Report</h1>
+          <div className="header-copy">
+            <span className="app-eyebrow">ICU weaning analysis workspace</span>
+            <h1>Weaning Guideline Conformance Report</h1>
+            <p className="app-lead">
+              {VIEW_META[activeView].description}
+            </p>
+          </div>
           <div className="view-toggle" role="tablist" aria-label="Dashboard views">
             <button
               type="button"
@@ -119,29 +141,33 @@ function App() {
             >
               Patient Timeline
             </button>
-            <button
-              type="button"
-              className={activeView === 'rules' ? 'view-tab active' : 'view-tab'}
-              onClick={() => setActiveView('rules')}
-            >
-              Rules Reference
-            </button>
           </div>
         </div>
-        {activeView === 'timeline' ? (
-          <div className="case-selector">
-            <label htmlFor="case-select">Timeline Case: </label>
-            <select
-              id="case-select"
-              value={caseId}
-              onChange={(e) => setCaseId(e.target.value)}
-            >
-              {caseIds.map(id => (
-                <option key={id} value={id}>{id}</option>
-              ))}
-            </select>
-          </div>
-        ) : null}
+        <div className="header-meta-row">
+          {activeView === 'timeline' ? (
+            <div className="case-selector">
+              <label htmlFor="case-select">Timeline case</label>
+              <select
+                id="case-select"
+                value={caseId}
+                onChange={(e) => setCaseId(e.target.value)}
+              >
+                {caseIds.map(id => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+            </div>
+          ) : <div />}
+          <button
+            type="button"
+            className={activeView === 'rules' ? 'info-chip active' : 'info-chip'}
+            onClick={() => setActiveView('rules')}
+            aria-label="Open rules reference"
+          >
+            <img src={infoIcon} alt="" aria-hidden="true" className="info-chip-icon" />
+            Rules reference
+          </button>
+        </div>
       </header>
 
       <main className="visualization-area">

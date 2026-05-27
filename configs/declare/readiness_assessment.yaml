@@ -190,44 +190,4 @@ model:
         within 24 h before SBTStarted. Stale observations are not valid for
         readiness determination.
 
-    - id: RC-TM-02
-      label: "After SBT failure, the next SBT attempt must occur on the following calendar day"
-      template: MP_RESPONSE
-      activation: SBTFailed
-      target: SBTStarted
-      correlation_condition: "date(target_ts) == date(activation_ts) + timedelta(days=1)"
-      semantics: TARGET_VIOLATION
-      rationale: >
-        A failed SBT creates an obligation for a repeated trial on the following
-        calendar day. Same-day retries and delays beyond the next day are treated
-        as deviations.
-
-    - id: RC-TM-02-early
-      label: "After SBT failure, the next SBT attempt must not occur on the same calendar day"
-      template: NOT_RESPONSE
-      activation: SBTFailed
-      target: SBTStarted
-      correlation_condition: "date(target_ts) == date(activation_ts)"
-      semantics: TARGET_VIOLATION
-      rationale: >
-        Same-day retries are too early and treated as deviations to avoid patient fatigue.
-
-    - id: RC-TM-02-late
-      label: "After SBT failure, the next SBT attempt must occur no later than the following calendar day"
-      template: MP_RESPONSE
-      activation: SBTFailed
-      target: SBTStarted
-      correlation_condition: "date(target_ts) <= date(activation_ts) + timedelta(days=1)"
-      semantics: TARGET_VIOLATION
-      rationale: >
-        Delaying the repeated trial beyond the next calendar day is treated as a deviation.
-
-    - id: RC-TM-03
-      label: "SBT should be attempted max 72 h after stay start"
-      template: MP_EXISTENCE
-      activation: SBTStarted
-      activation_condition: "hours_since_stay_start > 72"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        Trigger-based episodes require a weaning attempt to be documented
-        no later than 72 h from the first recorded event in the stay.
+ 

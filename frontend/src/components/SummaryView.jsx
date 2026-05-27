@@ -36,6 +36,10 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   const isResizing = React.useRef(false);
   const rulePickerButtonRef = useRef(null);
   const rulePickerMenuRef = useRef(null);
+  const forensicsSectionRef = useRef(null);
+  const correlationSectionRef = useRef(null);
+  const statsSectionRef = useRef(null);
+  const stayExplorerRef = useRef(null);
 
   const activeFilterChips = useMemo(() => {
     const chips = [];
@@ -117,6 +121,10 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
     setSelectedRules([]);
     setRuleToAdd('');
     setCurrentPage(1);
+  };
+
+  const scrollToSection = (sectionRef) => {
+    sectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const addSelectedRule = () => {
@@ -262,6 +270,20 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
   return (
     <div className="summary-view">
       <div className="summary-header">
+        <div className="summary-jump-row" aria-label="Jump to dashboard sections">
+          <button type="button" className="summary-jump-btn" onClick={() => scrollToSection(forensicsSectionRef)}>
+            Forensics Explorer
+          </button>
+          <button type="button" className="summary-jump-btn" onClick={() => scrollToSection(correlationSectionRef)}>
+            Correlation Analysis
+          </button>
+          <button type="button" className="summary-jump-btn" onClick={() => scrollToSection(statsSectionRef)}>
+            Statistical Analysis
+          </button>
+          <button type="button" className="summary-jump-btn" onClick={() => scrollToSection(stayExplorerRef)}>
+            Stay Explorer
+          </button>
+        </div>
         <div className="sub-tab-switcher">
           <button 
             className={`sub-tab-btn ${subTab === 'dashboard' ? 'active' : ''}`}
@@ -301,7 +323,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
             </section>
           </div>
 
-          <section className="summary-card forensics-explorer">
+          <section className="summary-card forensics-explorer" ref={forensicsSectionRef} id="forensics-explorer">
             <div className="section-header">
               <div className="title-group">
                 <h3>Violation Forensics Explorer</h3>
@@ -350,7 +372,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
             </div>
           </section>
 
-          <section className="summary-card correlation-deep-dive">
+          <section className="summary-card correlation-deep-dive" ref={correlationSectionRef} id="correlation-analysis">
             <div className="section-header">
               <div className="title-group">
                 <h3>SBT Outcome Correlation Analysis</h3>
@@ -386,7 +408,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
           </section>
         </>
       ) : (
-        <section className="summary-card">
+          <section className="summary-card" ref={statsSectionRef} id="statistical-analysis">
           <div className="section-header">
              <div className="title-group">
                 <h3>Statistical Significance Analysis</h3>
@@ -397,7 +419,7 @@ const SummaryView = ({ summaryData, onSelectStay }) => {
         </section>
       )}
 
-      <section className="summary-card">
+      <section className="summary-card" ref={stayExplorerRef} id="stay-explorer">
         <div className="section-header stay-explorer-header">
           <div className="title-group">
             <h3>Stay Explorer</h3>
