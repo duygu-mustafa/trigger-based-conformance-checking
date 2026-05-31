@@ -603,7 +603,7 @@ def _evaluate_constraint_impl(
 
         return True, None, time_delta, {}
 
-    # ============ EXISTENCE / ABSENCE / EXACTLY / INIT (unary) ============
+    # ============ EXISTENCE / ABSENCE / EXACTLY / INIT / END (unary) ============
     if constraint.template == DeclareTemplate.EXISTENCE:
         act_rows = _rows_for(constraint.activation)
         if act_rows.empty:
@@ -747,6 +747,37 @@ def _evaluate_constraint_impl(
             else eval_error,
         )
 
+    if constraint.template == DeclareTemplate.END:
+        if trace_df.empty:
+            return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
+
+        last_row = trace_df.sort_values("timestamp").iloc[-1]
+        ok = bool(last_row["activity"] == constraint.activation)
+        eval_error = None
+        violation_deltas = {}
+        if ok and constraint.activation_cond is not None:
+            ok, eval_error, violation_deltas = _evaluate_data_condition(
+                trace_df,
+                last_row,
+                constraint.activation_cond.expression,
+                observation_window_hours=observation_window_hours,
+            )
+
+        return ConstraintResult(
+            case_id=case_id,
+            constraint_id=cid,
+            outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
+            num_activations=1,
+            num_fulfilled=1 if ok else 0,
+            num_violated=0 if ok else 1,
+            activation_ts=str(last_row["timestamp"]),
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=violation_deltas if ok else {},
+            violation_reason=(None if ok else "Last event does not satisfy END")
+            if eval_error is None
+            else eval_error,
+        )
+
     # ============ RESPONSE FAMILY ============
     if constraint.template in {
         DeclareTemplate.RESPONSE,
@@ -800,7 +831,10 @@ def _evaluate_constraint_impl(
                     require_after=True,
                     require_before=False,
                     require_adjacent=constraint.template
-                    in {DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.NOT_CHAIN_RESPONSE},
+                    in {
+                        DeclareTemplate.CHAIN_RESPONSE,
+                        DeclareTemplate.NOT_CHAIN_RESPONSE,
+                    },
                     directional_time=True,
                 )
                 
@@ -979,6 +1013,7 @@ def _evaluate_constraint_impl(
         first_match_activation_ts = None
         first_corr_error = None
         violation_deltas = {}
+        satisfaction_deltas = {}
         delay_seconds = None
 
         for _, target_row in target_rows.iterrows():
@@ -1128,6 +1163,7 @@ def _evaluate_constraint_impl(
         DeclareTemplate.SUCCESSION,
         DeclareTemplate.ALTERNATE_SUCCESSION,
         DeclareTemplate.CHAIN_SUCCESSION,
+        DeclareTemplate.NOT_CHAIN_SUCCESSION,
     }:
         mapped = {
             DeclareTemplate.SUCCESSION: (DeclareTemplate.RESPONSE, DeclareTemplate.PRECEDENCE),
@@ -1136,6 +1172,10 @@ def _evaluate_constraint_impl(
                 DeclareTemplate.ALTERNATE_PRECEDENCE,
             ),
             DeclareTemplate.CHAIN_SUCCESSION: (DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.CHAIN_PRECEDENCE),
+            DeclareTemplate.NOT_CHAIN_SUCCESSION: (
+                DeclareTemplate.NOT_CHAIN_RESPONSE,
+                DeclareTemplate.NOT_CHAIN_PRECEDENCE,
+            ),
         }
         response_t, precedence_t = mapped[constraint.template]
 
@@ -1247,6 +1287,15 @@ def evaluate_init_rule(
     constraint: DeclareConstraint,
 ) -> ConstraintResult:
     """Evaluate `INIT` constraints."""
+    return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
+
+
+def evaluate_end_rule(
+    case_id: str,
+    trace_df: pd.DataFrame,
+    constraint: DeclareConstraint,
+) -> ConstraintResult:
+    """Evaluate `END` constraints."""
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
@@ -1412,6 +1461,15 @@ def evaluate_not_succession_rule(
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
+def evaluate_not_chain_succession_rule(
+    case_id: str,
+    trace_df: pd.DataFrame,
+    constraint: DeclareConstraint,
+) -> ConstraintResult:
+    """Evaluate `NOT_CHAIN_SUCCESSION` constraints."""
+    return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
+
+
 _TEMPLATE_EVALUATORS: dict[
     DeclareTemplate,
     callable,
@@ -1420,6 +1478,7 @@ _TEMPLATE_EVALUATORS: dict[
     DeclareTemplate.ABSENCE: evaluate_absence_rule,
     DeclareTemplate.EXACTLY: evaluate_exactly_rule,
     DeclareTemplate.INIT: evaluate_init_rule,
+    DeclareTemplate.END: evaluate_end_rule,
     DeclareTemplate.RESPONDED_EXISTENCE: evaluate_responded_existence_rule,
     DeclareTemplate.RESPONSE: evaluate_response_rule,
     DeclareTemplate.ALTERNATE_RESPONSE: evaluate_alternate_response_rule,
@@ -1438,6 +1497,7 @@ _TEMPLATE_EVALUATORS: dict[
     DeclareTemplate.NOT_CHAIN_PRECEDENCE: evaluate_not_chain_precedence_rule,
     DeclareTemplate.NOT_CO_EXISTENCE: evaluate_not_co_existence_rule,
     DeclareTemplate.NOT_SUCCESSION: evaluate_not_succession_rule,
+    DeclareTemplate.NOT_CHAIN_SUCCESSION: evaluate_not_chain_succession_rule,
 }
 
 

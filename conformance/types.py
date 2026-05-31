@@ -11,6 +11,7 @@ class DeclareTemplate(Enum):
     ABSENCE = "Absence"  # Activity must never occur.
     EXACTLY = "Exactly"  # Activity must occur an exact number of times.
     INIT = "Init"  # The first event in the trace must be this activity.
+    END = "End"  # The last event in the trace must be this activity.
 
     # Positive binary
     RESPONDED_EXISTENCE = "Responded Existence"  # If A occurs, B must occur (order not required).
@@ -36,6 +37,7 @@ class DeclareTemplate(Enum):
     NOT_CHAIN_PRECEDENCE = "Not Chain Precedence"  # B must not be immediately preceded by A.
     NOT_CO_EXISTENCE = "Not Co-Existence"  # A and B cannot both occur in one trace.
     NOT_SUCCESSION = "Not Succession"  # A->B succession is forbidden.
+    NOT_CHAIN_SUCCESSION = "Not Chain Succession"  # A->B immediate succession is forbidden.
 
 
 UNARY_TEMPLATES = {
@@ -43,6 +45,7 @@ UNARY_TEMPLATES = {
     DeclareTemplate.ABSENCE,
     DeclareTemplate.EXACTLY,
     DeclareTemplate.INIT,
+    DeclareTemplate.END,
 }
 
 NEGATIVE_TEMPLATES = {
@@ -54,6 +57,7 @@ NEGATIVE_TEMPLATES = {
     DeclareTemplate.NOT_CHAIN_PRECEDENCE,
     DeclareTemplate.NOT_CO_EXISTENCE,
     DeclareTemplate.NOT_SUCCESSION,
+    DeclareTemplate.NOT_CHAIN_SUCCESSION,
 }
 
 
