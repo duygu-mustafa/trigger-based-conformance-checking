@@ -340,7 +340,7 @@ const Timeline = ({ data }) => {
       const latest = latestItemBefore([224686], episode.sbt_start, 24);
       return { actual: formatMeasurement(latest), expected: 'Spontaneous tidal volume > 0 mL', observedAt: latest?.timestamp || null };
     }
-    if (cid === 'RC-TM-02') {
+    if (cid === 'SBT-TM-01') {
       const sortedStarts = conformance
         .filter(ep => ep.sbt_start)
         .sort((a, b) => new Date(a.sbt_start).getTime() - new Date(b.sbt_start).getTime());

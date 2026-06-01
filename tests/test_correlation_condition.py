@@ -21,6 +21,7 @@ from conformance.types import DeclareConstraint, DeclareTemplate, DataCondition,
 from conformance.checker import check_log_conformance
 from conformance.results import ConformanceOutcome
 from conformance.rules import load_model_from_yaml
+# Manual helper removed; tests will use the derived-event + checker flow
 
 
 class TestCorrelationCondition(unittest.TestCase):
@@ -295,6 +296,60 @@ model:
 
         self.assertEqual(outcomes["too-late"]["SBT-TM-01-early"], ConformanceOutcome.SATISFIED)
         self.assertEqual(outcomes["too-late"]["SBT-TM-01-late"], ConformanceOutcome.VIOLATED)
+
+    def test_sbt_tm_01_manual_outcome_helper(self):
+        """Regression test: the manual SBT timing helper should classify gaps consistently."""
+
+        base = datetime(2024, 1, 1, 8, 0, 0)
+        # Use the Declare model + checker and include explicit derived SBTFailed
+        # events in traces so the general checker can evaluate timing semantics.
+        yaml_path = Path(__file__).parent.parent / "configs" / "declare" / "sbt_execution.yaml"
+        if not yaml_path.exists():
+            self.skipTest(f"sbt_execution.yaml not found at {yaml_path}")
+
+        model = load_model_from_yaml(yaml_path)
+
+        vacuous_trace = pd.DataFrame(
+            [
+                {"case_id": "case1", "activity": "InvasiveVentilationStarted", "timestamp": pd.Timestamp(base)},
+                {"case_id": "case1", "activity": "SBTStarted", "timestamp": pd.Timestamp(base + timedelta(hours=4))},
+            ]
+        )
+        results = check_log_conformance(vacuous_trace, model)
+        self.assertEqual(len(results), 1)
+        cr = next((c for c in results[0].constraint_results if c.constraint_id == "SBT-TM-01"), None)
+        self.assertIsNotNone(cr, "SBT-TM-01 constraint not found in model results")
+        self.assertEqual(cr.outcome, ConformanceOutcome.VACUOUS)
+
+        # Early retry (same calendar day) should violate SBT-TM-01
+        early_retry_trace = pd.DataFrame(
+            [
+                {"case_id": "case1", "activity": "InvasiveVentilationStarted", "timestamp": pd.Timestamp(base)},
+                {"case_id": "case1", "activity": "SBTStarted", "timestamp": pd.Timestamp(base + timedelta(hours=4))},
+                {"case_id": "case1", "activity": "SBTFailed", "timestamp": pd.Timestamp(base + timedelta(hours=6))},
+                {"case_id": "case1", "activity": "SBTStarted", "timestamp": pd.Timestamp(base + timedelta(hours=12))},
+            ]
+        )
+        results = check_log_conformance(early_retry_trace, model)
+        self.assertEqual(len(results), 1)
+        cr = next((c for c in results[0].constraint_results if c.constraint_id == "SBT-TM-01"), None)
+        self.assertIsNotNone(cr, "SBT-TM-01 constraint not found in model results")
+        self.assertEqual(cr.outcome, ConformanceOutcome.VIOLATED)
+
+        # Next-day retry should satisfy SBT-TM-01
+        next_day_trace = pd.DataFrame(
+            [
+                {"case_id": "case1", "activity": "InvasiveVentilationStarted", "timestamp": pd.Timestamp(base)},
+                {"case_id": "case1", "activity": "SBTStarted", "timestamp": pd.Timestamp(base + timedelta(hours=4))},
+                {"case_id": "case1", "activity": "SBTFailed", "timestamp": pd.Timestamp(base + timedelta(hours=6))},
+                {"case_id": "case1", "activity": "SBTStarted", "timestamp": pd.Timestamp(base + timedelta(hours=20))},
+            ]
+        )
+        results = check_log_conformance(next_day_trace, model)
+        self.assertEqual(len(results), 1)
+        cr = next((c for c in results[0].constraint_results if c.constraint_id == "SBT-TM-01"), None)
+        self.assertIsNotNone(cr, "SBT-TM-01 constraint not found in model results")
+        self.assertEqual(cr.outcome, ConformanceOutcome.SATISFIED)
 
     def test_end_template_checks_last_event(self):
         """End should require the last event in the trace to match the activation activity."""

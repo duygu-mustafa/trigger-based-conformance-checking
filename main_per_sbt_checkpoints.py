@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from conformance.batch_runner import BatchConformanceRunner
 from conformance.checker import evaluate_constraint
+from derive.pipeline import raw_to_event_log
 from conformance.results import ConformanceOutcome
 
 from main_per_sbt import (
@@ -26,7 +27,6 @@ from main_per_sbt import (
     _build_combined_model,
     _build_trigger_episodes,
     _evaluate_composite_for_attempt,
-    _evaluate_rc_tm_02_outcome,
     _load_combined_constraint_id_lookup,
 )
 
@@ -97,23 +97,29 @@ def _evaluate_stay_for_checkpoint(
     if df_full.empty:
         return []
 
-    episodes = _build_trigger_episodes(df_full)
+    # Convert to canonical event log with derived activities if needed
+    if not runner._is_event_log_input:
+        event_log = raw_to_event_log(df_full)
+    else:
+        event_log = df_full.copy()
+
+    episodes = _build_trigger_episodes(event_log)
     if not episodes:
         return []
 
     sbt_starts = (
-        df_full[df_full["activity"] == "SBTStarted"]
+        event_log[event_log["activity"] == "SBTStarted"]
         .drop_duplicates(subset=["timestamp"])
         .sort_values("timestamp")
     )
-    vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+    vent_starts = event_log[event_log["activity"] == "InvasiveVentilationStarted"]
 
     rows: list[dict[str, object]] = []
     attempt_index = 0
     for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
-        episode_df = df_full[
-            (df_full["timestamp"] >= episode_start)
-            & (df_full["timestamp"] < episode_end)
+        episode_df = event_log[
+            (event_log["timestamp"] >= episode_start)
+            & (event_log["timestamp"] < episode_end)
         ].copy()
         if episode_df.empty:
             continue
@@ -175,25 +181,16 @@ def _evaluate_stay_for_checkpoint(
                 continue
 
             is_failure_rule = canon_id.startswith("INT-")
-            if canon_id == "RC-TM-02":
-                outcome, gap_hours = _evaluate_rc_tm_02_outcome(
-                    df_full=df_full,
-                    current_sbt_start=sbt_start,
-                )
-                res = None
-                manual_forensics = (
-                    {"deltas": {"gap_hours": gap_hours}, "delay_seconds": gap_hours * 3600}
-                    if gap_hours is not None
-                    else None
-                )
-            else:
-                res = evaluate_constraint(
-                    case_id=str(stay_id),
-                    trace_df=episode_df,
-                    constraint=constraint,
-                )
-                outcome = res.outcome
-                manual_forensics = None
+            # Use the general checker for all constraints; derived activities
+            # (e.g., an SBTFailed emitted at re-ventilation time) are available
+            # in `event_log` so no special-case manual evaluation is required.
+            res = evaluate_constraint(
+                case_id=str(stay_id),
+                trace_df=episode_df,
+                constraint=constraint,
+            )
+            outcome = res.outcome
+            manual_forensics = None
 
             if outcome == ConformanceOutcome.VACUOUS:
                 target_vacuous = mandatory_vacuous
@@ -230,7 +227,7 @@ def _evaluate_stay_for_checkpoint(
         composite_reason = None
         if sbt_start is not None and attempt_index > 1:
             composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
-                df_full=df_full,
+                df_full=event_log,
                 sbt_start=sbt_start,
             )
             if composite_ok:

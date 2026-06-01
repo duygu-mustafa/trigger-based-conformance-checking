@@ -26,6 +26,7 @@ from conformance.types import DeclareModel
 from conformance.checker import (
     evaluate_constraint
 )
+from derive.pipeline import raw_to_event_log
 import json
 import math
 
@@ -93,19 +94,34 @@ def _sbt_failed_by_reventilation(
     vent_starts: pd.DataFrame,
     sbt_start: pd.Timestamp,
     failure_window_hours: float = 48.0,
-) -> bool:
+) -> pd.Timestamp | None:
+    """Return the timestamp of a re-ventilation event occurring after an SBT start.
+
+    Returns the first `InvasiveVentilationStarted` timestamp that occurs after
+    `sbt_start` and within `failure_window_hours`. Returns ``None`` if no such
+    event exists.
+    """
     outcome_end = sbt_start + pd.Timedelta(hours=failure_window_hours)
     matching_vent = vent_starts[
         (vent_starts["timestamp"] > sbt_start)
         & (vent_starts["timestamp"] <= outcome_end)
-    ]
-    return not matching_vent.empty
+    ].sort_values("timestamp")
+    if matching_vent.empty:
+        return None
+    return matching_vent.iloc[0]["timestamp"]
 
 
 def _find_latest_failed_sbt_start_before(
     df_full: pd.DataFrame,
     current_sbt_start: pd.Timestamp,
 ) -> pd.Timestamp | None:
+    """Find the most recent failure timestamp (re-ventilation) prior to ``current_sbt_start``.
+
+    Scans prior SBT starts and returns the timestamp of the matching
+    re-ventilation event for the latest prior attempt that resulted in
+    re-ventilation within the failure window. Returns ``None`` if no prior
+    failed attempts are found.
+    """
     sbt_starts = (
         df_full[df_full["activity"] == "SBTStarted"]
         .drop_duplicates(subset=["timestamp"])
@@ -119,33 +135,23 @@ def _find_latest_failed_sbt_start_before(
         return None
 
     vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
-    latest_failed: pd.Timestamp | None = None
+    latest_failed_ts: pd.Timestamp | None = None
     for _, row in prior_attempts.iterrows():
         prior_start = row["timestamp"]
-        if _sbt_failed_by_reventilation(vent_starts, prior_start):
-            latest_failed = prior_start
+        failure_ts = _sbt_failed_by_reventilation(vent_starts, prior_start)
+        if failure_ts is not None:
+            # Keep the most recent failure timestamp (in case multiple prior
+            # attempts failed); this ensures the gap is measured from the
+            # actual failure event rather than the SBT start time.
+            if latest_failed_ts is None or failure_ts > latest_failed_ts:
+                latest_failed_ts = failure_ts
 
-    return latest_failed
+    return latest_failed_ts
 
 
-def _evaluate_rc_tm_02_outcome(
-    df_full: pd.DataFrame,
-    current_sbt_start: pd.Timestamp | None,
-    min_gap_hours: float = 24.0,
-) -> tuple[ConformanceOutcome, float | None]:
-    if current_sbt_start is None:
-        return ConformanceOutcome.VACUOUS, None
-
-    prior_failed_start = _find_latest_failed_sbt_start_before(df_full, current_sbt_start)
-    if prior_failed_start is None:
-        # Activation condition is false: no prior failed SBT before this start.
-        return ConformanceOutcome.VACUOUS, None
-
-    gap_hours = float((current_sbt_start - prior_failed_start).total_seconds()) / 3600.0
-    outcome = ConformanceOutcome.SATISFIED if gap_hours >= min_gap_hours else ConformanceOutcome.VIOLATED
-    
-    # Return both outcome and the delay forensic
-    return outcome, gap_hours
+# NOTE: manual `_evaluate_sbt_tm_01_outcome` special-case was removed in favor
+# of emitting derived `SBTFailed` events and using the generic Declare checker.
+# The old helper was intentionally removed to eliminate ad-hoc runtime branches.
 
 
 def _evaluate_composite_for_attempt(
@@ -371,22 +377,28 @@ def main() -> None:
         if df_full.empty:
             continue
 
-        episodes = _build_trigger_episodes(df_full)
+        # Convert raw stay rows to canonical event log with derived activities
+        if not runner._is_event_log_input:
+            event_log = raw_to_event_log(df_full)
+        else:
+            event_log = df_full.copy()
+
+        episodes = _build_trigger_episodes(event_log)
         if not episodes:
             continue
 
         sbt_starts = (
-            df_full[df_full["activity"] == "SBTStarted"]
+            event_log[event_log["activity"] == "SBTStarted"]
             .drop_duplicates(subset=["timestamp"])
             .sort_values("timestamp")
         )
-        vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+        vent_starts = event_log[event_log["activity"] == "InvasiveVentilationStarted"]
 
         attempt_index = 0
         for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
-            episode_df = df_full[
-                (df_full["timestamp"] >= episode_start)
-                & (df_full["timestamp"] < episode_end)
+            episode_df = event_log[
+                (event_log["timestamp"] >= episode_start)
+                & (event_log["timestamp"] < episode_end)
             ].copy()
             if episode_df.empty:
                 continue
@@ -447,19 +459,16 @@ def main() -> None:
                     continue
 
                 is_failure_rule = canon_id.startswith("INT-")
-                if canon_id == "RC-TM-02":
-                    outcome, gap_hours = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
-                    res = None
-                    # Create a dummy result-like object for manual rules
-                    manual_forensics = {"deltas": {"gap_hours": gap_hours}, "delay_seconds": gap_hours * 3600} if gap_hours is not None else None
-                else:
-                    res = evaluate_constraint(
-                        case_id=str(stay_id),
-                        trace_df=episode_df,
-                        constraint=constraint,
-                    )
-                    outcome = res.outcome
-                    manual_forensics = None
+                # Use the general checker for all constraints; derived activities
+                # (e.g., an SBTFailed emitted at re-ventilation time) are available
+                # in `event_log` so no special-case manual evaluation is required.
+                res = evaluate_constraint(
+                    case_id=str(stay_id),
+                    trace_df=episode_df,
+                    constraint=constraint,
+                )
+                outcome = res.outcome
+                manual_forensics = None
 
                 if outcome == ConformanceOutcome.VACUOUS:
                     target_vacuous = mandatory_vacuous
@@ -489,7 +498,7 @@ def main() -> None:
             composite_reason = None
             if sbt_start is not None and attempt_index > 1:
                 composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
-                    df_full=df_full,
+                    df_full=event_log,
                     sbt_start=sbt_start,
                 )
                 if composite_ok:

@@ -181,6 +181,48 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
             )
             derived_frames.append(sbt_failed_from_completed)
 
+    # Case 2: Re-ventilation after an SBT start implies a failed attempt.
+    # For each SBTStarted, if an InvasiveVentilationStarted occurs within
+    # `failure_window_hours` after the SBT start, emit a derived SBTFailed
+    # event at the timestamp of the re-ventilation.
+    sbt_started = activity_df[activity_df["activity"] == "SBTStarted"].copy()
+    vent_starts = activity_df[activity_df["activity"] == "InvasiveVentilationStarted"].copy()
+    if not sbt_started.empty and not vent_starts.empty:
+        # Use a default failure window of 48 hours
+        failure_window_hours = 48.0
+        # Sort for deterministic behavior
+        sbt_started = sbt_started.sort_values("timestamp")
+        vent_starts = vent_starts.sort_values("timestamp")
+
+        revent_rows: list[dict[str, object]] = []
+        for _, srow in sbt_started.iterrows():
+            s_ts = srow["timestamp"]
+            window_end = s_ts + pd.Timedelta(hours=failure_window_hours)
+            later_vents = vent_starts[(vent_starts["timestamp"] > s_ts) & (vent_starts["timestamp"] <= window_end)]
+            if later_vents.empty:
+                continue
+            # Take the earliest re-ventilation after the SBT start
+            first_vent_ts = later_vents.iloc[0]["timestamp"]
+            revent_rows.append(
+                {
+                    "case_id": srow.get("case_id"),
+                    "activity": "SBTFailed",
+                    "timestamp": first_vent_ts,
+                    "source_table": "derived_revent",
+                    "itemid": None,
+                    "value_raw": None,
+                    "value_num": None,
+                    "unit": None,
+                    "attrs": [{"kind": "derived_activity", "trigger": "reventilation"}],
+                    "patient_id": srow.get("patient_id"),
+                    "stay_id": srow.get("stay_id"),
+                }
+            )
+
+        if revent_rows:
+            df_revent = pd.DataFrame(revent_rows)
+            derived_frames.append(df_revent)
+
 
     return derived_frames
 

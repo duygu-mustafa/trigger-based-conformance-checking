@@ -216,7 +216,7 @@ cat("\n=== ADJUSTED vs UNADJUSTED ODDS RATIOS ===\n")
 if (file.exists("data/results/rule_statistics_R.csv")) {
   univariate <- read_csv("data/results/rule_statistics_R.csv", show_col_types = FALSE) %>%
 
-    filter(rule_name %in% c("INT-DX-04", "RC-DP-05", "RC-TM-02", "RC-TM-03")) %>%
+    filter(rule_name %in% c("INT-DX-04", "RC-DP-05", "SBT-TM-01", "RC-TM-03")) %>%
     select(rule_name, or_unadjusted = or, or_low_unadj = or_low, or_high_unadj = or_high)
   
   # Match with adjusted results (skip intercept)
