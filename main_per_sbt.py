@@ -227,7 +227,7 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
     
     # Also whitelist derived ventilation/sbt IDs
     whitelist_ids.update(["sbt_status", "sbt_outcome", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
-    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed"]
+    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed", "SBTSucceeded"]
 
     # 2. Extract constraint definitions keyed by canonical IDs for frontend lookup.
     constraint_defs = {}
@@ -235,17 +235,38 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         cid = getattr(c, "id", None) or c.label
         if not cid:
             continue
+        def _subst_activity_names(expr, activation, target):
+            if not expr:
+                return expr
+            result = str(expr)
+            if activation:
+                result = result.replace("activation_ts", activation)
+            if target:
+                result = result.replace("target_ts", target)
+            return result
+
+        activation_name = c.activation if hasattr(c, "activation") else None
+        target_name = c.target if hasattr(c, "target") else None
+
         constraint_defs[str(cid)] = {
             "id": str(cid),
             "label": c.label or str(cid),
             "description": getattr(c, "description", "") or "",
             "rationale": getattr(c, "rationale", "") or "",
             "template": c.template.name if hasattr(c, "template") else None,
-            "activation": c.activation if hasattr(c, "activation") else None,
-            "target": c.target if hasattr(c, "target") else None,
+            "activation": activation_name,
+            "target": target_name,
             "semantics": getattr(c, "semantics", None),
-            "activation_condition": getattr(c, "activation_condition_raw", None),
-            "target_condition": getattr(c, "target_condition_raw", None),
+            "activation_condition": _subst_activity_names(
+                getattr(c, "activation_condition_raw", None),
+                activation_name,
+                target_name,
+            ),
+            "target_condition": _subst_activity_names(
+                getattr(c, "target_condition_raw", None),
+                activation_name,
+                target_name,
+            ),
             "observation_window_hours": getattr(c, "observation_window_hours", None),
             "min_gap_hours": (c.time_condition.min_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.min_seconds is not None) else None,
             "max_gap_hours": (c.time_condition.max_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.max_seconds is not None) else None,

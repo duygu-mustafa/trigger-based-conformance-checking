@@ -3,6 +3,7 @@ import './App.css'
 import Timeline from './components/Timeline'
 import SummaryView from './components/SummaryView'
 import RulesOverview from './components/RulesOverview'
+import StudioView from './components/StudioView'
 import infoIcon from './static/info.png'
 
 const VIEW_META = {
@@ -17,6 +18,10 @@ const VIEW_META = {
   rules: {
     eyebrow: 'Rules reference',
     description: 'Reference the declarative guideline set and supporting definitions used by the analysis views.',
+  },
+  studio: {
+    eyebrow: 'Clinician Studio',
+    description: 'Explore rules visually, define custom rules, and run on-demand conformance analysis.',
   },
 }
 
@@ -141,6 +146,13 @@ function App() {
             >
               Patient Timeline
             </button>
+            <button
+              type="button"
+              className={activeView === 'studio' ? 'view-tab view-tab--studio active' : 'view-tab view-tab--studio'}
+              onClick={() => setActiveView('studio')}
+            >
+              Clinician Studio
+            </button>
           </div>
         </div>
         <div className="header-meta-row">
@@ -170,8 +182,13 @@ function App() {
         </div>
       </header>
 
-      <main className="visualization-area">
-        {activeView === 'rules' ? (
+      <main className={`visualization-area${activeView === 'studio' ? ' visualization-area--studio' : ''}`}>
+        {activeView === 'studio' ? (
+          <StudioView
+            globalSummary={summaryData}
+            onOpenTimeline={openTimelineForStay}
+          />
+        ) : activeView === 'rules' ? (
           summaryLoading ? (
             <div className="loading-spinner">Loading rules reference...</div>
           ) : summaryError ? (

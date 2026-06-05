@@ -169,7 +169,8 @@ Execute declarative process-compliance rules against the event log and compute c
 
 ### Command
 ```bash
-python main.py
+source .venv/bin/activate
+python main_per_sbt.py
 ```
 
 To evaluate a checkpoint folder incrementally and write each checkpoint's results immediately, use:
@@ -182,7 +183,7 @@ python main_per_sbt_checkpoints.py \
 
 ### What This Does
 
-The conformance checker (`main.py` and `conformance/checker.py`) performs these steps:
+The conformance checker (`main_per_sbt.py` and `conformance/checker.py`) performs these steps:
 
 1. **Load Configuration**
    - Reads declarative rules from `configs/declare/` (YAML format)
@@ -240,33 +241,95 @@ rules:
 ## Quick Start
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - PostgreSQL connection to MIMIC-IV (for raw data extraction)
-- Candidate stay_ids file (from prior domain analysis)
+- Node.js 18+ (for the frontend)
 
 ### Full Pipeline Example
 
 ```bash
-# Step 1: Extract raw ICU events
+# Activate the virtual environment first
+source .venv/bin/activate
+
+# Step 1: Extract raw ICU events (requires MIMIC-IV database access)
 python database/materialize_all_icu_events.py --output icu_event_level_sbt.parquet
 
-# Step 2: Build event log (with SBT derivation and conformance gates)
+# Step 2: Build canonical event log
 python prepare_event_log.py \
   --input icu_event_level_sbt.parquet \
-   --output icu_event_log_full.parquet \
-   --use-all-data
+  --output icu_event_log_full.parquet \
+  --use-all-data
 
-# Step 3: Run conformance checking
-python main.py
+# Step 3: Run conformance checking — writes results + frontend JSON
+python main_per_sbt.py
+
+# Step 4: Launch the dashboard (see section 4 below)
 ```
 
-### Expected Output
+---
+
+## 4. Clinician Studio & Dashboard
+
+The React frontend provides three views for exploring conformance results, plus a **Clinician Studio** for interactive rule management and on-demand analysis.
+
+### Starting the dashboard
+
+The frontend requires the pre-computed JSON files written by `main_per_sbt.py` (in `frontend/public/data/`). The Clinician Studio additionally requires the FastAPI backend server.
+
+**Start both servers** (two terminals):
+
+```bash
+# Terminal 1 — Python API backend (required for Clinician Studio)
+source .venv/bin/activate
+uvicorn api:app --reload --port 8000
 ```
-Batch Processing: 100%|████████████| 1000/1000 [00:45<00:00,  1.20s/it]
-Successfully processed 1000 stays.
-Population KPI (Sugeno): 0.91
-Results saved to conformance_results.csv
+
+```bash
+# Terminal 2 — React frontend dev server
+cd frontend
+npm install        # first time only
+npm run dev
 ```
+
+Then open **http://localhost:5173** in your browser.
+
+### Frontend views
+
+| View | Description |
+|------|-------------|
+| **Global Summary** | Population-level conformance: violation frequencies, outcome correlations, stay explorer |
+| **Patient Timeline** | Per-case event timeline with episode outcomes and constraint detail |
+| **Rules Reference** | Developer-facing catalog of all Declare rules with raw definitions |
+| **Clinician Studio** | Three-tab workspace for clinicians (see below) |
+
+### Clinician Studio tabs
+
+| Tab | Description |
+|-----|-------------|
+| **Rule Library** | Visual browser of all 28 clinical rules. Each rule is shown as an SVG diagram (Declare template notation), with data conditions displayed as human-readable chips (`PaO₂/FiO₂ ≥ 150`), time windows, and severity bars. No code exposed. |
+| **Rule Builder** | 5-step wizard: choose a rule type → pick clinical events → set time window → define data conditions → add metadata. Live preview updates as you build. Rules are saved to `localStorage` and persist across sessions. |
+| **Run Analysis** | Choose a sample size and rule set (predefined rules, custom rules, or both), run conformance on a random sample, and compare the results side-by-side with the global baseline. |
+
+### Building for production
+
+```bash
+cd frontend
+npm run build      # outputs to frontend/dist/
+npm run preview    # preview the production build locally
+```
+
+### API endpoints (backend)
+
+The FastAPI server runs at `http://localhost:8000` and is proxied through Vite at `/api/*`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/rules` | All 28 Declare rules as structured JSON (no raw expressions) |
+| `GET /api/activities` | Available semantic activity names, grouped by category |
+| `GET /api/item_labels` | MIMIC-IV item-id → human-readable label lookup |
+| `POST /api/run` | Submit an async conformance job (sample size + optional custom rules) |
+| `GET /api/jobs/{id}` | Poll job status and retrieve results |
+| `DELETE /api/jobs/{id}` | Cancel a running job |
 
 ---
 
@@ -280,6 +343,8 @@ Results saved to conformance_results.csv
 | `derive/` | Event log construction, SBT derivation, invasive-vent gating |
 | `conformance/` | Declarative rule checking and metrics computation |
 | `configs/` | YAML configuration for activity mapping, rules, weights |
+| `api.py` | FastAPI backend — serves structured rule data and runs on-demand conformance jobs |
+| `frontend/` | React + Vite dashboard (Summary, Timeline, Rules, Clinician Studio) |
 
 ### Data Flow
 
@@ -294,18 +359,24 @@ Raw ICU Events (icu_event_level_sbt.parquet)
   - Derive weaning frame
   - Extract invasive-vent start times
   - Build SBT episodes
-  - Apply invasive-vent gate ← **Conformance Guard**
+  - Apply invasive-vent gate ← Conformance Guard
   - Map activities
        ↓
 Canonical Event Log (icu_event_log_full.parquet)
        ↓
-[main.py → conformance/checker.py]
-  - Load declarative rules
-  - Check LTL constraints
-  - Compute violations
-  - Aggregate metrics
+[main_per_sbt.py → conformance/checker.py]
+  - Load declarative rules (configs/declare/*.yaml)
+  - Segment stays into trigger episodes
+  - Check Declare constraints per episode
+  - Compute fuzzy weighted scores (Sugeno KPI)
+  - Write frontend/public/data/*.json
        ↓
 Conformance Results (conformance_results.csv)
+  + frontend/public/data/  ← static JSON for dashboard
+       ↓
+[React frontend  +  api.py]
+  - Global Summary / Timeline / Rules reference
+  - Clinician Studio: visual rules, rule builder, on-demand analysis
 ```
 
 ---

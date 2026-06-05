@@ -1,0 +1,8 @@
+scratch/
+logs/
+data/
+.venv/
+venv/
+.pytest_cache/
+__pycache__/
+misc/

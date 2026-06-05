@@ -72,8 +72,8 @@ model:
     - id: SBT-DP-02
       label: "No SBT success when respiratory rate failure criterion met"
       template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "rr_failure AND items['sbt_outcome'] == 'Success'"
+      activation: SBTSucceeded
+      activation_condition: "rr_failure"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         RR > 35 breaths/min during the trial is an SBT failure criterion.
@@ -83,8 +83,8 @@ model:
     - id: SBT-DP-03
       label: "No SBT success when SpO2 failure criterion met"
       template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "spo2_failure AND items['sbt_outcome'] == 'Success'"
+      activation: SBTSucceeded
+      activation_condition: "spo2_failure"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Persistent SpO2 < 92% (or < 88% in chronic lung disease) is a
@@ -93,8 +93,8 @@ model:
     - id: SBT-DP-04
       label: "No SBT success when haemodynamic failure criterion met"
       template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "hemodynamic_failure AND items['sbt_outcome'] == 'Success'"
+      activation: SBTSucceeded
+      activation_condition: "hemodynamic_failure"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         HR > 140 bpm or SBP > 180 mmHg during the trial contradicts
@@ -103,8 +103,8 @@ model:
     - id: SBT-DP-05
       label: "No SBT success when mental status failure criterion met"
       template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "mental_status_failure AND items['sbt_outcome'] == 'Success'"
+      activation: SBTSucceeded
+      activation_condition: "mental_status_failure"
       semantics: ACTIVATION_VIOLATION
       rationale: >
         Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
@@ -113,10 +113,9 @@ model:
     - id: SBT-DP-COMPOSITE-01
       label: "No SBT success when any failure criterion is met"
       template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
+      activation: SBTSucceeded
       activation_condition: >
-        (rr_failure OR spo2_failure OR hemodynamic_failure OR mental_status_failure)
-        AND items['sbt_outcome'] == 'Success'
+        rr_failure OR spo2_failure OR hemodynamic_failure OR mental_status_failure
       semantics: ACTIVATION_VIOLATION
     
     - id: SBT-TM-01

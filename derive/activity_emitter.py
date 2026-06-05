@@ -146,8 +146,8 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     """Generate derived activities from mapped activities.
 
     Currently implements:
-    - SBTFailed: Fired when SBTCompleted.value == "No" OR when SBTStopped
-      occurs within an active SBT window.
+    - SBTFailed: Fired when SBTCompleted.value == "Failure" or re-ventilation within 48 h.
+    - SBTSucceeded: Fired when SBTCompleted.value == "Success".
     """
     derived_frames: list[pd.DataFrame] = []
 
@@ -180,6 +180,35 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
                 }
             )
             derived_frames.append(sbt_failed_from_completed)
+
+    # ── SBTSucceeded ─────────────────────────────────────────────────────────
+    # Symmetric to SBTFailed: fired when SBTCompleted.value == "Success"
+    if not sbt_completed.empty:
+        success_mask = (
+            sbt_completed.get("value_raw", pd.Series(index=sbt_completed.index, dtype=object))
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq("success")
+        )
+        sbt_succeeded_rows = sbt_completed[success_mask].copy()
+        if not sbt_succeeded_rows.empty:
+            sbt_succeeded_frame = pd.DataFrame(
+                {
+                    "case_id": sbt_succeeded_rows["case_id"],
+                    "activity": "SBTSucceeded",
+                    "timestamp": sbt_succeeded_rows["timestamp"],
+                    "source_table": sbt_succeeded_rows["source_table"],
+                    "itemid": sbt_succeeded_rows["itemid"],
+                    "value_raw": sbt_succeeded_rows.get("value_raw"),
+                    "value_num": sbt_succeeded_rows.get("value_num"),
+                    "unit": sbt_succeeded_rows.get("unit"),
+                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=Success"}] * len(sbt_succeeded_rows),
+                    "patient_id": sbt_succeeded_rows.get("patient_id"),
+                    "stay_id": sbt_succeeded_rows.get("stay_id"),
+                }
+            )
+            derived_frames.append(sbt_succeeded_frame)
 
     # Case 2: Re-ventilation after an SBT start implies a failed attempt.
     # For each SBTStarted, if an InvasiveVentilationStarted occurs within

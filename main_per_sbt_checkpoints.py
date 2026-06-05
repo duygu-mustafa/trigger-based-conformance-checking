@@ -344,6 +344,7 @@ def main() -> None:
         "--checkpoint-dir",
         type=Path,
         required=True,
+        default=Path("data/icu_event_log_checkpoints"),
         help="Directory containing icu_event_log.checkpoint_*.parquet snapshots.",
     )
     parser.add_argument(

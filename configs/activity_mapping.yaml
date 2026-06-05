@@ -36,3 +36,8 @@ mappings:
     derived: true
     logic: >
       Fired when SBTCompleted.value == "Failure"
+
+  SBTSucceeded:
+    derived: true
+    logic: >
+      Fired when SBTCompleted.value == "Success"
