@@ -7,15 +7,23 @@ const TEMPLATE_OPTIONS = [
     group: 'Sequence rules',
     items: [
       { id: 'RESPONSE', label: 'Must follow', description: 'After [A] occurs, [B] must eventually happen', icon: '→' },
-      { id: 'PRECEDENCE', label: 'Must precede', description: '[B] can only occur if [A] happened before', icon: '←' },
-      { id: 'SUCCESSION', label: 'Mutual sequence', description: '[A] and [B] must both occur, with [A] before [B]', icon: '⇆' },
+      { id: 'ALTERNATE_RESPONSE', label: 'Alternate follow', description: 'Each time [A] occurs, [B] must follow before [A] recurs', icon: '→*' },
       { id: 'CHAIN_RESPONSE', label: 'Immediate follow', description: 'After [A], [B] must occur immediately next', icon: '→!' },
+      { id: 'PRECEDENCE', label: 'Must precede', description: '[B] can only occur if [A] happened before', icon: '←' },
+      { id: 'ALTERNATE_PRECEDENCE', label: 'Alternate precede', description: 'Each time [B] occurs, it must be preceded by [A] with no other [B] in between', icon: '*←' },
+      { id: 'CHAIN_PRECEDENCE', label: 'Immediate precede', description: '[B] must be immediately preceded by [A]', icon: '!←' },
+      { id: 'SUCCESSION', label: 'Mutual sequence', description: '[A] occurs if and only if it is followed by [B]', icon: '⇆' },
+      { id: 'ALTERNATE_SUCCESSION', label: 'Alternate mutual sequence', description: '[A] and [B] alternate: each [A] is followed by [B] and each [B] is preceded by [A]', icon: '⇆*' },
+      { id: 'CHAIN_SUCCESSION', label: 'Immediate mutual sequence', description: '[A] and [B] must occur immediately one after the other', icon: '⇆!' },
     ],
   },
   {
     group: 'Existence rules',
     items: [
+      { id: 'INIT', label: 'Must be first', description: '[A] must be the first event in the episode', icon: '⊳' },
+      { id: 'END', label: 'Must be last', description: '[A] must be the last event in the episode', icon: '⊲' },
       { id: 'EXISTENCE', label: 'Must occur', description: '[A] must happen at least once in the episode', icon: '≥1' },
+      { id: 'EXACTLY', label: 'Exactly once', description: '[A] must occur exactly once in the episode', icon: '=1' },
       { id: 'ABSENCE', label: 'Must not occur', description: '[A] must never happen in this episode', icon: '⊘' },
       { id: 'CO_EXISTENCE', label: 'Co-occur', description: '[A] and [B] must either both occur or both be absent', icon: '↔' },
       { id: 'RESPONDED_EXISTENCE', label: 'Implies existence', description: 'If [A] occurs, [B] must also occur (any order)', icon: '∃' },
@@ -27,6 +35,7 @@ const TEMPLATE_OPTIONS = [
       { id: 'NOT_CO_EXISTENCE', label: 'Cannot co-occur', description: '[A] and [B] cannot both happen in the same episode', icon: '✕' },
       { id: 'NOT_RESPONSE', label: 'Must not follow', description: 'After [A], [B] must NOT occur', icon: '⊘→' },
       { id: 'NOT_SUCCESSION', label: 'Sequence forbidden', description: '[A] followed by [B] is forbidden', icon: '⊘⇆' },
+      { id: 'NOT_CHAIN_SUCCESSION', label: 'No immediate mutual sequence', description: '[A] and [B] cannot occur immediately one after the other', icon: '⊘⇆!' },
     ],
   },
 ]
@@ -228,6 +237,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                         >
                           <span className="template-card-icon">{t.icon}</span>
                           <span className="template-card-name">{t.label}</span>
+                          <span className="rule-template-badge">{t.id}</span>
                           <span className="template-card-desc">{t.description}</span>
                         </button>
                       ))}

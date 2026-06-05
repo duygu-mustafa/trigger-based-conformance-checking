@@ -21,6 +21,18 @@ export default function DeclareVisualizer({ template, activation, target, condit
   const isUnary = ['EXISTENCE', 'ABSENCE', 'EXACTLY', 'INIT', 'END'].includes(template)
   const isNegative = template.startsWith('NOT_') || template === 'ABSENCE'
   const isChain = template.startsWith('CHAIN_')
+  const isAlternate = template.startsWith('ALTERNATE_')
+  const isSymmetricProhibition =
+    template === 'NOT_CO_EXISTENCE' ||
+    template === 'NOT_SUCCESSION' ||
+    template === 'NOT_CHAIN_SUCCESSION'
+  const isPrecedence =
+    template === 'PRECEDENCE' ||
+    template === 'CHAIN_PRECEDENCE' ||
+    template === 'ALTERNATE_PRECEDENCE'
+  const isRespondedExistence =
+    template === 'RESPONDED_EXISTENCE' ||
+    template === 'NOT_RESPONDED_EXISTENCE'
 
   // When an EXISTENCE rule has an activation title (e.g. "Temperature criterion met"),
   // show a two-box diagram: [condition title] ──→ [activation activity]
@@ -79,6 +91,17 @@ export default function DeclareVisualizer({ template, activation, target, condit
     }
   }
 
+  function binaryBadgeText() {
+    if (isSymmetricProhibition) return '✕'
+    if (isNegative) return '⊘'
+    if (template.includes('SUCCESSION')) return '⇆'
+    if (template.includes('RESPONSE')) return '→'
+    if (isPrecedence) return '←'
+    if (template === 'CO_EXISTENCE') return '↔'
+    if (isRespondedExistence) return '∃'
+    return '?'
+  }
+
   // ── Text helpers ──────────────────────────────────────────────────────────
   function trimLabel(str, maxLen = 14) {
     if (!str) return ''
@@ -133,6 +156,129 @@ export default function DeclareVisualizer({ template, activation, target, condit
   const rawLeft = showConditionAsBox ? activationTitle : (activation || 'A')
   const rawRight = showConditionAsBox ? activation : (showConditionOnRight ? conditionLabel : (target || 'B'))
 
+  function renderConnector() {
+    const TS = compact ? 3.5 : 5
+
+    const doubleTick = (offsetX = 0) => (
+      <path
+        d={`M${midX - 2 + offsetX},${arrowY - TS} L${midX - 2 + offsetX},${arrowY + TS} M${midX + 2 + offsetX},${arrowY - TS} L${midX + 2 + offsetX},${arrowY + TS}`}
+        stroke={arrowColor} strokeWidth="1.5"
+      />
+    )
+
+    const altArc = () => {
+      const ax = compact ? 4 : 6
+      const ay1 = compact ? 6 : 8
+      const ay2 = compact ? 11 : 16
+      return (
+        <path
+          d={`M${midX - ax},${arrowY - ay1} Q${midX},${arrowY - ay2} ${midX + ax},${arrowY - ay1}`}
+          stroke={arrowColor} strokeWidth="1.2" fill="none"
+        />
+      )
+    }
+
+    // Symmetric prohibition: no direction arrow, filled ✕ circle on dashed line
+    if (isSymmetricProhibition) {
+      const tickOffset = BADGE_R + 6
+      return (
+        <g>
+          <line
+            x1={arrowX1} y1={arrowY} x2={arrowX2} y2={arrowY}
+            stroke={arrowColor} strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"
+          />
+          <circle cx={midX} cy={arrowY} r={BADGE_R} fill={arrowColor} opacity="0.85" />
+          <text
+            x={midX} y={arrowY + 1}
+            textAnchor="middle" dominantBaseline="middle"
+            fontSize={BADGE_R - 1} fontWeight="700" fill="#fff" fontFamily="Inter, sans-serif"
+          >✕</text>
+          {template === 'NOT_CHAIN_SUCCESSION' && doubleTick(tickOffset)}
+        </g>
+      )
+    }
+
+    // Responded existence: dashed line, no arrowhead (badge carries the symbol)
+    if (isRespondedExistence) {
+      return (
+        <g>
+          <line
+            x1={arrowX1} y1={arrowY} x2={arrowX2} y2={arrowY}
+            stroke={arrowColor} strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"
+          />
+        </g>
+      )
+    }
+
+    // Precedence: arrow reversed (points toward A, i.e. right-to-left)
+    if (isPrecedence) {
+      return (
+        <g>
+          <line
+            x1={arrowX2} y1={arrowY} x2={arrowX1 + 2} y2={arrowY}
+            stroke={arrowColor} strokeWidth="1.5"
+            markerEnd={`url(#arrow-${template}-pos)`}
+          />
+          {isChain && doubleTick()}
+          {isAlternate && altArc()}
+        </g>
+      )
+    }
+
+    // Bidirectional: CO_EXISTENCE and SUCCESSION family (non-prohibited)
+    if (template === 'CO_EXISTENCE' || (template.includes('SUCCESSION') && !isSymmetricProhibition)) {
+      return (
+        <g>
+          <line
+            x1={arrowX1} y1={arrowY - 3} x2={arrowX2} y2={arrowY - 3}
+            stroke={arrowColor} strokeWidth="1.5"
+            markerEnd={`url(#arrow-${template}-pos)`}
+          />
+          <line
+            x1={arrowX2} y1={arrowY + 3} x2={arrowX1} y2={arrowY + 3}
+            stroke={arrowColor} strokeWidth="1.5"
+            markerEnd={`url(#arrow-${template}-neg)`}
+          />
+          {isChain && doubleTick()}
+          {isAlternate && altArc()}
+        </g>
+      )
+    }
+
+    // Other negatives: dashed arrow with open strike-through circle
+    if (isNegative) {
+      return (
+        <g>
+          <line
+            x1={arrowX1} y1={arrowY} x2={arrowX2} y2={arrowY}
+            stroke={arrowColor} strokeWidth="1.5" strokeDasharray="5,3"
+            markerEnd={`url(#arrow-${template}-neg)`} opacity="0.7"
+          />
+          <circle cx={midX} cy={arrowY} r={BADGE_R - 2} fill="none" stroke={arrowColor} strokeWidth="1.5" opacity="0.8" />
+          <line
+            x1={midX - (BADGE_R - 4)} y1={arrowY - (BADGE_R - 4)}
+            x2={midX + (BADGE_R - 4)} y2={arrowY + (BADGE_R - 4)}
+            stroke={arrowColor} strokeWidth="1.5" opacity="0.8"
+          />
+          {isChain && doubleTick()}
+        </g>
+      )
+    }
+
+    // Default positive directional (RESPONSE, CHAIN_RESPONSE, ALTERNATE_RESPONSE)
+    return (
+      <g>
+        <line
+          x1={arrowX1} y1={arrowY} x2={arrowX2 - 2} y2={arrowY}
+          stroke={arrowColor} strokeWidth="1.5"
+          markerEnd={`url(#arrow-${template}-pos)`}
+        />
+        {isChain && doubleTick()}
+        {isAlternate && altArc()}
+      </g>
+    )
+  }
+
   return (
     <svg
       width={W}
@@ -185,50 +331,7 @@ export default function DeclareVisualizer({ template, activation, target, condit
           {renderLabel(rawRight, rightX + BOX_W / 2)}
 
           {/* Arrow / connector */}
-          {template === 'CO_EXISTENCE' || template === 'SUCCESSION' || template.includes('SUCCESSION') ? (
-            /* Bidirectional */
-            <>
-              <line
-                x1={arrowX1} y1={arrowY - 3}
-                x2={arrowX2} y2={arrowY - 3}
-                stroke={arrowColor} strokeWidth="1.5"
-                markerEnd={`url(#arrow-${template}-pos)`}
-              />
-              <line
-                x1={arrowX2} y1={arrowY + 3}
-                x2={arrowX1} y2={arrowY + 3}
-                stroke={arrowColor} strokeWidth="1.5"
-                markerEnd={`url(#arrow-${template}-neg)`}
-              />
-            </>
-          ) : isNegative ? (
-            /* Negative: dashed red with strike */
-            <g>
-              <line
-                x1={arrowX1} y1={arrowY}
-                x2={arrowX2} y2={arrowY}
-                stroke={arrowColor} strokeWidth="1.5"
-                strokeDasharray={strokeDash || '5,3'}
-                markerEnd={`url(#arrow-${template}-neg)`}
-                opacity="0.7"
-              />
-              {/* Strike-through circle */}
-              <circle cx={midX} cy={arrowY} r={BADGE_R - 2} fill="none" stroke={arrowColor} strokeWidth="1.5" opacity="0.8" />
-              <line
-                x1={midX - (BADGE_R - 4)} y1={arrowY - (BADGE_R - 4)}
-                x2={midX + (BADGE_R - 4)} y2={arrowY + (BADGE_R - 4)}
-                stroke={arrowColor} strokeWidth="1.5" opacity="0.8"
-              />
-            </g>
-          ) : (
-            /* Positive: solid arrow */
-            <line
-              x1={arrowX1} y1={arrowY}
-              x2={arrowX2 - 2} y2={arrowY}
-              stroke={arrowColor} strokeWidth="1.5"
-              markerEnd={`url(#arrow-${template}-pos)`}
-            />
-          )}
+          {renderConnector()}
         </>
       )}
 
@@ -249,6 +352,24 @@ export default function DeclareVisualizer({ template, activation, target, condit
             fontFamily="Inter, sans-serif"
           >
             {badgeText()}
+          </text>
+        </g>
+      ) : !isSymmetricProhibition ? (
+        <g>
+          <circle
+            cx={midX} cy={badgeY}
+            r={BADGE_R}
+            fill={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
+            opacity="0.85"
+          />
+          <text
+            x={midX} y={badgeY + 1}
+            textAnchor="middle" dominantBaseline="middle"
+            fontSize={FONT + 1} fontWeight="700"
+            fill="#fff"
+            fontFamily="Inter, sans-serif"
+          >
+            {binaryBadgeText()}
           </text>
         </g>
       ) : null}
