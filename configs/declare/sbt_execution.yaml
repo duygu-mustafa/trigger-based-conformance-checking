@@ -15,10 +15,12 @@ model:
   data_conditions:
 
     rr_failure:
+      title: "RR Failure"
       description: "Respiratory Rate > 35 breaths/min"
       expression: "items[220210] > 35"
 
     accessory_muscle_failure:
+      title: "Accessory Muscle Failure"
       description: >
         Accessory muscle use detected. Ordinal mapping: 0=Normal, 1=Mild,
         2=Moderate Distress (Fail), 3=Critical Fail.
@@ -26,6 +28,7 @@ model:
       expression: "items[229322] in [2, 3] OR items[223990] in [2, 3]" 
 
     spo2_failure:
+      title: "SpO₂ Failure"
       description: >
         SpO2 persistently < 92% (or < 88% in chronic lung disease patients)
         on FiO2 >= 0.4 or at least 6 L/min oxygen.
@@ -35,6 +38,7 @@ model:
         - "(is_chronic == True) AND (items[220277] < 88)"
 
     hemodynamic_failure:
+      title: "Hemodynamic Failure"
       description: >
         HR > 140 bpm OR SBP > 180 mmHg OR SBP < 90 mmHg (signs of
         hypoperfusion).
@@ -45,6 +49,7 @@ model:
         - "items[220179] < 90"
 
     mental_status_failure:
+      title: "SAS Failure"
       description: >
         Depressed mental status or agitation. SAS >= 6 (Very Agitated /
         Danger Agitation) or SAS <= 2 (Very Sedated / Unarousable) or

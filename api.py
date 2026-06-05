@@ -258,8 +258,10 @@ def _constraint_to_dict(c: Any) -> dict[str, Any]:
         },
         "activation_conditions": activation_chips,
         "activation_logic": _detect_logic(str(activation_expr)) if activation_chips else "AND",
+        "activation_condition_title": getattr(c, "activation_condition_title", None),
         "correlation_conditions": correlation_chips,
         "correlation_logic": _detect_logic(str(correlation_expr)) if correlation_chips else "AND",
+        "target_condition_title": getattr(c, "target_condition_title", None),
         "semantics": getattr(c, "semantics", None),
         "severity": _severity_for(str(rule_id)),
     }

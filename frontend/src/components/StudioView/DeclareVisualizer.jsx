@@ -10,11 +10,11 @@
  *   target      string   — label for the target activity box (binary rules)
  *   compact     bool     — if true, render a smaller thumbnail version
  */
-export default function DeclareVisualizer({ template, activation, target, compact = false }) {
+export default function DeclareVisualizer({ template, activation, target, conditionLabel, activationTitle, compact = false }) {
   const W = compact ? 200 : 320
-  const H = compact ? 72 : 100
-  const BOX_W = compact ? 68 : 100
-  const BOX_H = compact ? 26 : 36
+  const H = compact ? 72 : 108
+  const BOX_W = compact ? 78 : 112
+  const BOX_H = compact ? 26 : 44
   const FONT = compact ? 9 : 11
   const BADGE_R = compact ? 10 : 13
 
@@ -22,13 +22,18 @@ export default function DeclareVisualizer({ template, activation, target, compac
   const isNegative = template.startsWith('NOT_') || template === 'ABSENCE'
   const isChain = template.startsWith('CHAIN_')
 
+  // When an EXISTENCE rule has an activation title (e.g. "Temperature criterion met"),
+  // show a two-box diagram: [condition title] ──→ [activation activity]
+  const showConditionAsBox = Boolean(activationTitle) && template === 'EXISTENCE'
+  const effectiveIsUnary = isUnary && !showConditionAsBox
+
   const cx = W / 2
   const cy = H / 2
 
   // For unary: single centred box
   // For binary: two boxes left and right with arrow between
-  const leftX = isUnary ? cx - BOX_W / 2 : compact ? 8 : 16
-  const rightX = isUnary ? cx - BOX_W / 2 : W - BOX_W - (compact ? 8 : 16)
+  const leftX = effectiveIsUnary ? cx - BOX_W / 2 : compact ? 2 : 4
+  const rightX = effectiveIsUnary ? cx - BOX_W / 2 : W - BOX_W - (compact ? 2 : 4)
   const boxY = cy - BOX_H / 2
 
   const arrowColor = isNegative ? 'var(--color-violation, #e05252)' : 'var(--color-primary, #5b8dee)'
@@ -74,14 +79,59 @@ export default function DeclareVisualizer({ template, activation, target, compac
     }
   }
 
-  // Activity display label: trim long names
-  function trimLabel(str, maxLen = compact ? 10 : 14) {
+  // ── Text helpers ──────────────────────────────────────────────────────────
+  function trimLabel(str, maxLen = 14) {
     if (!str) return ''
     return str.length > maxLen ? str.slice(0, maxLen - 1) + '…' : str
   }
 
-  const activationLabel = trimLabel(activation || 'A')
-  const targetLabel = trimLabel(target || 'B')
+  // In expanded mode: show full text with word wrap when needed.
+  // In compact mode: truncate with ellipsis.
+  const CHARS_PER_LINE = Math.floor((BOX_W - 14) / (FONT * 0.6))
+
+  function wrapText(text) {
+    if (!text) return ['']
+    const lines = []
+    for (let i = 0; i < text.length; i += CHARS_PER_LINE) {
+      lines.push(text.slice(i, i + CHARS_PER_LINE))
+    }
+    return lines
+  }
+
+  function renderLabel(text, x) {
+    const isCompact = compact
+    const displayText = isCompact ? trimLabel(text) : text
+    const lines = isCompact ? [displayText] : wrapText(text)
+    const lineH = FONT + 2
+    const isMulti = lines.length > 1
+
+    return (
+      <text
+        x={x} y={boxY + BOX_H / 2 + 1}
+        textAnchor="middle" dominantBaseline="middle"
+        fontSize={FONT}
+        fill="var(--color-text-main, #e8edf5)"
+        fontFamily="Inter, sans-serif"
+      >
+        {lines.map((line, i) => (
+          <tspan
+            key={i} x={x}
+            dy={i === 0 && isMulti ? -(lines.length - 1) * lineH / 2 : (i > 0 ? lineH : 0)}
+          >
+            {line}
+          </tspan>
+        ))}
+      </text>
+    )
+  }
+
+  // When target duplicates activation AND a condition label is supplied,
+  // show the condition name on the right box instead of the duplicated activity.
+  const showConditionOnRight = Boolean(conditionLabel) && target === activation
+
+  // Use raw strings — renderLabel handles truncation (compact) and wrapping (expanded).
+  const rawLeft = showConditionAsBox ? activationTitle : (activation || 'A')
+  const rawRight = showConditionAsBox ? activation : (showConditionOnRight ? conditionLabel : (target || 'B'))
 
   return (
     <svg
@@ -116,23 +166,13 @@ export default function DeclareVisualizer({ template, activation, target, compac
         width={BOX_W} height={BOX_H}
         rx="5"
         fill="var(--color-bg-card, #1e2a3a)"
-        stroke="var(--color-primary, #5b8dee)"
+        stroke={showConditionAsBox ? 'var(--color-primary, #5b8dee)' : 'var(--color-primary, #5b8dee)'}
         strokeWidth="1.5"
       />
-      <text
-        x={leftX + BOX_W / 2}
-        y={boxY + BOX_H / 2 + 1}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fontSize={FONT}
-        fill="var(--color-text-main, #e8edf5)"
-        fontFamily="Inter, sans-serif"
-      >
-        {activationLabel}
-      </text>
+      {renderLabel(rawLeft, leftX + BOX_W / 2)}
 
       {/* Right activity box (binary only) */}
-      {!isUnary && (
+      {!effectiveIsUnary && (
         <>
           <rect
             x={rightX} y={boxY}
@@ -142,17 +182,7 @@ export default function DeclareVisualizer({ template, activation, target, compac
             stroke={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
             strokeWidth="1.5"
           />
-          <text
-            x={rightX + BOX_W / 2}
-            y={boxY + BOX_H / 2 + 1}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize={FONT}
-            fill="var(--color-text-main, #e8edf5)"
-            fontFamily="Inter, sans-serif"
-          >
-            {targetLabel}
-          </text>
+          {renderLabel(rawRight, rightX + BOX_W / 2)}
 
           {/* Arrow / connector */}
           {template === 'CO_EXISTENCE' || template === 'SUCCESSION' || template.includes('SUCCESSION') ? (
@@ -203,7 +233,7 @@ export default function DeclareVisualizer({ template, activation, target, compac
       )}
 
       {/* Badge circle with template symbol */}
-      {isUnary ? (
+      {effectiveIsUnary ? (
         <g>
           <circle
             cx={badgeX} cy={badgeY}

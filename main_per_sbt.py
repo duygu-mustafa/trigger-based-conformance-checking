@@ -262,11 +262,13 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
                 activation_name,
                 target_name,
             ),
+            "activation_condition_title": getattr(c, "activation_condition_title", None),
             "target_condition": _subst_activity_names(
                 getattr(c, "target_condition_raw", None),
                 activation_name,
                 target_name,
             ),
+            "target_condition_title": getattr(c, "target_condition_title", None),
             "observation_window_hours": getattr(c, "observation_window_hours", None),
             "min_gap_hours": (c.time_condition.min_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.min_seconds is not None) else None,
             "max_gap_hours": (c.time_condition.max_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.max_seconds is not None) else None,

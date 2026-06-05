@@ -98,6 +98,8 @@ function RuleCard({ rule }) {
             template={rule.template}
             activation={rule.activation}
             target={rule.target}
+            conditionLabel={rule.activation_condition_title || null}
+            activationTitle={rule.activation_condition_title || null}
             compact={true}
           />
         </div>
@@ -117,6 +119,8 @@ function RuleCard({ rule }) {
               template={rule.template}
               activation={rule.activation}
               target={rule.target}
+              conditionLabel={rule.activation_condition_title || null}
+              activationTitle={rule.activation_condition_title || null}
               compact={false}
             />
           </div>

@@ -153,6 +153,21 @@ def _build_data_condition_map(model_data: dict[str, Any]) -> dict[str, str]:
     return resolved
 
 
+def _build_condition_title_map(model_data: dict[str, Any]) -> dict[str, str]:
+    """Extract optional human-readable titles from YAML data_conditions."""
+    raw_conditions = model_data.get("data_conditions")
+    if not isinstance(raw_conditions, dict):
+        return {}
+    title_map: dict[str, str] = {}
+    for name, condition in raw_conditions.items():
+        if not isinstance(name, str) or not isinstance(condition, dict):
+            continue
+        title = condition.get("title")
+        if title:
+            title_map[name] = str(title)
+    return title_map
+
+
 def _expand_condition_expr(expr: Any, condition_map: dict[str, str]) -> Any:
     if expr is None or not condition_map:
         return expr
@@ -166,7 +181,11 @@ def _expand_condition_expr(expr: Any, condition_map: dict[str, str]) -> Any:
     return expanded
 
 
-def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> DeclareConstraint:
+def _parse_constraint(
+    raw: dict[str, Any],
+    condition_map: dict[str, str],
+    condition_title_map: dict[str, str] | None = None,
+) -> DeclareConstraint:
     if not isinstance(raw, dict):
         raise ValueError("Each constraint must be a mapping")
 
@@ -175,16 +194,35 @@ def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> Dec
         raise ValueError(f"Constraint is missing required fields: {missing}")
 
     # Accept both old and new config naming.
-    activation_cond = _pick_first(
+    activation_cond_raw_value = _pick_first(
         raw,
         "activation_cond",
         "activation_condition",
         "condition_on_activation",
         "guard",
     )
-    correlation_cond = _pick_first(raw, "correlation_cond", "target_condition", "correlation_condition")
-    activation_cond = _expand_condition_expr(activation_cond, condition_map)
-    correlation_cond = _expand_condition_expr(correlation_cond, condition_map)
+    correlation_cond_raw_value = _pick_first(raw, "correlation_cond", "target_condition", "correlation_condition")
+
+    # Resolve human-readable titles from the raw YAML condition name (before expansion).
+    # Strip leading "NOT " so conditions like "NOT temperature_ok" resolve to title "Temperature criterion met".
+    activation_title = None
+    correlation_title = None
+    if condition_title_map:
+        if activation_cond_raw_value is not None:
+            key = str(activation_cond_raw_value).strip()
+            if key.startswith("NOT "):
+                key = key[4:]
+            if key in condition_title_map:
+                activation_title = condition_title_map[key]
+        if correlation_cond_raw_value is not None:
+            key = str(correlation_cond_raw_value).strip()
+            if key.startswith("NOT "):
+                key = key[4:]
+            if key in condition_title_map:
+                correlation_title = condition_title_map[key]
+
+    activation_cond = _expand_condition_expr(activation_cond_raw_value, condition_map)
+    correlation_cond = _expand_condition_expr(correlation_cond_raw_value, condition_map)
     time_condition = _build_time_condition(raw)
 
     template = _to_template(str(raw["template"]))
@@ -215,6 +253,8 @@ def _parse_constraint(raw: dict[str, Any], condition_map: dict[str, str]) -> Dec
             if raw.get("label") is not None
             else raw_id
         ),
+        activation_condition_title=activation_title,
+        target_condition_title=correlation_title,
     )
 
     # Attach additional metadata used by downstream exporters/UI.
@@ -246,13 +286,18 @@ def load_model_from_yaml(path: str | Path) -> DeclareModel:
     name = model_data.get("name") or data.get("name") or config_path.stem
     constraints_data = model_data.get("constraints", data.get("constraints", []))
     condition_map = _build_data_condition_map(model_data)
+    condition_title_map = _build_condition_title_map(model_data)
 
     if not isinstance(constraints_data, list):
         raise ValueError(f"Invalid rule config at {config_path}: model.constraints must be a list")
 
     model = DeclareModel(name=str(name))
     for raw_constraint in constraints_data:
-        model.add(_parse_constraint(raw_constraint, condition_map=condition_map))
+        model.add(_parse_constraint(
+            raw_constraint,
+            condition_map=condition_map,
+            condition_title_map=condition_title_map,
+        ))
 
     return model
 
