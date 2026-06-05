@@ -348,6 +348,7 @@ class RunRequest(BaseModel):
     seed: int = 42
     include_predefined: bool = True
     custom_rules: list[CustomRuleInput] = []
+    trigger_event: str = "InvasiveVentilationStarted"
 
 
 # ── Custom rule → DeclareConstraint ──────────────────────────────────────────
@@ -449,6 +450,33 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
 
 # ── Analysis runner ───────────────────────────────────────────────────────────
 
+def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.DataFrame"]:
+    """Split a stay DataFrame into episode sub-frames using trigger_activity boundaries.
+
+    Returns one DataFrame per episode. Falls back to [df] when no triggers are found.
+    """
+    import pandas as pd
+
+    triggers = (
+        df[df["activity"] == trigger_activity]
+        .drop_duplicates(subset=["timestamp"])
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+    if triggers.empty:
+        return [df]
+
+    trace_end = df["timestamp"].max() + pd.Timedelta(seconds=1)
+    episodes = []
+    for idx, row in triggers.iterrows():
+        start_ts = row["timestamp"]
+        end_ts = triggers.iloc[idx + 1]["timestamp"] if idx + 1 < len(triggers) else trace_end
+        episode_df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
+        if not episode_df.empty:
+            episodes.append(episode_df)
+    return episodes if episodes else [df]
+
+
 def _run_analysis(job_id: str, request: RunRequest) -> None:
     """Background thread: run conformance on a sample and store result."""
     cancel_event = _job_cancel[job_id]
@@ -508,14 +536,24 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
         job["total"] = len(sample_ids)
         job["done"] = 0
 
+        from conformance.checker import check_log_conformance
+
         all_results = []
         for stay_id in sample_ids:
             if cancel_event.is_set():
                 job["status"] = "cancelled"
                 return
 
-            stay_results = runner.process_batch([stay_id])
-            all_results.extend(stay_results)
+            df = runner.con.execute(
+                f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
+                [str(stay_id)],
+            ).df()
+
+            if not df.empty:
+                for episode_df in _split_into_episodes(df, request.trigger_event):
+                    trace_results = check_log_conformance(episode_df, combined)
+                    if trace_results:
+                        all_results.extend(trace_results)
 
             job["done"] = job.get("done", 0) + 1
             job["progress"] = job["done"] / job["total"]
@@ -535,21 +573,27 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
 
 def _build_minimal_summary(results: list, model) -> dict[str, Any]:
     """Fallback summary builder when outcome_postprocessing is unavailable."""
+    from conformance.results import ConformanceOutcome
+
+    label_map = {c.id: getattr(c, "label", c.id) for c in model.constraints}
+
     violation_counts: dict[str, int] = {}
     episode_count = 0
 
     for r in results:
         episode_count += 1
-        violated = getattr(r, "mandatory_violated_constraints", []) or []
-        if isinstance(violated, str):
-            violated = [v.strip() for v in violated.split(";") if v.strip()]
+        violated = [
+            cr.constraint_id
+            for cr in (r.constraint_results or [])
+            if cr.outcome == ConformanceOutcome.VIOLATED
+        ]
         for cid in violated:
             violation_counts[cid] = violation_counts.get(cid, 0) + 1
 
     violation_frequency = [
         {
             "constraint_id": cid,
-            "constraint_label": cid,
+            "constraint_label": label_map.get(cid, cid),
             "count": cnt,
             "episode_share": cnt / max(episode_count, 1),
         }

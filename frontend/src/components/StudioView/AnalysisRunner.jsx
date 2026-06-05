@@ -37,6 +37,7 @@ function ViolationBar({ label, globalShare, runShare, maxShare }) {
 export default function AnalysisRunner({ globalSummary, customRules = [], onOpenTimeline }) {
   const [sampleSize, setSampleSize] = useState(50)
   const [seed, setSeed] = useState(42)
+  const [triggerEvent, setTriggerEvent] = useState('InvasiveVentilationStarted')
   const [includePredefined, setIncludePredefined] = useState(true)
   const [includeCustom, setIncludeCustom] = useState(true)
   const [jobId, setJobId] = useState(null)
@@ -56,6 +57,7 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
     const body = {
       sample_size: sampleSize,
       seed,
+      trigger_event: triggerEvent,
       include_predefined: includePredefined,
       custom_rules: includeCustom ? allCustomRules.map(r => ({
         id: r.id,
@@ -186,6 +188,21 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
               value={seed}
               onChange={e => setSeed(parseInt(e.target.value) || 0)}
             />
+          </div>
+
+          <div className="runner-field">
+            <label className="field-label">Trigger event</label>
+            <select
+              className="studio-input"
+              value={triggerEvent}
+              onChange={e => setTriggerEvent(e.target.value)}
+            >
+              <option value="InvasiveVentilationStarted">Invasive Ventilation Started</option>
+              <option value="SBTStarted">SBT Started</option>
+              <option value="SBTCompleted">SBT Completed</option>
+              <option value="SBTFailed">SBT Failed</option>
+              <option value="SBTSucceeded">SBT Succeeded</option>
+            </select>
           </div>
         </div>
 

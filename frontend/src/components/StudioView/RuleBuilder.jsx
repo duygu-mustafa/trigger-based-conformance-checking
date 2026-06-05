@@ -252,7 +252,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
               <div className="wizard-step">
                 <h3 className="wizard-step-title">Which clinical events are involved?</h3>
                 <div className="field-group">
-                  <label className="field-label">Activation event (trigger)</label>
+                  <label className="field-label">Activation event</label>
                   <select
                     className="studio-select"
                     value={rule.activation}
@@ -282,7 +282,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                 </div>
                 {!isUnary && (
                   <div className="field-group">
-                    <label className="field-label">Target event (response)</label>
+                    <label className="field-label">Target event</label>
                     <select
                       className="studio-select"
                       value={rule.target}
