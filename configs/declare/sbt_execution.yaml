@@ -76,7 +76,7 @@ model:
   constraints:
     - id: SBT-DP-02
       label: "No SBT success when respiratory rate failure criterion met"
-      template: NOT_CO_EXISTENCE
+      template: ABSENCE
       activation: SBTSucceeded
       activation_condition: "rr_failure"
       semantics: ACTIVATION_VIOLATION
@@ -87,7 +87,7 @@ model:
 
     - id: SBT-DP-03
       label: "No SBT success when SpO2 failure criterion met"
-      template: NOT_CO_EXISTENCE
+      template: ABSENCE
       activation: SBTSucceeded
       activation_condition: "spo2_failure"
       semantics: ACTIVATION_VIOLATION
@@ -97,7 +97,7 @@ model:
 
     - id: SBT-DP-04
       label: "No SBT success when haemodynamic failure criterion met"
-      template: NOT_CO_EXISTENCE
+      template: ABSENCE
       activation: SBTSucceeded
       activation_condition: "hemodynamic_failure"
       semantics: ACTIVATION_VIOLATION
@@ -107,7 +107,7 @@ model:
 
     - id: SBT-DP-05
       label: "No SBT success when mental status failure criterion met"
-      template: NOT_CO_EXISTENCE
+      template: ABSENCE
       activation: SBTSucceeded
       activation_condition: "mental_status_failure"
       semantics: ACTIVATION_VIOLATION
@@ -117,7 +117,7 @@ model:
 
     - id: SBT-DP-COMPOSITE-01
       label: "No SBT success when any failure criterion is met"
-      template: NOT_CO_EXISTENCE
+      template: ABSENCE
       activation: SBTSucceeded
       activation_condition: >
         rr_failure OR spo2_failure OR hemodynamic_failure OR mental_status_failure
