@@ -107,8 +107,8 @@ model:
     - id: RC-CF-01
       label: "Invasive ventilation must precede SBT start"
       template: PRECEDENCE
-      activation: InvasiveVentilationStarted
-      target: SBTStarted
+      activation: SBTStarted
+      target: InvasiveVentilationStarted
       rationale: >
         An SBT can only be initiated on a patient who is currently on invasive
         mechanical ventilation. Enforces that InvasiveVentilationStarted

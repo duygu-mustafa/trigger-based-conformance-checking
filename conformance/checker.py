@@ -512,7 +512,7 @@ def _evaluate_constraint_impl(
     Supports multiple constraint templates:
         - EXISTENCE: Required activity must occur (optionally satisfying a condition)
         - RESPONSE: When activation occurs, target must follow (within time window)
-        - PRECEDENCE: Activation must occur before target
+        - PRECEDENCE: When activation occurs, target must have occurred before it
         - NOT_CO_EXISTENCE: Activation and target cannot both occur
 
     Args:
@@ -987,6 +987,9 @@ def _evaluate_constraint_impl(
         )
 
     # ============ PRECEDENCE FAMILY ============
+    # Semantics: for each activation (the trigger, e.g. SBTStarted), check that
+    # target (the precondition, e.g. InvasiveVentilationStarted) occurred before it.
+    # Activation iterates; candidates are drawn from target rows before activation_ts.
     if constraint.template in {
         DeclareTemplate.PRECEDENCE,
         DeclareTemplate.ALTERNATE_PRECEDENCE,
@@ -994,52 +997,53 @@ def _evaluate_constraint_impl(
         DeclareTemplate.NOT_PRECEDENCE,
         DeclareTemplate.NOT_CHAIN_PRECEDENCE,
     }:
-        target_rows = _rows_for(constraint.target)
-        if target_rows.empty:
+        act_rows = _rows_for(constraint.activation)
+        if act_rows.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
         if constraint.activation_cond is not None:
-            target_rows, activation_eval_error = _filter_activation_rows(trace_df, target_rows, constraint)
+            act_rows, activation_eval_error = _filter_activation_rows(trace_df, act_rows, constraint)
         else:
             activation_eval_error = None
 
-        if target_rows.empty:
+        if act_rows.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
-        act_rows = _rows_for(constraint.activation)
+        target_rows = _rows_for(constraint.target)
         fulfilled = 0
         violated = 0
         first_violation_ts = None
         first_match_activation_ts = None
+        first_match_target_ts = None
         first_corr_error = None
         violation_deltas = {}
         satisfaction_deltas = {}
         delay_seconds = None
 
-        for _, target_row in target_rows.iterrows():
-            target_ts = target_row["timestamp"]
+        for _, act_row in act_rows.iterrows():
+            act_ts = act_row["timestamp"]
 
             if constraint.template in {
                 DeclareTemplate.CHAIN_PRECEDENCE,
                 DeclareTemplate.NOT_CHAIN_PRECEDENCE,
             }:
-                prev = trace_df[trace_df["timestamp"] < target_ts].tail(1)
-                candidates = prev[prev["activity"] == constraint.activation] if not prev.empty else prev
+                prev = trace_df[trace_df["timestamp"] < act_ts].tail(1)
+                candidates = prev[prev["activity"] == constraint.target] if not prev.empty else prev
             else:
-                candidates = act_rows[act_rows["timestamp"] < target_ts]
+                candidates = target_rows[target_rows["timestamp"] < act_ts]
                 if constraint.template == DeclareTemplate.ALTERNATE_PRECEDENCE:
-                    prev_target = target_rows[target_rows["timestamp"] < target_ts].tail(1)
-                    if not prev_target.empty:
-                        prev_target_ts = prev_target.iloc[0]["timestamp"]
-                        candidates = candidates[candidates["timestamp"] > prev_target_ts]
+                    prev_act = act_rows[act_rows["timestamp"] < act_ts].tail(1)
+                    if not prev_act.empty:
+                        prev_act_ts = prev_act.iloc[0]["timestamp"]
+                        candidates = candidates[candidates["timestamp"] > prev_act_ts]
 
             matched = False
-            for _, act_row in candidates.iterrows():
+            for _, cand_row in candidates.iterrows():
                 ok_match, corr_error, delta, vals = _target_matches(
-                    target_row,
-                    act_row["timestamp"],
-                    require_after=True,
-                    require_before=False,
+                    cand_row,
+                    act_ts,
+                    require_after=False,
+                    require_before=True,
                     require_adjacent=constraint.template
                     in {DeclareTemplate.CHAIN_PRECEDENCE, DeclareTemplate.NOT_CHAIN_PRECEDENCE},
                     directional_time=True,
@@ -1049,7 +1053,9 @@ def _evaluate_constraint_impl(
                 if ok_match:
                     matched = True
                     if first_match_activation_ts is None:
-                        first_match_activation_ts = str(act_row["timestamp"])
+                        first_match_activation_ts = str(act_ts)
+                    if first_match_target_ts is None:
+                        first_match_target_ts = str(cand_row["timestamp"])
                     break
 
             is_negative = constraint.template in {
@@ -1063,25 +1069,25 @@ def _evaluate_constraint_impl(
             else:
                 violated += 1
                 if first_violation_ts is None:
-                    first_violation_ts = str(target_ts)
+                    first_violation_ts = str(act_ts)
                     if not matched and not is_negative:
                         _, _, _, violation_deltas = _evaluate_data_condition_status(
-                            trace_df, target_row, "True"
+                            trace_df, act_row, "True"
                         )
                     elif matched and is_negative:
                         violation_deltas = vals
-                        delay_seconds = delta
+                        delay_seconds = abs(delta) if delta is not None else None
 
         ok = violated == 0
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
             outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
-            num_activations=int(len(target_rows)),
+            num_activations=int(len(act_rows)),
             num_fulfilled=int(fulfilled),
             num_violated=int(violated),
             activation_ts=first_match_activation_ts,
-            target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else first_violation_ts,
+            target_ts=first_match_target_ts if first_match_target_ts is not None else first_violation_ts,
             violation_deltas=violation_deltas if not ok else {},
             satisfaction_deltas=satisfaction_deltas if ok else {},
             delay_seconds=delay_seconds,
