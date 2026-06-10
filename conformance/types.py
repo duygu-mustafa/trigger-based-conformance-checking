@@ -86,6 +86,7 @@ class DeclareConstraint:
     label: Optional[str] = None
     activation_condition_title: Optional[str] = None
     target_condition_title: Optional[str] = None
+    target_selection: Optional[str] = None
 
     def __post_init__(self) -> None:
         is_unary = self.template in UNARY_TEMPLATES

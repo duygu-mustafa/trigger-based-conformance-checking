@@ -10,9 +10,13 @@
  *   target      string   — label for the target activity box (binary rules)
  *   compact     bool     — if true, render a smaller thumbnail version
  */
-export default function DeclareVisualizer({ template, activation, target, conditionLabel, activationTitle, compact = false }) {
+export default function DeclareVisualizer({ template, activation, target, conditionLabel, activationTitle, correlationConditionLabel, timeCondition, compact = false }) {
+  const showActivationLabel = Boolean(activationTitle) && template !== 'EXISTENCE'
+  const labelRowH = compact ? 13 : 16
   const W = compact ? 200 : 320
-  const H = compact ? 72 : 108
+  const baseH = compact ? 72 : 108
+  const hasExpandedLabels = !compact && (showActivationLabel || Boolean(correlationConditionLabel))
+  const H = baseH + (hasExpandedLabels ? labelRowH : 0)
   const BOX_W = compact ? 78 : 112
   const BOX_H = compact ? 26 : 44
   const FONT = compact ? 9 : 11
@@ -39,8 +43,12 @@ export default function DeclareVisualizer({ template, activation, target, condit
   const showConditionAsBox = Boolean(activationTitle) && template === 'EXISTENCE'
   const effectiveIsUnary = isUnary && !showConditionAsBox
 
+  // Dashed border follows the *semantic* target box (PRECEDENCE swaps left/right)
+  const leftIsDashed = isPrecedence && !showConditionAsBox
+  const rightIsDashed = !effectiveIsUnary && !isPrecedence && !showConditionAsBox
+
   const cx = W / 2
-  const cy = H / 2
+  const cy = baseH / 2
 
   // For unary: single centred box
   // For binary: two boxes left and right with arrow between
@@ -148,13 +156,32 @@ export default function DeclareVisualizer({ template, activation, target, condit
     )
   }
 
+  function formatTimeLabel(tc) {
+    if (!tc) return null
+    const { min_hours, max_hours } = tc
+    // negative min with max≤0: "within the last N hours before activation"
+    if (min_hours != null && min_hours < 0 && (max_hours == null || max_hours <= 0)) {
+      return `≤ ${Math.abs(min_hours)}h`
+    }
+    if (min_hours != null && max_hours != null && min_hours >= 0) return `${min_hours}–${max_hours}h`
+    if (max_hours != null) return `≤ ${max_hours}h`
+    if (min_hours != null && min_hours >= 0) return `≥ ${min_hours}h`
+    return null
+  }
+  const timeLabel = !compact && !effectiveIsUnary ? formatTimeLabel(timeCondition) : null
+
   // When target duplicates activation AND a condition label is supplied,
   // show the condition name on the right box instead of the duplicated activity.
   const showConditionOnRight = Boolean(conditionLabel) && target === activation
 
   // Use raw strings — renderLabel handles truncation (compact) and wrapping (expanded).
-  const rawLeft = showConditionAsBox ? activationTitle : (activation || 'A')
-  const rawRight = showConditionAsBox ? activation : (showConditionOnRight ? conditionLabel : (target || 'B'))
+  const rawLeft  = showConditionAsBox ? activationTitle
+                 : isPrecedence       ? (target || 'B')
+                 :                      (activation || 'A')
+  const rawRight = showConditionAsBox   ? activation
+                 : isPrecedence         ? (activation || 'A')
+                 : showConditionOnRight  ? conditionLabel
+                 :                        (target || 'B')
 
   function renderConnector() {
     const TS = compact ? 3.5 : 5
@@ -210,12 +237,12 @@ export default function DeclareVisualizer({ template, activation, target, condit
       )
     }
 
-    // Precedence: arrow reversed (points toward A, i.e. right-to-left)
+    // Precedence: boxes are swapped to [target]→[activation], so arrow points left-to-right
     if (isPrecedence) {
       return (
         <g>
           <line
-            x1={arrowX2} y1={arrowY} x2={arrowX1 + 2} y2={arrowY}
+            x1={arrowX1} y1={arrowY} x2={arrowX2 - 2} y2={arrowY}
             stroke={arrowColor} strokeWidth="1.5"
             markerEnd={`url(#arrow-${template}-pos)`}
           />
@@ -312,8 +339,9 @@ export default function DeclareVisualizer({ template, activation, target, condit
         width={BOX_W} height={BOX_H}
         rx="5"
         fill="var(--color-bg-card, #1e2a3a)"
-        stroke={showConditionAsBox ? 'var(--color-primary, #5b8dee)' : 'var(--color-primary, #5b8dee)'}
+        stroke="var(--color-primary, #5b8dee)"
         strokeWidth="1.5"
+        strokeDasharray={leftIsDashed ? '6,3' : 'none'}
       />
       {renderLabel(rawLeft, leftX + BOX_W / 2)}
 
@@ -327,6 +355,7 @@ export default function DeclareVisualizer({ template, activation, target, condit
             fill="var(--color-bg-card, #1e2a3a)"
             stroke={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
             strokeWidth="1.5"
+            strokeDasharray={rightIsDashed ? '6,3' : 'none'}
           />
           {renderLabel(rawRight, rightX + BOX_W / 2)}
 
@@ -374,10 +403,83 @@ export default function DeclareVisualizer({ template, activation, target, condit
         </g>
       ) : null}
 
+      {/* Compact mode: indicator dots for data conditions */}
+      {compact && showActivationLabel && (
+        <circle
+          cx={(isPrecedence ? rightX : leftX) + BOX_W / 2}
+          cy={boxY + BOX_H - 4}
+          r={3}
+          fill="var(--color-primary, #5b8dee)"
+          opacity="0.8"
+        />
+      )}
+      {compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
+        <circle
+          cx={(isPrecedence ? leftX : rightX) + BOX_W / 2}
+          cy={boxY + BOX_H - 4}
+          r={3}
+          fill="var(--color-primary, #5b8dee)"
+          opacity="0.8"
+        />
+      )}
+
+      {/* Expanded mode: condition labels below their respective boxes */}
+      {!compact && showActivationLabel && (
+        <text
+          x={(isPrecedence ? rightX : leftX) + BOX_W / 2}
+          y={boxY + BOX_H + 12}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={9}
+          fontWeight="600"
+          fill="var(--color-text-dim, #7a8aa0)"
+          fontFamily="Inter, sans-serif"
+          letterSpacing="0.01em"
+        >
+          {trimLabel(activationTitle, 22)}
+        </text>
+      )}
+      {!compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
+        <text
+          x={(isPrecedence ? leftX : rightX) + BOX_W / 2}
+          y={boxY + BOX_H + 12}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={9}
+          fontWeight="600"
+          fill="var(--color-text-dim, #7a8aa0)"
+          fontFamily="Inter, sans-serif"
+          letterSpacing="0.01em"
+        >
+          {trimLabel(correlationConditionLabel, 22)}
+        </text>
+      )}
+
+      {/* Clock + time label on arc (expanded binary rules with time condition) */}
+      {timeLabel && (
+        <g
+          transform={`translate(${midX}, ${arrowY + 14})`}
+          fill="none"
+          stroke="var(--color-text-dim, #7a8aa0)"
+        >
+          <circle cx="-15" cy="0" r="4.5" strokeWidth="1.2" />
+          <line x1="-15" y1="-2.5" x2="-15" y2="0" strokeWidth="1.1" strokeLinecap="round" />
+          <line x1="-15" y1="0" x2="-12.5" y2="1.5" strokeWidth="1" strokeLinecap="round" />
+          <text
+            x="-7" y="0"
+            textAnchor="start" dominantBaseline="middle"
+            fontSize={9} fontFamily="Inter, sans-serif" fontWeight="500"
+            fill="var(--color-text-dim, #7a8aa0)" stroke="none"
+          >
+            {timeLabel}
+          </text>
+        </g>
+      )}
+
       {/* Template name label below */}
       {!compact && (
         <text
-          x={cx} y={H - 6}
+          x={cx} y={H - 4}
           textAnchor="middle"
           fontSize={9}
           fill="var(--color-text-dim, #7a8aa0)"

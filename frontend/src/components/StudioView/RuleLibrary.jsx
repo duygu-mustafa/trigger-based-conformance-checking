@@ -100,12 +100,16 @@ function RuleCard({ rule }) {
             target={rule.target}
             conditionLabel={rule.activation_condition_title || null}
             activationTitle={rule.activation_condition_title || null}
+            correlationConditionLabel={rule.target_condition_title || null}
             compact={true}
           />
         </div>
         <div className="rule-card-title-area">
           <h3 className="rule-card-label">{rule.label}</h3>
           <span className="rule-template-badge">{rule.template_label}</span>
+          {rule.activation_condition_title && (
+            <span className="rule-data-condition-badge">⊕ {rule.activation_condition_title}</span>
+          )}
         </div>
         <span className="rule-card-chevron" aria-hidden="true">
           {expanded ? '▲' : '▼'}
@@ -121,18 +125,28 @@ function RuleCard({ rule }) {
               target={rule.target}
               conditionLabel={rule.activation_condition_title || null}
               activationTitle={rule.activation_condition_title || null}
+              correlationConditionLabel={rule.target_condition_title || null}
+              timeCondition={rule.time_condition}
               compact={false}
             />
           </div>
 
           <div className="rule-card-details">
             {/* Conditions */}
-            {(rule.activation_conditions?.length > 0 || rule.correlation_conditions?.length > 0) && (
+            {(rule.activation_conditions?.length > 0 || rule.correlation_conditions?.length > 0 || rule.activation_condition_title) && (
               <div className="rule-detail-section">
                 <h4 className="rule-detail-heading">Data Conditions</h4>
+                {rule.activation_condition_title && (
+                  <div className="condition-must-hold">
+                    <span className="condition-must-hold-label">Must hold at activation</span>
+                    <span className="condition-title-pill">{rule.activation_condition_title}</span>
+                  </div>
+                )}
                 {rule.activation_conditions?.length > 0 && (
                   <div className="condition-group">
-                    <span className="condition-group-label">On activation:</span>
+                    <span className="condition-group-label">
+                      {rule.activation_condition_title ? 'Required values:' : 'On activation:'}
+                    </span>
                     <div className="condition-chips">
                       {rule.activation_conditions.map((chip, i) => (
                         <span key={i}>

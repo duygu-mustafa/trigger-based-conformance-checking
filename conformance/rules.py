@@ -79,6 +79,10 @@ def _build_time_condition(raw: dict[str, Any]) -> TimeCondition | None:
     if isinstance(explicit, dict):
         min_seconds = explicit.get("min_seconds")
         max_seconds = explicit.get("max_seconds")
+        if min_seconds is None and explicit.get("min_hours") is not None:
+            min_seconds = _hours_to_seconds(explicit["min_hours"])
+        if max_seconds is None and explicit.get("max_hours") is not None:
+            max_seconds = _hours_to_seconds(explicit["max_hours"])
     else:
         min_seconds = _pick_first(raw, "min_seconds", "min_gap_seconds")
         max_seconds = _pick_first(raw, "max_seconds", "max_gap_seconds")
@@ -221,6 +225,12 @@ def _parse_constraint(
             if key in condition_title_map:
                 correlation_title = condition_title_map[key]
 
+    # Per-constraint display overrides take priority over the title-map lookup.
+    if raw.get("activation_condition_display"):
+        activation_title = str(raw["activation_condition_display"])
+    if raw.get("correlation_condition_display"):
+        correlation_title = str(raw["correlation_condition_display"])
+
     activation_cond = _expand_condition_expr(activation_cond_raw_value, condition_map)
     correlation_cond = _expand_condition_expr(correlation_cond_raw_value, condition_map)
     time_condition = _build_time_condition(raw)
@@ -262,6 +272,7 @@ def _parse_constraint(
     constraint.description = str(raw.get("description") or "")
     constraint.rationale = str(raw.get("rationale") or "")
     constraint.semantics = raw.get("semantics")
+    constraint.target_selection = raw.get("target_selection")
     constraint.activation_condition_raw = activation_cond
     constraint.target_condition_raw = correlation_cond
     obs_window = raw.get("observation_window_hours")

@@ -301,12 +301,15 @@ def get_activities() -> dict[str, list[str]]:
     activities = list(mappings.keys())
 
     ventilation = [a for a in activities if "Ventilation" in a or "Intubation" in a]
-    sbt = [a for a in activities if "SBT" in a or "Extubation" in a]
-    interventions = [a for a in activities if a not in ventilation and a not in sbt]
+    sbt = [a for a in activities if "SBT" in a]
+    assessment_keywords = ("_Measured", "_Assessed", "_Performed", "ABG_", "Lab_", "CuffLeak", "Extubation")
+    assessment = [a for a in activities if any(k in a for k in assessment_keywords)]
+    interventions = [a for a in activities if a not in ventilation and a not in sbt and a not in assessment]
 
     return {
         "ventilation": ventilation,
         "sbt": sbt,
+        "assessment": assessment,
         "interventions": interventions,
         "all": activities,
     }

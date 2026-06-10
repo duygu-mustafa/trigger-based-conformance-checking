@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pandas as pd
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -45,7 +46,9 @@ def safe_float_or_none(value: Any) -> float | None:
         if isinstance(value, str) and value.strip().upper() == "NA":
             return None
         converted = float(value)
-        if converted != converted:
+        if converted != converted:  # NaN
+            return None
+        if math.isinf(converted):  # +Inf or -Inf
             return None
         return converted
     except (TypeError, ValueError):
@@ -61,6 +64,46 @@ def safe_bool(value: Any) -> bool:
         return bool(value)
     value_str = str(value).strip().lower()
     return value_str in {"true", "t", "1", "yes", "y"}
+
+
+def _load_constraint_metas_from_models(project_root: Path) -> dict[str, dict[str, Any]]:
+    """Build constraint metadata from YAML rule files — authoritative source."""
+    try:
+        import sys
+        sys.path.insert(0, str(project_root))
+        from conformance.rules import build_readiness_assessment_model, build_sbt_execution_model, build_failure_correction_model
+    except ImportError:
+        return {}
+
+    metas: dict[str, dict[str, Any]] = {}
+    for model_builder in (build_readiness_assessment_model, build_sbt_execution_model, build_failure_correction_model):
+        try:
+            model = model_builder()
+        except Exception:
+            continue
+        for c in model.constraints:
+            cid = str(getattr(c, "id", None) or c.label or "")
+            if not cid:
+                continue
+            tc = getattr(c, "time_condition", None)
+            metas[cid] = {
+                "id": cid,
+                "label": c.label or cid,
+                "description": getattr(c, "description", "") or "",
+                "rationale": getattr(c, "rationale", "") or "",
+                "template": c.template.name if hasattr(c, "template") else None,
+                "activation": c.activation if hasattr(c, "activation") else None,
+                "target": c.target if hasattr(c, "target") else None,
+                "semantics": getattr(c, "semantics", None),
+                "activation_condition": getattr(c, "activation_condition_raw", None),
+                "activation_condition_title": getattr(c, "activation_condition_title", None),
+                "target_condition": getattr(c, "target_condition_raw", None),
+                "target_condition_title": getattr(c, "target_condition_title", None),
+                "observation_window_hours": getattr(c, "observation_window_hours", None),
+                "min_gap_hours": (tc.min_seconds / 3600.0) if tc and tc.min_seconds is not None else None,
+                "max_gap_hours": (tc.max_seconds / 3600.0) if tc and tc.max_seconds is not None else None,
+            }
+    return metas
 
 
 def infer_input_dir(project_root: Path) -> Path:
@@ -132,7 +175,10 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
     violation_stays: dict[str, set[str]] = defaultdict(set)
     readiness_counter: Counter[str] = Counter()
     constraint_labels: dict[str, str] = {}
-    constraint_metas: dict[str, dict[str, Any]] = {}
+
+    # Load authoritative metadata from YAML models so stale case files cannot corrupt it.
+    project_root = input_dir.parents[2]
+    constraint_metas: dict[str, dict[str, Any]] = _load_constraint_metas_from_models(project_root)
     
     # Track all seen constraints to include non-violated ones
     all_constraint_ids: set[str] = set()
@@ -159,6 +205,7 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
                 label = meta.get("label")
                 if label and cid not in constraint_labels:
                     constraint_labels[cid] = str(label)
+                # Only fall back to case-file metadata if the model didn't provide it.
                 if cid not in constraint_metas:
                     constraint_metas[cid] = meta
 
@@ -463,11 +510,19 @@ def main() -> None:
     input_dir = (args.input_dir or infer_input_dir(project_root)).resolve()
     output_file = (args.output or (input_dir / "summary.json")).resolve()
 
+    # Default to the standard stats path when not specified explicitly
+    stats_csv = args.stats_csv
+    if stats_csv is None:
+        default_stats = project_root / "data" / "results" / "rule_statistics_R2.csv"
+        if default_stats.exists():
+            stats_csv = default_stats
+            print(f"Using stats CSV: {stats_csv}")
+
     case_files = sorted(input_dir.glob("case_*.json"))
     if not case_files:
         raise FileNotFoundError(f"No case_*.json files found in: {input_dir}")
 
-    summary = build_summary(case_files, input_dir, args.stats_csv)
+    summary = build_summary(case_files, input_dir, stats_csv)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8") as handle:

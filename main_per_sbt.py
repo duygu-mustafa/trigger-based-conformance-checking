@@ -369,7 +369,7 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("data/icu_event_log.parquet"))
+    parser.add_argument("--input", type=Path, default=Path("data/icu_event_log_sample.parquet"))
     parser.add_argument("--output", type=Path, default=Path("data/results/trigger_results.csv"))
     args = parser.parse_args()
 
@@ -572,8 +572,9 @@ def main() -> None:
     # Calculate path relative to this script's location to be robust
     base_path = Path(__file__).resolve().parent
     frontend_data_dir = base_path / "frontend" / "public" / "data"
-    stats_table_path = args.output.parent / "statistical_analysis_table.csv"
-    stats_summary_path = args.output.parent / "rule_statistics_R2.csv"
+    results_dir = (base_path / args.output).resolve().parent if not args.output.is_absolute() else args.output.parent
+    stats_table_path = results_dir / "statistical_analysis_table.csv"
+    stats_summary_path = results_dir / "rule_statistics_R2.csv"
 
     r_script = base_path / "statistics_R.r"
     if not r_script.exists():

@@ -3130,6 +3130,136 @@
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
+/* ── MP-Existence data-guard node ──────────────────────────────── */
+
+.mp-existence-node {
+  width: 260px;
+  border: 1.5px solid var(--color-primary, #1976d2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mp-existence-node--compact {
+  width: 160px;
+}
+
+.mp-existence-node-header {
+  background: #E1F5EE;
+  color: #085041;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: Inter, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mp-existence-node--compact .mp-existence-node-header {
+  font-size: 0.72rem;
+  padding: 0.3rem 0.55rem;
+}
+
+.mp-existence-node-body {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mp-existence-node-divider {
+  border: none;
+  border-top: 1px solid var(--color-border, #cfd8dc);
+  margin: 0;
+}
+
+.mp-existence-node-row-label {
+  font-size: 0.7rem;
+  color: var(--color-text-dim, #7a8aa0);
+}
+
+.mp-existence-diagram-label {
+  font-size: 11px;
+  color: var(--color-text-dim, #7a8aa0);
+  margin-top: 0.4rem;
+}
+
+.mp-existence-template-chip {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--color-primary, #1976d2);
+  border-radius: 4px;
+  color: var(--color-primary, #1976d2);
+  background: transparent;
+}
+
+.mp-existence-semantics-chip {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(232, 160, 32, 0.12);
+  color: #b36200;
+  border: 1px solid rgba(232, 160, 32, 0.35);
+}
+
+.mp-existence-chip-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mp-existence-section-divider {
+  border: none;
+  border-top: 1px solid var(--color-border, #cfd8dc);
+  margin: 0.25rem 0;
+}
+
+/* ── Data-condition indicators ──────────────────────────────────── */
+
+.rule-data-condition-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #085041;
+  background: #E1F5EE;
+  border: 1px solid #a8d5c2;
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  width: fit-content;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.condition-must-hold {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.condition-must-hold-label {
+  font-size: 0.7rem;
+  color: var(--color-text-dim, #7a8aa0);
+  flex-shrink: 0;
+}
+
+.condition-title-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #085041;
+  background: #E1F5EE;
+  border: 1px solid #a8d5c2;
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+}
+
 /* ── Rule Builder ────────────────────────────────────────────── */
 
 .rule-builder {

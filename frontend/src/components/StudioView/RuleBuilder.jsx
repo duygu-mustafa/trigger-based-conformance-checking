@@ -270,6 +270,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                         {activities.sbt.map(a => <option key={a} value={a}>{a}</option>)}
                       </optgroup>
                     )}
+                    {activities.assessment?.length > 0 && (
+                      <optgroup label="Assessment events">
+                        {activities.assessment.map(a => <option key={a} value={a}>{a}</option>)}
+                      </optgroup>
+                    )}
                     {activities.interventions?.length > 0 && (
                       <optgroup label="Interventions">
                         {activities.interventions.map(a => <option key={a} value={a}>{a}</option>)}
@@ -297,6 +302,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                       {activities.sbt?.length > 0 && (
                         <optgroup label="SBT events">
                           {activities.sbt.map(a => <option key={a} value={a}>{a}</option>)}
+                        </optgroup>
+                      )}
+                      {activities.assessment?.length > 0 && (
+                        <optgroup label="Assessment events">
+                          {activities.assessment.map(a => <option key={a} value={a}>{a}</option>)}
                         </optgroup>
                       )}
                       {activities.interventions?.length > 0 && (

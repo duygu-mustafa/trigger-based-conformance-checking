@@ -155,8 +155,6 @@ CMD=("$PYTHON_BIN" "$ROOT_DIR/prepare_event_log.py" "--input" "$INPUT" "--output
 
 if [[ -n "$SOURCE_TABLE_FILTER" ]]; then
   CMD+=("--source-table-filter" "$SOURCE_TABLE_FILTER")
-else
-  CMD+=("--source-table-filter" "")
 fi
 
 if [[ "$RESUME" -eq 1 ]]; then

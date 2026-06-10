@@ -1037,6 +1037,9 @@ def _evaluate_constraint_impl(
                         prev_act_ts = prev_act.iloc[0]["timestamp"]
                         candidates = candidates[candidates["timestamp"] > prev_act_ts]
 
+            if getattr(constraint, 'target_selection', None) == 'last' and not candidates.empty:
+                candidates = candidates.sort_values('timestamp').tail(1)
+
             matched = False
             for _, cand_row in candidates.iterrows():
                 ok_match, corr_error, delta, vals = _target_matches(
