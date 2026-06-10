@@ -10,6 +10,8 @@
  *   target      string   — label for the target activity box (binary rules)
  *   compact     bool     — if true, render a smaller thumbnail version
  */
+import { UilArrowCircleRight, UilArrowCircleLeft, UilBan } from '@iconscout/react-unicons'
+
 export default function DeclareVisualizer({ template, activation, target, conditionLabel, activationTitle, correlationConditionLabel, timeCondition, compact = false }) {
   const showActivationLabel = Boolean(activationTitle) && template !== 'EXISTENCE'
   const labelRowH = compact ? 13 : 16
@@ -108,6 +110,15 @@ export default function DeclareVisualizer({ template, activation, target, condit
     if (template === 'CO_EXISTENCE') return '↔'
     if (isRespondedExistence) return '∃'
     return '?'
+  }
+
+  function renderBadgeIcon() {
+    const iconSize = BADGE_R * 2
+    if (isNegative || template === 'ABSENCE')
+      return <UilBan size={iconSize} color="var(--color-violation, #e05252)" />
+    if (isPrecedence)
+      return <UilArrowCircleLeft size={iconSize} color="var(--color-primary, #5b8dee)" />
+    return <UilArrowCircleRight size={iconSize} color="var(--color-primary, #5b8dee)" />
   }
 
   // ── Text helpers ──────────────────────────────────────────────────────────
@@ -214,12 +225,6 @@ export default function DeclareVisualizer({ template, activation, target, condit
             x1={arrowX1} y1={arrowY} x2={arrowX2} y2={arrowY}
             stroke={arrowColor} strokeWidth="1.5" strokeDasharray="5,3" opacity="0.7"
           />
-          <circle cx={midX} cy={arrowY} r={BADGE_R} fill={arrowColor} opacity="0.85" />
-          <text
-            x={midX} y={arrowY + 1}
-            textAnchor="middle" dominantBaseline="middle"
-            fontSize={BADGE_R - 1} fontWeight="700" fill="#fff" fontFamily="Inter, sans-serif"
-          >✕</text>
           {template === 'NOT_CHAIN_SUCCESSION' && doubleTick(tickOffset)}
         </g>
       )
@@ -306,189 +311,195 @@ export default function DeclareVisualizer({ template, activation, target, condit
     )
   }
 
+  const overlayStyle = {
+    position: 'absolute',
+    pointerEvents: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
+
   return (
-    <svg
-      width={W}
-      height={H}
-      viewBox={`0 0 ${W} ${H}`}
-      className="declare-visualizer"
-      aria-label={`${template} rule diagram`}
-    >
-      <defs>
-        <marker
-          id={`arrow-${template}-pos`}
-          markerWidth="8" markerHeight="8"
-          refX="6" refY="3"
-          orient="auto"
-        >
-          <path d="M0,0 L0,6 L8,3 z" fill={arrowColor} />
-        </marker>
-        <marker
-          id={`arrow-${template}-neg`}
-          markerWidth="8" markerHeight="8"
-          refX="6" refY="3"
-          orient="auto"
-        >
-          <path d="M0,0 L0,6 L8,3 z" fill={arrowColor} opacity="0.7" />
-        </marker>
-      </defs>
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <svg
+        width={W}
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        className="declare-visualizer"
+        aria-label={`${template} rule diagram`}
+      >
+        <defs>
+          <marker
+            id={`arrow-${template}-pos`}
+            markerWidth="8" markerHeight="8"
+            refX="6" refY="3"
+            orient="auto"
+          >
+            <path d="M0,0 L0,6 L8,3 z" fill={arrowColor} />
+          </marker>
+          <marker
+            id={`arrow-${template}-neg`}
+            markerWidth="8" markerHeight="8"
+            refX="6" refY="3"
+            orient="auto"
+          >
+            <path d="M0,0 L0,6 L8,3 z" fill={arrowColor} opacity="0.7" />
+          </marker>
+        </defs>
 
-      {/* Left / single activity box */}
-      <rect
-        x={leftX} y={boxY}
-        width={BOX_W} height={BOX_H}
-        rx="5"
-        fill="var(--color-bg-card, #1e2a3a)"
-        stroke="var(--color-primary, #5b8dee)"
-        strokeWidth="1.5"
-        strokeDasharray={leftIsDashed ? '6,3' : 'none'}
-      />
-      {renderLabel(rawLeft, leftX + BOX_W / 2)}
+        {/* Left / single activity box */}
+        <rect
+          x={leftX} y={boxY}
+          width={BOX_W} height={BOX_H}
+          rx="5"
+          fill="var(--color-bg-card, #1e2a3a)"
+          stroke="var(--color-primary, #5b8dee)"
+          strokeWidth="1.5"
+          strokeDasharray={leftIsDashed ? '6,3' : 'none'}
+        />
+        {renderLabel(rawLeft, leftX + BOX_W / 2)}
 
-      {/* Right activity box (binary only) */}
+        {/* Right activity box (binary only) */}
+        {!effectiveIsUnary && (
+          <>
+            <rect
+              x={rightX} y={boxY}
+              width={BOX_W} height={BOX_H}
+              rx="5"
+              fill="var(--color-bg-card, #1e2a3a)"
+              stroke={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
+              strokeWidth="1.5"
+              strokeDasharray={rightIsDashed ? '6,3' : 'none'}
+            />
+            {renderLabel(rawRight, rightX + BOX_W / 2)}
+
+            {/* Arrow / connector */}
+            {renderConnector()}
+          </>
+        )}
+
+        {/* Badge circle with template symbol (unary non-ABSENCE stay as text) */}
+        {effectiveIsUnary && template !== 'ABSENCE' && (
+          <g>
+            <circle
+              cx={badgeX} cy={badgeY}
+              r={BADGE_R}
+              fill={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
+              opacity="0.85"
+            />
+            <text
+              x={badgeX} y={badgeY + 1}
+              textAnchor="middle" dominantBaseline="middle"
+              fontSize={FONT - 1} fontWeight="700"
+              fill="#fff"
+              fontFamily="Inter, sans-serif"
+            >
+              {badgeText()}
+            </text>
+          </g>
+        )}
+
+        {/* Compact mode: indicator dots for data conditions */}
+        {compact && showActivationLabel && (
+          <circle
+            cx={(isPrecedence ? rightX : leftX) + BOX_W / 2}
+            cy={boxY + BOX_H - 4}
+            r={3}
+            fill="var(--color-primary, #5b8dee)"
+            opacity="0.8"
+          />
+        )}
+        {compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
+          <circle
+            cx={(isPrecedence ? leftX : rightX) + BOX_W / 2}
+            cy={boxY + BOX_H - 4}
+            r={3}
+            fill="var(--color-primary, #5b8dee)"
+            opacity="0.8"
+          />
+        )}
+
+        {/* Expanded mode: condition labels below their respective boxes */}
+        {!compact && showActivationLabel && (
+          <text
+            x={(isPrecedence ? rightX : leftX) + BOX_W / 2}
+            y={boxY + BOX_H + 12}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={9}
+            fontWeight="600"
+            fill="var(--color-text-dim, #7a8aa0)"
+            fontFamily="Inter, sans-serif"
+            letterSpacing="0.01em"
+          >
+            {trimLabel(activationTitle, 22)}
+          </text>
+        )}
+        {!compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
+          <text
+            x={(isPrecedence ? leftX : rightX) + BOX_W / 2}
+            y={boxY + BOX_H + 12}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={9}
+            fontWeight="600"
+            fill="var(--color-text-dim, #7a8aa0)"
+            fontFamily="Inter, sans-serif"
+            letterSpacing="0.01em"
+          >
+            {trimLabel(correlationConditionLabel, 22)}
+          </text>
+        )}
+
+        {/* Clock + time label on arc (expanded binary rules with time condition) */}
+        {timeLabel && (
+          <g
+            transform={`translate(${midX}, ${arrowY + 14})`}
+            fill="none"
+            stroke="var(--color-text-dim, #7a8aa0)"
+          >
+            <circle cx="-15" cy="0" r="4.5" strokeWidth="1.2" />
+            <line x1="-15" y1="-2.5" x2="-15" y2="0" strokeWidth="1.1" strokeLinecap="round" />
+            <line x1="-15" y1="0" x2="-12.5" y2="1.5" strokeWidth="1" strokeLinecap="round" />
+            <text
+              x="-7" y="0"
+              textAnchor="start" dominantBaseline="middle"
+              fontSize={9} fontFamily="Inter, sans-serif" fontWeight="500"
+              fill="var(--color-text-dim, #7a8aa0)" stroke="none"
+            >
+              {timeLabel}
+            </text>
+          </g>
+        )}
+
+        {/* Template name label below */}
+        {!compact && (
+          <text
+            x={cx} y={H - 4}
+            textAnchor="middle"
+            fontSize={9}
+            fill="var(--color-text-dim, #7a8aa0)"
+            fontFamily="Inter, sans-serif"
+            letterSpacing="0.03em"
+          >
+            {template.replace(/_/g, ' ')}
+          </text>
+        )}
+      </svg>
+
+      {/* Unicon badge overlay: ABSENCE */}
+      {effectiveIsUnary && template === 'ABSENCE' && (
+        <div style={{ ...overlayStyle, left: badgeX - BADGE_R, top: badgeY - BADGE_R, width: BADGE_R * 2, height: BADGE_R * 2 }}>
+          {renderBadgeIcon()}
+        </div>
+      )}
+
+      {/* Unicon badge overlay: all binary templates */}
       {!effectiveIsUnary && (
-        <>
-          <rect
-            x={rightX} y={boxY}
-            width={BOX_W} height={BOX_H}
-            rx="5"
-            fill="var(--color-bg-card, #1e2a3a)"
-            stroke={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
-            strokeWidth="1.5"
-            strokeDasharray={rightIsDashed ? '6,3' : 'none'}
-          />
-          {renderLabel(rawRight, rightX + BOX_W / 2)}
-
-          {/* Arrow / connector */}
-          {renderConnector()}
-        </>
+        <div style={{ ...overlayStyle, left: midX - BADGE_R, top: badgeY - BADGE_R, width: BADGE_R * 2, height: BADGE_R * 2 }}>
+          {renderBadgeIcon()}
+        </div>
       )}
-
-      {/* Badge circle with template symbol */}
-      {effectiveIsUnary ? (
-        <g>
-          <circle
-            cx={badgeX} cy={badgeY}
-            r={BADGE_R}
-            fill={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
-            opacity="0.85"
-          />
-          <text
-            x={badgeX} y={badgeY + 1}
-            textAnchor="middle" dominantBaseline="middle"
-            fontSize={FONT - 1} fontWeight="700"
-            fill="#fff"
-            fontFamily="Inter, sans-serif"
-          >
-            {badgeText()}
-          </text>
-        </g>
-      ) : !isSymmetricProhibition ? (
-        <g>
-          <circle
-            cx={midX} cy={badgeY}
-            r={BADGE_R}
-            fill={isNegative ? arrowColor : 'var(--color-primary, #5b8dee)'}
-            opacity="0.85"
-          />
-          <text
-            x={midX} y={badgeY + 1}
-            textAnchor="middle" dominantBaseline="middle"
-            fontSize={FONT + 1} fontWeight="700"
-            fill="#fff"
-            fontFamily="Inter, sans-serif"
-          >
-            {binaryBadgeText()}
-          </text>
-        </g>
-      ) : null}
-
-      {/* Compact mode: indicator dots for data conditions */}
-      {compact && showActivationLabel && (
-        <circle
-          cx={(isPrecedence ? rightX : leftX) + BOX_W / 2}
-          cy={boxY + BOX_H - 4}
-          r={3}
-          fill="var(--color-primary, #5b8dee)"
-          opacity="0.8"
-        />
-      )}
-      {compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
-        <circle
-          cx={(isPrecedence ? leftX : rightX) + BOX_W / 2}
-          cy={boxY + BOX_H - 4}
-          r={3}
-          fill="var(--color-primary, #5b8dee)"
-          opacity="0.8"
-        />
-      )}
-
-      {/* Expanded mode: condition labels below their respective boxes */}
-      {!compact && showActivationLabel && (
-        <text
-          x={(isPrecedence ? rightX : leftX) + BOX_W / 2}
-          y={boxY + BOX_H + 12}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize={9}
-          fontWeight="600"
-          fill="var(--color-text-dim, #7a8aa0)"
-          fontFamily="Inter, sans-serif"
-          letterSpacing="0.01em"
-        >
-          {trimLabel(activationTitle, 22)}
-        </text>
-      )}
-      {!compact && Boolean(correlationConditionLabel) && !effectiveIsUnary && !showConditionAsBox && (
-        <text
-          x={(isPrecedence ? leftX : rightX) + BOX_W / 2}
-          y={boxY + BOX_H + 12}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize={9}
-          fontWeight="600"
-          fill="var(--color-text-dim, #7a8aa0)"
-          fontFamily="Inter, sans-serif"
-          letterSpacing="0.01em"
-        >
-          {trimLabel(correlationConditionLabel, 22)}
-        </text>
-      )}
-
-      {/* Clock + time label on arc (expanded binary rules with time condition) */}
-      {timeLabel && (
-        <g
-          transform={`translate(${midX}, ${arrowY + 14})`}
-          fill="none"
-          stroke="var(--color-text-dim, #7a8aa0)"
-        >
-          <circle cx="-15" cy="0" r="4.5" strokeWidth="1.2" />
-          <line x1="-15" y1="-2.5" x2="-15" y2="0" strokeWidth="1.1" strokeLinecap="round" />
-          <line x1="-15" y1="0" x2="-12.5" y2="1.5" strokeWidth="1" strokeLinecap="round" />
-          <text
-            x="-7" y="0"
-            textAnchor="start" dominantBaseline="middle"
-            fontSize={9} fontFamily="Inter, sans-serif" fontWeight="500"
-            fill="var(--color-text-dim, #7a8aa0)" stroke="none"
-          >
-            {timeLabel}
-          </text>
-        </g>
-      )}
-
-      {/* Template name label below */}
-      {!compact && (
-        <text
-          x={cx} y={H - 4}
-          textAnchor="middle"
-          fontSize={9}
-          fill="var(--color-text-dim, #7a8aa0)"
-          fontFamily="Inter, sans-serif"
-          letterSpacing="0.03em"
-        >
-          {template.replace(/_/g, ' ')}
-        </text>
-      )}
-    </svg>
+    </div>
   )
 }
