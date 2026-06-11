@@ -12,36 +12,29 @@ function KpiCard({ label, value, sub }) {
   )
 }
 
-function ViolationBar({ label, globalShare, runShare, maxShare }) {
-  const globalW = maxShare > 0 ? (globalShare / maxShare) * 100 : 0
-  const runW = maxShare > 0 ? (runShare / maxShare) * 100 : 0
+function ViolationBar({ label, share, maxShare }) {
+  const w = maxShare > 0 ? (share / maxShare) * 100 : 0
   return (
     <div className="vbar-row">
       <span className="vbar-label" title={label}>{label}</span>
       <div className="vbar-tracks">
-        <div className="vbar-track vbar-track--global" title={`Global: ${(globalShare * 100).toFixed(1)}%`}>
-          <div className="vbar-fill vbar-fill--global" style={{ width: `${globalW}%` }} />
-        </div>
-        <div className="vbar-track vbar-track--run" title={`This run: ${(runShare * 100).toFixed(1)}%`}>
-          <div className="vbar-fill vbar-fill--run" style={{ width: `${runW}%` }} />
+        <div className="vbar-track vbar-track--run" title={`${(share * 100).toFixed(1)}%`}>
+          <div className="vbar-fill vbar-fill--run" style={{ width: `${w}%` }} />
         </div>
       </div>
-      <div className="vbar-values">
-        <span className="vbar-val vbar-val--global">{(globalShare * 100).toFixed(0)}%</span>
-        <span className="vbar-val vbar-val--run">{(runShare * 100).toFixed(0)}%</span>
-      </div>
+      <span className="vbar-val vbar-val--run">{(share * 100).toFixed(0)}%</span>
     </div>
   )
 }
 
-export default function AnalysisRunner({ globalSummary, customRules = [], onOpenTimeline }) {
+export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   const [sampleSize, setSampleSize] = useState(50)
   const [seed, setSeed] = useState(42)
   const [triggerEvent, setTriggerEvent] = useState('InvasiveVentilationStarted')
   const [includePredefined, setIncludePredefined] = useState(true)
   const [includeCustom, setIncludeCustom] = useState(true)
   const [jobId, setJobId] = useState(null)
-  const [jobState, setJobState] = useState(null) // {status, progress, total, done, result, error}
+  const [jobState, setJobState] = useState(null)
   const pollRef = useRef(null)
 
   const savedRules = (() => {
@@ -89,7 +82,6 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
     setJobId(job_id)
   }
 
-  // Poll job status
   useEffect(() => {
     if (!jobId) return
     pollRef.current = setInterval(async () => {
@@ -115,46 +107,20 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
   const hasError = jobState?.status === 'error'
   const result = jobState?.result
 
-  // Build comparison data
-  const globalViolations = globalSummary?.violation_frequency || []
   const runViolations = result?.violation_frequency || []
-
-  const allConstraintIds = Array.from(new Set([
-    ...globalViolations.map(v => v.constraint_id),
-    ...runViolations.map(v => v.constraint_id),
-  ]))
-
-  const globalMap = Object.fromEntries(globalViolations.map(v => [v.constraint_id, v]))
-  const runMap = Object.fromEntries(runViolations.map(v => [v.constraint_id, v]))
-
-  const maxGlobalShare = Math.max(...globalViolations.map(v => v.episode_share || 0), 0.01)
+  const runEpisodes = result?.total_episodes ?? '—'
   const maxRunShare = Math.max(...runViolations.map(v => v.episode_share || 0), 0.01)
-  const maxShare = Math.max(maxGlobalShare, maxRunShare)
 
-  const comparisonRows = allConstraintIds
-    .map(id => ({
-      id,
-      label: globalMap[id]?.constraint_label || runMap[id]?.constraint_label || id,
-      globalShare: globalMap[id]?.episode_share || 0,
-      runShare: runMap[id]?.episode_share || 0,
-    }))
-    .sort((a, b) => (b.globalShare + b.runShare) - (a.globalShare + a.runShare))
+  const topRunViolations = [...runViolations]
+    .sort((a, b) => (b.episode_share || 0) - (a.episode_share || 0))
     .slice(0, 15)
 
   const progress = isRunning
     ? (jobState.total > 0 ? Math.round((jobState.done / jobState.total) * 100) : 0)
     : isDone ? 100 : 0
 
-  const globalEpisodes = globalSummary?.total_episodes ?? '—'
-  const runEpisodes = result?.total_episodes ?? '—'
-
-  const runTopViolation = runViolations.length > 0
-    ? `${(runViolations[0].episode_share * 100).toFixed(0)}% — ${runViolations[0].constraint_label || runViolations[0].constraint_id}`
-    : '—'
-
   return (
     <div className="analysis-runner">
-      {/* Configuration panel */}
       <div className="runner-config">
         <h3 className="runner-config-title">Configure analysis run</h3>
 
@@ -208,11 +174,7 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
 
         <div className="runner-rules-toggle">
           <label className={`rules-toggle-card ${includePredefined ? 'active' : ''}`}>
-            <input
-              type="checkbox"
-              checked={includePredefined}
-              onChange={e => setIncludePredefined(e.target.checked)}
-            />
+            <input type="checkbox" checked={includePredefined} onChange={e => setIncludePredefined(e.target.checked)} />
             <span className="toggle-card-title">Predefined rules</span>
             <span className="toggle-card-count">28 clinical rules</span>
           </label>
@@ -241,13 +203,10 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
               Run analysis
             </button>
           ) : (
-            <button className="cancel-btn" type="button" onClick={cancelRun}>
-              Cancel
-            </button>
+            <button className="cancel-btn" type="button" onClick={cancelRun}>Cancel</button>
           )}
         </div>
 
-        {/* Progress */}
         {(isRunning || isDone) && (
           <div className="runner-progress">
             <div className="progress-bar-track">
@@ -279,60 +238,39 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
         )}
       </div>
 
-      {/* Results comparison */}
       {isDone && result && (
         <div className="runner-results">
-          <h3 className="runner-results-title">Results</h3>
+          <h3 className="runner-results-title">Run Results — n={sampleSize}</h3>
 
-          {/* KPI row */}
-          <div className="kpi-row">
-            <div className="kpi-column">
-              <h4 className="kpi-column-title">Global baseline</h4>
-              <div className="kpi-cards">
-                <KpiCard label="Episodes" value={globalEpisodes} />
-                <KpiCard label="Top violation" value={
-                  globalViolations.length > 0
-                    ? `${(globalViolations[0].episode_share * 100).toFixed(0)}%`
-                    : '—'
-                } sub={globalViolations[0]?.constraint_label || globalViolations[0]?.constraint_id} />
-              </div>
-            </div>
-            <div className="kpi-divider" aria-hidden="true" />
-            <div className="kpi-column">
-              <h4 className="kpi-column-title">This run (n={sampleSize})</h4>
-              <div className="kpi-cards">
-                <KpiCard label="Episodes" value={runEpisodes} />
-                <KpiCard label="Top violation" value={
-                  runViolations.length > 0
-                    ? `${(runViolations[0].episode_share * 100).toFixed(0)}%`
-                    : '—'
-                } sub={runViolations[0]?.constraint_label || runViolations[0]?.constraint_id} />
-              </div>
-            </div>
+          <div className="kpi-cards" style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+            <KpiCard label="Episodes analysed" value={runEpisodes} />
+            <KpiCard
+              label="Top violation"
+              value={runViolations.length > 0 ? `${(runViolations[0].episode_share * 100).toFixed(0)}%` : '—'}
+              sub={runViolations[0]?.constraint_label || runViolations[0]?.constraint_id}
+            />
+            <KpiCard
+              label="Constraints checked"
+              value={runViolations.length > 0 ? runViolations.length : '—'}
+            />
           </div>
 
-          {/* Violation frequency comparison */}
-          {comparisonRows.length > 0 && (
+          {topRunViolations.length > 0 && (
             <div className="vbar-section">
-              <div className="vbar-legend">
-                <span className="vbar-legend-item vbar-legend-item--global">Global baseline</span>
-                <span className="vbar-legend-item vbar-legend-item--run">This run</span>
-              </div>
+              <h4 className="runner-section-heading">Violation Frequencies — This Run</h4>
               <div className="vbar-list">
-                {comparisonRows.map(row => (
+                {topRunViolations.map(row => (
                   <ViolationBar
-                    key={row.id}
-                    label={row.label}
-                    globalShare={row.globalShare}
-                    runShare={row.runShare}
-                    maxShare={maxShare}
+                    key={row.constraint_id}
+                    label={row.constraint_label || row.constraint_id}
+                    share={row.episode_share || 0}
+                    maxShare={maxRunShare}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Stay explorer for run results */}
           {result.stay_summaries?.length > 0 && (
             <div className="run-stays-section">
               <h4 className="run-stays-title">Episodes in this run</h4>
@@ -352,9 +290,7 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
                       <tr key={stay.stay_id}>
                         <td className="stay-id-cell">{stay.stay_id}</td>
                         <td>
-                          <span className={`outcome-badge outcome-badge--${
-                            String(stay.overall_outcome || '').toLowerCase().replace(/\s/g, '-')
-                          }`}>
+                          <span className={`outcome-badge outcome-badge--${String(stay.overall_outcome || '').toLowerCase().replace(/\s/g, '-')}`}>
                             {stay.overall_outcome || '—'}
                           </span>
                         </td>
@@ -365,7 +301,9 @@ export default function AnalysisRunner({ globalSummary, customRules = [], onOpen
                             type="button"
                             className="open-timeline-btn"
                             onClick={() => onOpenTimeline?.(String(stay.stay_id))}
-                          >View timeline</button>
+                          >
+                            View timeline
+                          </button>
                         </td>
                       </tr>
                     ))}

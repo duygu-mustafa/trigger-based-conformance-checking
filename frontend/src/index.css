@@ -40,6 +40,12 @@
   --color-border-light: #cfd8dc;
   --color-accent: #0d3c6e;
   /* deep navy — headers, badges, focus rings */
+  --color-bg: #eef2f7;
+  /* matching page bg for studio component surfaces */
+  --color-text-dim: #4a6278;
+  /* muted text on cards */
+  --color-primary: #1976d2;
+  /* action / primary blue */
   --color-satisfied-text: #1b5e20;
   /* deep clinical green for satisfied labels */
 
@@ -78,10 +84,12 @@ body {
 }
 
 #root {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 1.5rem;
   width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+  max-width: none;
 }
 
 button,
