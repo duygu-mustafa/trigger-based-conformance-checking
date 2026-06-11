@@ -3351,6 +3351,52 @@
   min-height: 320px;
 }
 
+/* Selected rule type banner across all steps */
+.selected-rule-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 1rem;
+  background: #fff;
+  border: 1px solid rgba(91, 141, 238, 0.2);
+  border-radius: 8px;
+}
+.selected-rule-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.selected-rule-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.selected-rule-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text-main, #e8edf5);
+}
+.selected-rule-description {
+  font-size: 0.7rem;
+  color: var(--color-text-dim, #7a8aa0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.selected-rule-id {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--color-primary, #5b8dee);
+  background: rgba(91, 141, 238, 0.12);
+  padding: 1px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-left: auto;
+}
+
 .wizard-step-title {
   font-size: 1rem;
   font-weight: 600;

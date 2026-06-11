@@ -42,6 +42,10 @@ const TEMPLATE_OPTIONS = [
 
 const UNARY_TEMPLATES = ['EXISTENCE', 'ABSENCE', 'EXACTLY', 'INIT', 'END']
 
+const TEMPLATE_MAP = Object.fromEntries(
+  TEMPLATE_OPTIONS.flatMap(g => g.items.map(t => [t.id, t]))
+)
+
 const OPERATORS = ['≥', '≤', '=', '≠', '>', '<']
 
 const STEPS = [
@@ -219,6 +223,17 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
         <div className="rule-builder-wizard">
           <StepIndicator steps={STEPS} currentStep={step} />
 
+          {rule.template && step !== 'template' && (
+            <div className="selected-rule-banner">
+              <span className="selected-rule-icon">{TEMPLATE_MAP[rule.template]?.icon}</span>
+              <div className="selected-rule-info">
+                <span className="selected-rule-name">{TEMPLATE_MAP[rule.template]?.label}</span>
+                <span className="selected-rule-description">{TEMPLATE_MAP[rule.template]?.description}</span>
+              </div>
+              <span className="selected-rule-id">{rule.template}</span>
+            </div>
+          )}
+
           <div className="wizard-content">
             {/* Step 1: Template */}
             {step === 'template' && (
@@ -252,7 +267,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
               <div className="wizard-step">
                 <h3 className="wizard-step-title">Which clinical events are involved?</h3>
                 <div className="field-group">
-                  <label className="field-label">Activation event</label>
+                  <label className="field-label">Activation event [A]</label>
                   <select
                     className="studio-select"
                     value={rule.activation}
@@ -287,7 +302,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                 </div>
                 {!isUnary && (
                   <div className="field-group">
-                    <label className="field-label">Target event</label>
+                    <label className="field-label">Target event [B]</label>
                     <select
                       className="studio-select"
                       value={rule.target}
