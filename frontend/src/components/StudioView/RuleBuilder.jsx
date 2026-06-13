@@ -23,7 +23,7 @@ const TEMPLATE_OPTIONS = [
       { id: 'INIT', label: 'Must be first', description: '[A] must be the first event in the episode', icon: '⊳' },
       { id: 'END', label: 'Must be last', description: '[A] must be the last event in the episode', icon: '⊲' },
       { id: 'EXISTENCE', label: 'Must occur', description: '[A] must happen at least once in the episode', icon: '≥1' },
-      { id: 'EXACTLY', label: 'Exactly once', description: '[A] must occur exactly once in the episode', icon: '=1' },
+      { id: 'AT_MOST_ONE', label: 'At most once', description: '[A] must occur at most once in the episode', icon: '0..1' },
       { id: 'ABSENCE', label: 'Must not occur', description: '[A] must never happen in this episode', icon: '⊘' },
       { id: 'CO_EXISTENCE', label: 'Co-occur', description: '[A] and [B] must either both occur or both be absent', icon: '↔' },
       { id: 'RESPONDED_EXISTENCE', label: 'Implies existence', description: 'If [A] occurs, [B] must also occur (any order)', icon: '∃' },
@@ -40,7 +40,7 @@ const TEMPLATE_OPTIONS = [
   },
 ]
 
-const UNARY_TEMPLATES = ['EXISTENCE', 'ABSENCE', 'EXACTLY', 'INIT', 'END']
+const UNARY_TEMPLATES = ['EXISTENCE', 'ABSENCE', 'AT_MOST_ONE', 'INIT', 'END']
 
 const TEMPLATE_MAP = Object.fromEntries(
   TEMPLATE_OPTIONS.flatMap(g => g.items.map(t => [t.id, t]))

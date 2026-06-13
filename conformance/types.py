@@ -9,7 +9,7 @@ class DeclareTemplate(Enum):
     # Existence (unary)
     EXISTENCE = "Existence"  # Activity must occur at least once.
     ABSENCE = "Absence"  # Activity must never occur.
-    EXACTLY = "Exactly"  # Activity must occur an exact number of times.
+    AT_MOST_ONE = "At Most One"  # Activity must occur at most once.
     INIT = "Init"  # The first event in the trace must be this activity.
     END = "End"  # The last event in the trace must be this activity.
 
@@ -43,7 +43,7 @@ class DeclareTemplate(Enum):
 UNARY_TEMPLATES = {
     DeclareTemplate.EXISTENCE,
     DeclareTemplate.ABSENCE,
-    DeclareTemplate.EXACTLY,
+    DeclareTemplate.AT_MOST_ONE,
     DeclareTemplate.INIT,
     DeclareTemplate.END,
 }

@@ -404,7 +404,7 @@ def compute_constraint_satisfaction_degree(
     if normalized == "INIT":
         return 1.0 if result.outcome == ConformanceOutcome.SATISFIED else 0.0
 
-    if normalized == "EXACTLY":
+    if normalized == "AT_MOST_ONE":
         if constraint.count_target is None:
             return 1.0 if result.outcome == ConformanceOutcome.SATISFIED else 0.0
         deviation = abs(float(num_activations) - float(constraint.count_target))

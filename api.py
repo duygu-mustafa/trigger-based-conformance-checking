@@ -77,7 +77,7 @@ _OP_MAP = {
 _TEMPLATE_DESCRIPTIONS: dict[str, str] = {
     "EXISTENCE": "Must occur at least once",
     "ABSENCE": "Must never occur",
-    "EXACTLY": "Must occur an exact number of times",
+    "AT_MOST_ONE": "Must occur at most once",
     "INIT": "Must be the first event",
     "END": "Must be the last event",
     "RESPONSE": "After [A] occurs, [B] must eventually follow",
@@ -405,7 +405,7 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
         "NOT_CHAIN_SUCCESSION": DeclareTemplate.NOT_CHAIN_SUCCESSION,
         "EXISTENCE": DeclareTemplate.EXISTENCE,
         "ABSENCE": DeclareTemplate.ABSENCE,
-        "EXACTLY": DeclareTemplate.EXACTLY,
+        "AT_MOST_ONE": DeclareTemplate.AT_MOST_ONE,
         "INIT": DeclareTemplate.INIT,
         "END": DeclareTemplate.END,
     }
@@ -427,7 +427,7 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
     unary_templates = {
         DeclareTemplate.EXISTENCE,
         DeclareTemplate.ABSENCE,
-        DeclareTemplate.EXACTLY,
+        DeclareTemplate.AT_MOST_ONE,
         DeclareTemplate.INIT,
         DeclareTemplate.END,
     }

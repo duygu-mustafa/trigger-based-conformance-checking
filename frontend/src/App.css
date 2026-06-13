@@ -2425,7 +2425,7 @@
 
 .rule-template-badge {
   font-size: 0.72rem;
-  color: var(--color-text-dim, #7a8aa0);
+  color: var(--color-primary, #2a3a52);
 }
 
 .rule-card-chevron {

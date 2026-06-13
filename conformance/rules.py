@@ -244,7 +244,7 @@ def _parse_constraint(
     if target is None and template not in {
         DeclareTemplate.EXISTENCE,
         DeclareTemplate.ABSENCE,
-        DeclareTemplate.EXACTLY,
+        DeclareTemplate.AT_MOST_ONE,
         DeclareTemplate.INIT,
     }:
         target = activation

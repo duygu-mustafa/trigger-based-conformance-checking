@@ -698,20 +698,19 @@ def _evaluate_constraint_impl(
             else activation_eval_error,
         )
 
-    if constraint.template == DeclareTemplate.EXACTLY:
-        # This lightweight checker models EXACTLY as exactly one activation.
+    if constraint.template == DeclareTemplate.AT_MOST_ONE:
         act_rows, activation_eval_error = _candidate_activations()
         count = int(len(act_rows))
-        ok = count == 1
+        ok = count <= 1
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
             outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
             num_activations=count,
             num_fulfilled=1 if ok else 0,
-            num_violated=0 if ok else abs(count - 1),
+            num_violated=0 if ok else count - 1,
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else None,
-            violation_reason=(None if ok else "Activity must occur exactly once")
+            violation_reason=(None if ok else "Activity must occur at most once")
             if activation_eval_error is None
             else activation_eval_error,
         )
@@ -1281,12 +1280,12 @@ def evaluate_absence_rule(
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
-def evaluate_exactly_rule(
+def evaluate_at_most_one_rule(
     case_id: str,
     trace_df: pd.DataFrame,
     constraint: DeclareConstraint,
 ) -> ConstraintResult:
-    """Evaluate `EXACTLY` constraints."""
+    """Evaluate `AT_MOST_ONE` constraints."""
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
@@ -1485,7 +1484,7 @@ _TEMPLATE_EVALUATORS: dict[
 ] = {
     DeclareTemplate.EXISTENCE: evaluate_existence_rule,
     DeclareTemplate.ABSENCE: evaluate_absence_rule,
-    DeclareTemplate.EXACTLY: evaluate_exactly_rule,
+    DeclareTemplate.AT_MOST_ONE: evaluate_at_most_one_rule,
     DeclareTemplate.INIT: evaluate_init_rule,
     DeclareTemplate.END: evaluate_end_rule,
     DeclareTemplate.RESPONDED_EXISTENCE: evaluate_responded_existence_rule,
