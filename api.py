@@ -342,6 +342,8 @@ class CustomRuleInput(BaseModel):
     activation_logic: str = "AND"
     correlation_conditions: list[DataConditionInput] = []
     correlation_logic: str = "AND"
+    activation_condition_expr: Optional[str] = None
+    correlation_condition_expr: Optional[str] = None
     rationale: str = ""
     severity: dict[str, float] = {}
 
@@ -414,8 +416,8 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
     if template is None:
         raise ValueError(f"Unknown template: {rule.template}")
 
-    activation_expr = _chips_to_expr(rule.activation_conditions, rule.activation_logic)
-    correlation_expr = _chips_to_expr(rule.correlation_conditions, rule.correlation_logic)
+    activation_expr = rule.activation_condition_expr or _chips_to_expr(rule.activation_conditions, rule.activation_logic)
+    correlation_expr = rule.correlation_condition_expr or _chips_to_expr(rule.correlation_conditions, rule.correlation_logic)
 
     time_cond = None
     if rule.min_gap_hours is not None or rule.max_gap_hours is not None:

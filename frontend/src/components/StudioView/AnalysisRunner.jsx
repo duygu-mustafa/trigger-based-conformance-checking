@@ -64,6 +64,8 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
         activation_logic: r.activation_logic || 'AND',
         correlation_conditions: r.correlation_conditions || [],
         correlation_logic: r.correlation_logic || 'AND',
+        activation_condition_expr: r.activation_condition_expr || null,
+        correlation_condition_expr: r.correlation_condition_expr || null,
         rationale: r.rationale || '',
       })) : [],
     }

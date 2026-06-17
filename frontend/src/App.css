@@ -3053,6 +3053,62 @@
   color: var(--color-primary, #5b8dee);
 }
 
+/* ── Condition tree (nested AND/OR/NOT) ─────────────────────────────────── */
+
+.condition-tree {
+  margin-top: 0.25rem;
+}
+
+.condition-group {
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem 0.5rem 0.6rem;
+  margin-bottom: 0.4rem;
+  background: rgba(255,255,255,0.02);
+}
+
+.condition-group--not {
+  border-color: #7a5fcc;
+  background: rgba(122,95,204,0.06);
+}
+
+.condition-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.condition-group-not-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #a98aff;
+  background: rgba(122,95,204,0.18);
+  border: 1px solid #7a5fcc;
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+}
+
+.condition-add-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.condition-add-row .add-condition-btn {
+  width: auto;
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.preview-field-val--expr {
+  font-family: 'Fira Code', 'Fira Mono', 'Cascadia Code', monospace;
+  font-size: 0.68rem;
+  word-break: break-all;
+}
+
 /* Severity sliders */
 .slider-row {
   display: flex;
