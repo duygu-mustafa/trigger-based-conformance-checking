@@ -258,10 +258,10 @@ if (nrow(results) == 0) {
   quit(status = 0)
 }
 
-non_na_p <- sum(!is.na(results$fisher_p))
-results$p_bonf <- pmin(results$fisher_p * non_na_p, 1)
-results$p_fdr <- p.adjust(results$fisher_p, method = 'BH')
-results$sig_bonf <- !is.na(results$p_bonf) & results$p_bonf < 0.05
-results$sig_fdr <- !is.na(results$p_fdr) & results$p_fdr < 0.05
+# non_na_p <- sum(!is.na(results$fisher_p))
+# results$p_bonf <- pmin(results$fisher_p * non_na_p, 1)
+# results$p_fdr <- p.adjust(results$fisher_p, method = 'BH')
+# results$sig_bonf <- !is.na(results$p_bonf) & results$p_bonf < 0.05
+# results$sig_fdr <- !is.na(results$p_fdr) & results$p_fdr < 0.05
 
 write.csv(results, rule_statistics_csv, row.names = FALSE, na = '')

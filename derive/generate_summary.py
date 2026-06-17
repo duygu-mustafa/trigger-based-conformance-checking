@@ -146,6 +146,20 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
             for _, row in df_stats.iterrows():
                 cid = str(row.get("rule_name", ""))
                 if cid:
+                    raw_p = safe_float_or_none(row.get("fisher_p"))
+                    or_val = safe_float_or_none(row.get("or"))
+                    or_low = safe_float_or_none(row.get("or_low"))
+                    or_high = safe_float_or_none(row.get("or_high"))
+                    is_sig = raw_p is not None and raw_p < 0.05
+                    if is_sig and or_val is not None and or_low is not None and or_high is not None:
+                        if or_val < 1 and or_high < 1:
+                            rule_class = "useful"
+                        elif or_val > 1 and or_low > 1:
+                            rule_class = "harmful"
+                        else:
+                            rule_class = "neutral"
+                    else:
+                        rule_class = "neutral"
                     stats_map[cid] = {
                         "n_exposed": safe_float_or_none(row.get("n_exposed")),
                         "n_unexposed": safe_float_or_none(row.get("n_unexposed")),
@@ -153,18 +167,16 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
                         "b": safe_float_or_none(row.get("b")),
                         "c": safe_float_or_none(row.get("c")),
                         "d": safe_float_or_none(row.get("d")),
-                        "fisher_p": safe_float_or_none(row.get("fisher_p")),
-                        "odds_ratio": safe_float_or_none(row.get("or")),
-                        "odds_ratio_low": safe_float_or_none(row.get("or_low")),
-                        "odds_ratio_high": safe_float_or_none(row.get("or_high")),
+                        "fisher_p": raw_p,
+                        "odds_ratio": or_val,
+                        "odds_ratio_low": or_low,
+                        "odds_ratio_high": or_high,
                         "risk_ratio": safe_float_or_none(row.get("rr")),
                         "rr_ci_low": safe_float_or_none(row.get("rr_low")),
                         "rr_ci_high": safe_float_or_none(row.get("rr_high")),
-                        "p_value_raw": safe_float_or_none(row.get("fisher_p")),
-                        "p_value_bonf": safe_float_or_none(row.get("p_bonf")),
-                        "p_value_fdr": safe_float_or_none(row.get("p_fdr")),
-                        "is_significant_bonf": safe_bool(row.get("sig_bonf")),
-                        "is_significant": safe_bool(row.get("sig_fdr"))
+                        "p_value_raw": raw_p,
+                        "is_significant": is_sig,
+                        "rule_class": rule_class,
                     }
         except Exception as e:
             print(f"Warning: Failed to load stats CSV: {e}")
@@ -386,10 +398,8 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
             "rr_ci_low": None,
             "rr_ci_high": None,
             "p_value_raw": None,
-            "p_value_bonf": None,
-            "p_value_fdr": None, 
-            "is_significant_bonf": False,
-            "is_significant": False
+            "is_significant": False,
+            "rule_class": "neutral",
         }))
         violation_frequency.append(entry)
 

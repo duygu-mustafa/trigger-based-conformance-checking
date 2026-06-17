@@ -12,6 +12,12 @@ const ContrastBarChart = ({ items, mode = 'violation' }) => {
 
   const isViolation = mode === 'violation';
 
+  const classLabel = (rc) => {
+    if (rc === 'useful') return { text: 'Useful', cls: 'class-useful' };
+    if (rc === 'harmful') return { text: 'Harmful', cls: 'class-harmful' };
+    return { text: 'Not Significant', cls: 'class-neutral' };
+  };
+
   return (
     <div className="contrast-list">
       <div className="contrast-legend">
@@ -26,16 +32,7 @@ const ContrastBarChart = ({ items, mode = 'violation' }) => {
         const rateFailure = isViolation ? (item.violation_rate_failure ?? 0) : (item.satisfaction_rate_failure ?? 0);
         const lift = isViolation ? (item.lift_failure ?? 1) : (item.lift_success ?? 1);
         const delta = Math.abs(rateFailure - rateSuccess);
-        const isSafetyRule = item.constraint_id.startsWith('SBT-DP-') || item.constraint_id.startsWith('INT-');
-        const isAdherenceRule = item.constraint_id.startsWith('RC-DP-');
-
-        // Logic check:
-        // Violation view:
-        //   - For Safety rule: Violation is Risk. Lift FAILURE > 1.2 is high risk.
-        //   - For Adherence rule: Violation is Failure to do good. Lift FAILURE > 1.2 is bad.
-        // Satisfaction view:
-        //   - For Adherence rule: Satisfaction is Good. Lift SUCCESS > 1.2 is high success lift.
-        //   - For Safety rule: Satisfaction is Safety. Lift SUCCESS > 1.2 is safety association.
+        const cl = classLabel(item.rule_class);
 
         const liftClass = isViolation 
           ? (lift > 1.2 ? 'high-lift' : lift < 0.8 ? 'low-lift' : '')
@@ -52,9 +49,10 @@ const ContrastBarChart = ({ items, mode = 'violation' }) => {
                 <div className={`lift-tag ${liftClass}`}>
                    {isViolation ? 'Failure Lift' : 'Success Lift'}: <strong>{(lift || 1).toFixed(2)}x</strong>
                 </div>
-                <div className="delta-tag">
-                   {delta > 0.01 && <span className="delta-val">Δ {formatPercent(delta)}</span>}
-                </div>
+                 <div className="delta-tag">
+                    {delta > 0.01 && <span className="delta-val">Δ {formatPercent(delta)}</span>}
+                 </div>
+                 <span className={`class-tag ${cl.cls}`}>{cl.text}</span>
               </div>
             </div>
             

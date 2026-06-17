@@ -41,19 +41,9 @@ const OutcomeScatterPlot = ({ items, mode = 'violation' }) => {
             const x = getX(xVal || 0);
             const y = getY(yVal || 0);
 
-            const isSafetyRule = item.constraint_id.startsWith('SBT-DP-') || item.constraint_id.startsWith('INT-');
-            const isAdherenceRule = item.constraint_id.startsWith('RC-DP-');
-            
-            let color = '#64748b';
-            if (isViolation) {
-              // Violation is bad for both safety and adherence
-              if (lift > 1.2) color = '#ef4444'; // Failure association
-              else if (lift < 0.8) color = '#10b981'; // Success association
-            } else {
-              // Satisfaction: Good for adherence (Green if SUCCESS lift), Neutral/Safe for safety
-              if (lift > 1.2) color = '#10b981'; // Success association
-              else if (lift < 0.8) color = '#ef4444'; // Failure association
-            }
+            let color = '#94a3b8';
+            if (item.rule_class === 'useful') color = '#22c55e';
+            else if (item.rule_class === 'harmful') color = '#ef4444';
 
             return (
                 <circle
@@ -66,7 +56,7 @@ const OutcomeScatterPlot = ({ items, mode = 'violation' }) => {
                   strokeWidth="1.5"
                   className="scatter-dot"
                 >
-                  <title>{`${item.constraint_label}\nSuccess ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(xVal)}\nFailure ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(yVal)}\n${isViolation ? 'Failure Lift' : 'Success Lift'}: ${(lift || 1).toFixed(2)}x`}</title>
+                  <title>{`${item.constraint_label} [${item.rule_class === 'useful' ? 'Useful' : item.rule_class === 'harmful' ? 'Harmful' : 'Not Significant'}]\nSuccess ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(xVal)}\nFailure ${isViolation ? 'Violation' : 'Satisfaction'}: ${formatPercent(yVal)}\n${isViolation ? 'Failure Lift' : 'Success Lift'}: ${(lift || 1).toFixed(2)}x`}</title>
                 </circle>
             );
           })}

@@ -107,17 +107,25 @@ const ConstraintDetailView = ({ constraint, itemLabels = {} }) => {
         </div>
         {constraint.odds_ratio !== undefined && (
           <div className="detail-stat">
-            <label>Odds Ratio</label>
+            <label>Odds Ratio [95% CI]</label>
             <span className={`val ${constraint.is_significant ? 'text-danger' : ''}`}>
-              {constraint.odds_ratio === null ? 'N/A' : constraint.odds_ratio.toFixed(2)}
+              {constraint.odds_ratio === null ? 'N/A' : `${constraint.odds_ratio.toFixed(2)} [${(constraint.odds_ratio_low ?? 0).toFixed(2)} – ${(constraint.odds_ratio_high ?? 0).toFixed(2)}]`}
             </span>
           </div>
         )}
-        {constraint.p_value_fdr !== undefined && (
+        {constraint.p_value_raw !== undefined && (
           <div className="detail-stat">
-            <label>p-value (FDR)</label>
+            <label>p-value</label>
             <span className={`val ${constraint.is_significant ? 'text-danger' : ''}`}>
-              {constraint.p_value_fdr === null ? 'N/A' : (constraint.p_value_fdr < 0.001 ? '<0.001' : constraint.p_value_fdr.toFixed(3))}
+              {constraint.p_value_raw === null ? 'N/A' : (constraint.p_value_raw < 0.001 ? '<0.001' : constraint.p_value_raw.toFixed(3))}
+            </span>
+          </div>
+        )}
+        {constraint.p_value_raw !== undefined && constraint.rule_class && (
+          <div className="detail-stat">
+            <label>Classification</label>
+            <span className={`stat-sig-label ${constraint.rule_class}`}>
+              {constraint.rule_class === 'useful' ? 'Useful' : constraint.rule_class === 'harmful' ? 'Harmful' : 'Not Significant'}
             </span>
           </div>
         )}

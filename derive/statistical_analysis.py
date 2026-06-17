@@ -218,18 +218,13 @@ if __name__ == "__main__":
             
         df_summary = pd.DataFrame(summary_rows)
         
-        # 3. Multiple Testing Correction
-        if not df_summary.empty:
-            # P-Bonferroni (clip to 1.0)
-            df_summary["p_bonf"] = np.minimum(df_summary["p_raw"] * len(df_summary), 1.0)
-            
-            # P-FDR (Benjamini-Hochberg)
-            _rej, p_fdr, _as1, _as2 = multipletests(df_summary["p_raw"], method="fdr_bh")
-            df_summary["p_fdr"] = p_fdr
-            
-            # Significance Flags (alpha = 0.05)
-            df_summary["significant_bonf"] = df_summary["p_bonf"] < 0.05
-            df_summary["significant_fdr"] = df_summary["p_fdr"] < 0.05
+        # # 3. Multiple Testing Correction (no longer applied — raw p-value used)
+        # if not df_summary.empty:
+        #     df_summary["p_bonf"] = np.minimum(df_summary["p_raw"] * len(df_summary), 1.0)
+        #     _rej, p_fdr, _as1, _as2 = multipletests(df_summary["p_raw"], method="fdr_bh")
+        #     df_summary["p_fdr"] = p_fdr
+        #     df_summary["significant_bonf"] = df_summary["p_bonf"] < 0.05
+        #     df_summary["significant_fdr"] = df_summary["p_fdr"] < 0.05
             
         # 4. Save Results
         output_table_path = Path("data/results/statistical_analysis_table.csv")

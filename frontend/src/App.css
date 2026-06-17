@@ -1889,8 +1889,12 @@
   background-color: rgba(245, 158, 11, 0.05);
 }
 
-.row-significant td:first-child {
-  border-left: 4px solid var(--color-accent);
+.row-useful td:first-child {
+  border-left: 4px solid #22c55e;
+}
+
+.row-harmful td:first-child {
+  border-left: 4px solid #ef4444;
 }
 
 .stat-p-val {
@@ -1906,23 +1910,106 @@
   text-transform: uppercase;
 }
 
-.stat-sig-label.risk {
-  background: #fef2f2;
-  color: #ef4444;
+.stat-sig-label.useful {
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
 }
 
-.stat-sig-label.protective {
-  background: #f0fdf4;
-  color: #22c55e;
+.stat-sig-label.harmful {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
 }
 
 .stat-sig-label.neutral {
   background: #f8fafc;
-  color: #94a3b8;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
 }
 
 .or-value {
   font-weight: 600;
+}
+
+/* ── Classification Summary Banner ─────────────────────────────── */
+
+.class-summary-banner {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.class-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+}
+
+.class-pill.class-useful {
+  color: #16a34a;
+  border-color: #bbf7d0;
+}
+.class-pill.class-useful.active {
+  background: #f0fdf4;
+}
+
+.class-pill.class-harmful {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+.class-pill.class-harmful.active {
+  background: #fef2f2;
+}
+
+.class-pill.class-neutral {
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+.class-pill.class-neutral.active {
+  background: #f1f5f9;
+}
+
+.class-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.class-useful .class-dot { background: #22c55e; }
+.class-harmful .class-dot { background: #ef4444; }
+.class-neutral .class-dot { background: #94a3b8; }
+
+/* ── Class tag (used in ContrastBarChart lift row) ─────────────── */
+
+.class-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+.class-tag.class-useful {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+.class-tag.class-harmful {
+  background: #fef2f2;
+  color: #dc2626;
+}
+.class-tag.class-neutral {
+  background: #f8fafc;
+  color: #94a3b8;
 }
 
 /* Additional Stats Styles */
@@ -1935,28 +2022,6 @@
 .rr-ci {
   font-size: 0.75rem;
   color: var(--color-text-muted);
-}
-
-.row-nominal {
-  border-left: 2px solid var(--color-accent-dim);
-}
-
-.text-accent {
-  color: var(--color-accent);
-}
-
-.stats-footer {
-  margin-top: 16px;
-  padding: 12px;
-  background: var(--color-neutral-bg);
-  border-radius: 6px;
-  border-left: 4px solid var(--color-border-light);
-}
-
-.footer-note {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  margin: 4px 0;
 }
 
 

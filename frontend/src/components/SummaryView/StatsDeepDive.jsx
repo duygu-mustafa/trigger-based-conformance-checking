@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 
 const StatsDeepDive = ({ summaryData }) => {
   const [onlySignificant, setOnlySignificant] = useState(false);
+  const [classFilter, setClassFilter] = useState(null);
 
   const formatPValue = (value) => {
     if (value === null || value === undefined || Number.isNaN(value)) return 'N/A';
@@ -17,31 +18,56 @@ const StatsDeepDive = ({ summaryData }) => {
     if (value === null || value === undefined || Number.isNaN(value)) return 'N/A';
     return Number(value).toFixed(0);
   };
-  
+
+  const classCounts = useMemo(() => {
+    const raw = (summaryData?.violation_frequency || []).filter(v => v.count > 0 && v.odds_ratio !== undefined);
+    const counts = { useful: 0, harmful: 0, neutral: 0 };
+    raw.forEach(v => { counts[v.rule_class] = (counts[v.rule_class] || 0) + 1; });
+    return counts;
+  }, [summaryData]);
+
   const statsData = useMemo(() => {
     const raw = (summaryData?.violation_frequency || [])
       .filter(v => v.count > 0 && v.odds_ratio !== undefined);
-    
+
     const sorted = [...raw].sort((a, b) => {
-      // Sort by significance (p-value) first
-      if (a.p_value_fdr !== b.p_value_fdr) {
-        return (a.p_value_fdr ?? 1) - (b.p_value_fdr ?? 1);
-      }
-      // Then by magnitude of association (abs log OR)
+      const pa = a.p_value_raw ?? 1;
+      const pb = b.p_value_raw ?? 1;
+      if (pa !== pb) return pa - pb;
       const getAbsLogOR = (or) => Math.abs(Math.log(or || 1));
       return getAbsLogOR(b.odds_ratio) - getAbsLogOR(a.odds_ratio);
     });
 
+    let filtered = sorted;
     if (onlySignificant) {
-      return sorted.filter(s => s.is_significant);
+      filtered = filtered.filter(s => s.is_significant);
     }
-    return sorted;
-  }, [summaryData, onlySignificant]);
+    if (classFilter) {
+      filtered = filtered.filter(s => s.rule_class === classFilter);
+    }
+    return filtered;
+  }, [summaryData, onlySignificant, classFilter]);
 
   if (!statsData.length) return <p className="summary-empty">No statistical data available.</p>;
 
+  const handleClassFilter = (cls) => {
+    setClassFilter(classFilter === cls ? null : cls);
+  };
+
   return (
     <div className="stats-deep-dive">
+      <div className="class-summary-banner">
+        {['useful', 'harmful', 'neutral'].map(cls => (
+          <button
+            key={cls}
+            className={`class-pill class-${cls} ${classFilter === cls ? 'active' : ''}`}
+            onClick={() => handleClassFilter(cls)}
+          >
+            <span className="class-dot" /> {cls.charAt(0).toUpperCase() + cls.slice(1)}: {classCounts[cls] || 0}
+          </button>
+        ))}
+      </div>
+
       <div className="stats-controls">
         <label className="checkbox-label">
           <input 
@@ -49,7 +75,7 @@ const StatsDeepDive = ({ summaryData }) => {
             checked={onlySignificant} 
             onChange={(e) => setOnlySignificant(e.target.checked)} 
           />
-          Show only statistically significant associations (p &lt; 0.05)
+          Show only statistically significant (p &lt; 0.05)
         </label>
       </div>
 
@@ -58,120 +84,67 @@ const StatsDeepDive = ({ summaryData }) => {
           <thead>
             <tr>
               <th>Clinical Rule</th>
-              <th>Compliance Pattern</th>
-              <th title="Number of exposed episodes from the CSV">Exposed n</th>
-              <th title="Number of unexposed episodes from the CSV">Unexposed n</th>
-              <th title="Odds Ratio: >1 means association with Failure">OR [95% CI]</th>
-              <th title="Relative Risk: >1 means association with Failure">RR [95% CI]</th>
-              <th>p-value (Raw)</th>
-              <th>p-value (Bonf.)</th>
-              <th>p-value (FDR)</th>
-              <th>Interpretation</th>
+              <th title="Number of exposed (violated) episodes">Exposed (Violated) #</th>
+              <th title="Number of unexposed episodes">Unexposed (Satisfied) #</th>
+              <th title="Odds Ratio with 95% confidence interval">OR [95% CI]</th>
+              <th title="Risk Ratio with 95% confidence interval">RR [95% CI]</th>
+              <th>p-value</th>
+              <th>Clinical Relevance</th>
             </tr>
           </thead>
           <tbody>
             {statsData.map((item) => {
-              const pValFdr = item.p_value_fdr;
-              const pValRaw = item.p_value_raw;
-              const pValBonf = item.p_value_bonf;
               const or = item.odds_ratio;
               const orLow = item.odds_ratio_low;
               const orHigh = item.odds_ratio_high;
               const rr = item.risk_ratio;
               const rrLow = item.rr_ci_low;
               const rrHigh = item.rr_ci_high;
-              const isSignificant = item.is_significant;
-              const isBonfSignificant = item.is_significant_bonf;
-              const isNominal = pValRaw < 0.05 && !isSignificant;
-              
-              // Determine clinical meaning
-              let interpretation = "Neutral / Not Significant";
-              let interpClass = "";
-              
-              const constraintId = String(item.constraint_id || '');
-              const isSafetyRule = constraintId.startsWith('SBT-DP-') || constraintId.startsWith('INT-');
-              const isAdherenceRule = constraintId.startsWith('RC-DP-');
-              
-              if (isSignificant) {
-                if (isAdherenceRule) {
-                  // Compliance = Good
-                  if (or > 1.1) {
-                    interpretation = "Significant Protective Factor";
-                    interpClass = "stat-sig-label protective";
-                  } else if (or < 0.9) {
-                    interpretation = "Compliance associated with Failure";
-                    interpClass = "stat-sig-label risk";
-                  }
-                } else if (isSafetyRule) {
-                  // Violation = Bad
-                  if (or < 0.9) {
-                    interpretation = "Significant Risk Factor";
-                    interpClass = "stat-sig-label risk";
-                  } else if (or > 1.1) {
-                    interpretation = "Violation associated with Success";
-                    interpClass = "stat-sig-label protective";
-                  }
-                } else {
-                   interpretation = "Significant Association";
-                   interpClass = "stat-sig-label neutral";
-                }
-              } else if (isNominal) {
-                interpretation = "Nominal Trend (p < 0.05)";
-                interpClass = "stat-sig-label neutral";
+
+              let badge = { label: "Not Significant", class: "neutral" };
+              if (item.rule_class === "useful") {
+                badge = { label: "Useful", class: "useful" };
+              } else if (item.rule_class === "harmful") {
+                badge = { label: "Harmful", class: "harmful" };
               }
 
-              if (isBonfSignificant && !isSignificant) {
-                interpretation = "Bonferroni Significant";
-                interpClass = "stat-sig-label neutral";
-              }
-
-              const rowClass = isSignificant ? 'row-significant' : (isNominal ? 'row-nominal' : '');
+              const rowClass = item.rule_class === "useful" ? 'row-useful'
+                : item.rule_class === "harmful" ? 'row-harmful'
+                : '';
 
               return (
                 <tr key={item.constraint_id} className={rowClass}>
                   <td>
                     <div className="rule-cell">
-                          <span className="id-badge">{item.constraint_id}</span>{' '}
-                          <span className="rule-label">{item.constraint_label}</span>
-                        </div>
+                      <span className="id-badge">{item.constraint_id}</span>{' '}
+                      <span className="rule-label">{item.constraint_label}</span>
+                    </div>
                   </td>
-                  <td>{item.template}</td>
                   <td className="val-cell">{formatCount(item.n_exposed)}</td>
                   <td className="val-cell">{formatCount(item.n_unexposed)}</td>
                   <td className="val-cell">
                     <strong>{formatEstimate(or)}</strong>
-                    <div className="rr-ci">[{formatEstimate(orLow)} - {formatEstimate(orHigh)}]</div>
+                    <div className="rr-ci">[{formatEstimate(orLow)} – {formatEstimate(orHigh)}]</div>
                   </td>
                   <td className="val-cell">
                     {rr === null || isNaN(rr) ? 'N/A' : (
-                      <div className="rr-group">
-                        <span className="rr-val">{formatEstimate(rr)}</span>
-                        <span className="rr-ci">[{formatEstimate(rrLow)} - {formatEstimate(rrHigh)}]</span>
-                      </div>
+                      <>
+                        <strong>{formatEstimate(rr)}</strong>
+                        <div className="rr-ci">[{formatEstimate(rrLow)} – {formatEstimate(rrHigh)}]</div>
+                      </>
                     )}
                   </td>
-                  <td className={`stat-p-val ${isNominal ? 'text-accent bold' : ''}`}>
-                    {formatPValue(pValRaw)}
-                  </td>
-                  <td className={isBonfSignificant ? 'bold text-accent' : ''}>
-                    {formatPValue(pValBonf)}
-                  </td>
-                  <td className={isSignificant ? 'bold text-accent' : ''}>
-                    {formatPValue(pValFdr)}
+                  <td className="val-cell">
+                    {formatPValue(item.p_value_raw)}
                   </td>
                   <td>
-                    <span className={interpClass}>{interpretation}</span>
+                    <span className={`stat-sig-label ${badge.class}`}>{badge.label}</span>
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      </div>
-      <div className="stats-footer">
-        <p className="footer-note">* <strong>FDR p-value</strong>: Corrected for multiple testing (Benjamini-Hochberg). This is the main significance filter in the table.</p>
-        <p className="footer-note">* <strong>Raw p-value</strong>: Fisher's exact test result from the CSV export. Values &lt; 0.05 with no FDR significance are shown as nominal trends.</p>
-        <p className="footer-note">* <strong>Bonferroni p-value</strong>: Additional conservative correction from the same CSV export for reference.</p>
       </div>
     </div>
   );
