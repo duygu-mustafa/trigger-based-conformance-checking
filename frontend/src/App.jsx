@@ -77,6 +77,10 @@ export default function App() {
   const [rulesLoading, setRulesLoading] = useState(true)
   const [apiError, setApiError] = useState(null)
   const [customRules, setCustomRules] = useState([])
+  const [customEventTypes, setCustomEventTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('studio_custom_event_types') || '[]') }
+    catch { return [] }
+  })
 
   // Load case manifest
   useEffect(() => {
@@ -149,6 +153,12 @@ export default function App() {
 
   const meta = PAGE_META[activePage] || PAGE_META['library']
 
+  const mergedActivities = {
+    ...activities,
+    custom: customEventTypes.map(et => et.name),
+    all: [...(activities.all || []), ...customEventTypes.map(et => et.name)],
+  }
+
   function renderContent() {
     if (activePage === 'library') {
       if (apiError) return <ApiErrorState error={apiError} />
@@ -159,9 +169,23 @@ export default function App() {
       if (apiError) return <ApiErrorState error={apiError} />
       return (
         <RuleBuilder
-          activities={activities}
+          activities={mergedActivities}
           itemLabels={itemLabels}
           onSaveRule={rule => setCustomRules(r => [...r, rule])}
+          customEventTypes={customEventTypes}
+          onSaveCustomEvent={et => {
+            const eventWithId = et.id ? et : { ...et, id: `CET-${Date.now()}` }
+            const updated = et.id
+              ? customEventTypes.map(e => e.id === et.id ? eventWithId : e)
+              : [...customEventTypes, eventWithId]
+            setCustomEventTypes(updated)
+            localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
+          }}
+          onDeleteCustomEvent={id => {
+            const updated = customEventTypes.filter(e => e.id !== id)
+            setCustomEventTypes(updated)
+            localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
+          }}
         />
       )
     }

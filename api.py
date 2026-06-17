@@ -321,6 +321,56 @@ def get_item_labels() -> dict[str, str]:
     return _ITEM_LABELS
 
 
+_BG_ITEMS = [
+    {"itemid": "pao2fio2ratio", "label": "PaO2/FiO2 Ratio", "category": "Blood Gas"},
+    {"itemid": "fio2_bg",       "label": "FiO2 (Blood Gas)", "category": "Blood Gas"},
+    {"itemid": "ph_bg",         "label": "pH (Blood Gas)",   "category": "Blood Gas"},
+    {"itemid": "hemoglobin_bg", "label": "Hemoglobin (Blood Gas)", "category": "Blood Gas"},
+]
+
+
+@app.get("/api/item_search")
+def search_items(q: str = "", table: str = "chartevents", limit: int = 50) -> list[dict]:
+    """Search MIMIC items by label substring. Falls back to static YAML if DB unavailable."""
+    if table == "bg":
+        q_lower = q.lower()
+        return [i for i in _BG_ITEMS if not q_lower or q_lower in i["label"].lower()][:limit]
+
+    try:
+        from database.client import get_postgres_connection
+        conn = get_postgres_connection()
+        try:
+            cur = conn.cursor()
+            if table == "labevents":
+                cur.execute(
+                    "SELECT itemid, label, category FROM mimiciv_hosp.d_labitems"
+                    " WHERE LOWER(label) LIKE %(q)s"
+                    " ORDER BY label LIMIT %(limit)s",
+                    {"q": f"%{q.lower()}%", "limit": limit},
+                )
+            else:
+                cur.execute(
+                    "SELECT itemid, label, category FROM mimiciv_icu.d_items"
+                    " WHERE LOWER(label) LIKE %(q)s AND linksto = %(table)s"
+                    " ORDER BY label LIMIT %(limit)s",
+                    {"q": f"%{q.lower()}%", "table": table, "limit": limit},
+                )
+            rows = [{"itemid": r[0], "label": r[1], "category": r[2]} for r in cur.fetchall()]
+            cur.close()
+            return rows
+        finally:
+            conn.close()
+    except Exception:
+        results = []
+        for key, label in _ITEM_LABELS.items():
+            if q.lower() in label.lower():
+                try:
+                    results.append({"itemid": int(key), "label": label, "category": None})
+                except ValueError:
+                    pass
+        return results[:limit]
+
+
 # ── Analysis job models ───────────────────────────────────────────────────────
 
 class DataConditionInput(BaseModel):
@@ -348,11 +398,32 @@ class CustomRuleInput(BaseModel):
     severity: dict[str, float] = {}
 
 
+class ValueFilter(BaseModel):
+    column: str      # "valuenum" | "value" | "amount"
+    operator: str    # ">=" | "<=" | "==" | "!=" | ">" | "<"
+    value: float | str
+
+
+class CustomEventType(BaseModel):
+    name: str
+    kind: str = "table"                        # "table" | "sql"
+    source_table: Optional[str] = None
+    itemids: Optional[list[int | str]] = None
+    value_filter: Optional[ValueFilter] = None
+    sql: Optional[str] = None                  # populated when kind="sql"
+
+
+class QueryRequest(BaseModel):
+    sql: str
+    limit: int = 200
+
+
 class RunRequest(BaseModel):
     sample_size: int = 50
     seed: int = 42
     include_predefined: bool = True
     custom_rules: list[CustomRuleInput] = []
+    custom_event_types: list[CustomEventType] = []
     trigger_event: str = "InvasiveVentilationStarted"
 
 
@@ -482,6 +553,190 @@ def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.
     return episodes if episodes else [df]
 
 
+def _fetch_custom_events(
+    stay_ids: list[int],
+    event_types: list[CustomEventType],
+) -> dict[str, Any]:
+    """Query MIMIC for custom event rows and return {stay_id_str: DataFrame}."""
+    import pandas as pd
+    from database.client import get_postgres_connection
+
+    table_types = [et for et in event_types if et.kind != "sql"]
+    sql_types = [et for et in event_types if et.kind == "sql" and et.sql]
+
+    by_table: dict[str, list[CustomEventType]] = {}
+    for et in table_types:
+        by_table.setdefault(et.source_table, []).append(et)
+
+    # {(source_table, itemid): name}
+    label_lookup: dict[tuple[str, int], str] = {}
+    for et in table_types:
+        for iid in (et.itemids or []):
+            label_lookup[(et.source_table, iid)] = et.name
+
+    # value_filter lookup
+    filter_lookup: dict[tuple[str, int], ValueFilter | None] = {}
+    for et in table_types:
+        for iid in (et.itemids or []):
+            filter_lookup[(et.source_table, iid)] = et.value_filter
+
+    TABLE_QUERIES = {
+        "chartevents": (
+            "SELECT stay_id, itemid, charttime AS event_time,"
+            " value AS value_raw, valuenum AS value_num, valueuom AS unit"
+            " FROM mimiciv_icu.chartevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+            " AND (error IS NULL OR error = 0)"
+        ),
+        "inputevents": (
+            "SELECT stay_id, itemid, starttime AS event_time,"
+            " NULL AS value_raw, amount AS value_num, amountuom AS unit"
+            " FROM mimiciv_icu.inputevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+        ),
+        "procedureevents": (
+            "SELECT stay_id, itemid, starttime AS event_time,"
+            " NULL AS value_raw, NULL AS value_num, NULL AS unit"
+            " FROM mimiciv_icu.procedureevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+        ),
+        "outputevents": (
+            "SELECT stay_id, itemid, charttime AS event_time,"
+            " NULL AS value_raw, value AS value_num, valueuom AS unit"
+            " FROM mimiciv_icu.outputevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+        ),
+        "labevents": (
+            "SELECT s.stay_id, l.itemid, l.charttime AS event_time,"
+            " l.value AS value_raw, l.valuenum AS value_num, l.valueuom AS unit"
+            " FROM mimiciv_hosp.labevents l"
+            " JOIN mimiciv_icu.icustays s ON l.hadm_id = s.hadm_id"
+            " WHERE s.stay_id = ANY(%(stay_ids)s) AND l.itemid = ANY(%(itemids)s)"
+        ),
+        "bg": (
+            "SELECT s.stay_id, cols.itemid, e.charttime AS event_time,"
+            " cols.val::text AS value_raw, cols.val AS value_num, cols.uom AS unit"
+            " FROM mimiciv_derived.bg e"
+            " CROSS JOIN LATERAL (VALUES"
+            "   ('pao2fio2ratio', e.pao2fio2ratio, 'ratio'),"
+            "   ('fio2_bg', COALESCE(e.fio2, e.fio2_chartevents), '%%'),"
+            "   ('ph_bg', e.ph, 'units'),"
+            "   ('hemoglobin_bg', e.hemoglobin, 'g/dL')"
+            " ) AS cols(itemid, val, uom)"
+            " JOIN mimiciv_icu.icustays s ON e.hadm_id = s.hadm_id"
+            " WHERE s.stay_id = ANY(%(stay_ids)s) AND cols.itemid = ANY(%(itemids)s)"
+            " AND cols.val IS NOT NULL"
+        ),
+    }
+
+    OP_FNS = {
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+    }
+
+    all_rows: list[dict] = []
+    conn = None
+    try:
+        conn = get_postgres_connection()
+        cur = conn.cursor()
+        for table, ets in by_table.items():
+            all_itemids = list({iid for et in ets for iid in (et.itemids or [])})
+            sql = TABLE_QUERIES.get(table)
+            if not sql:
+                continue
+            cur.execute(sql, {"stay_ids": stay_ids, "itemids": all_itemids})
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                r = dict(zip(cols, row))
+                key = (table, r["itemid"])
+                name = label_lookup.get(key)
+                if not name:
+                    continue
+                vf = filter_lookup.get(key)
+                if vf:
+                    col_val = r.get(vf.column)
+                    try:
+                        col_val = float(col_val)
+                        threshold = float(vf.value)
+                    except (TypeError, ValueError):
+                        col_val = str(col_val) if col_val is not None else None
+                        threshold = vf.value
+                    fn = OP_FNS.get(vf.operator)
+                    if fn and (col_val is None or not fn(col_val, threshold)):
+                        continue
+                all_rows.append({
+                    "case_id": str(r["stay_id"]),
+                    "activity": name,
+                    "timestamp": pd.to_datetime(r["event_time"]),
+                    "source_table": table,
+                    "itemid": r["itemid"],
+                    "value_raw": r.get("value_raw"),
+                    "value_num": r.get("value_num"),
+                    "unit": r.get("unit"),
+                    "attrs": [{"kind": "custom_event"}],
+                    "patient_id": None,
+                    "stay_id": r["stay_id"],
+                })
+        # SQL-type custom events
+        _TIMESTAMP_COLS = ["event_time", "charttime", "starttime", "endtime"]
+        _VALUE_RAW_COLS = ["value_raw", "value", "value_text"]
+        _VALUE_NUM_COLS = ["value_num", "valuenum", "amount"]
+        _UNIT_COLS = ["unit", "valueuom", "amountuom"]
+
+        def _pick(row: dict, candidates: list[str]):
+            for c in candidates:
+                if c in row and row[c] is not None:
+                    return row[c]
+            return None
+
+        for et in sql_types:
+            wrapped = (
+                f"SELECT * FROM ({et.sql.rstrip(';')}) __q"
+                f" WHERE __q.stay_id = ANY(%(stay_ids)s)"
+            )
+            try:
+                cur.execute(wrapped, {"stay_ids": stay_ids})
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    r = dict(zip(cols, row))
+                    event_time = _pick(r, _TIMESTAMP_COLS)
+                    if event_time is None:
+                        continue
+                    all_rows.append({
+                        "case_id": str(r["stay_id"]),
+                        "activity": et.name,
+                        "timestamp": pd.to_datetime(event_time),
+                        "source_table": "custom_sql",
+                        "itemid": None,
+                        "value_raw": _pick(r, _VALUE_RAW_COLS),
+                        "value_num": _pick(r, _VALUE_NUM_COLS),
+                        "unit": _pick(r, _UNIT_COLS),
+                        "attrs": [{"kind": "custom_sql_event"}],
+                        "patient_id": None,
+                        "stay_id": r["stay_id"],
+                    })
+            except Exception:
+                pass  # caller adds warning; skip this event type silently
+
+        cur.close()
+    finally:
+        if conn:
+            conn.close()
+
+    if not all_rows:
+        return {}
+
+    df = pd.DataFrame(all_rows)
+    result: dict[str, Any] = {}
+    for sid, grp in df.groupby("case_id"):
+        result[str(sid)] = grp.reset_index(drop=True)
+    return result
+
+
 def _run_analysis(job_id: str, request: RunRequest) -> None:
     """Background thread: run conformance on a sample and store result."""
     cancel_event = _job_cancel[job_id]
@@ -542,6 +797,19 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
         job["done"] = 0
 
         from conformance.checker import check_log_conformance
+        import pandas as pd
+
+        custom_events_by_stay: dict[str, Any] = {}
+        if request.custom_event_types:
+            try:
+                custom_events_by_stay = _fetch_custom_events(
+                    [int(s) for s in sample_ids],
+                    request.custom_event_types,
+                )
+            except Exception as e:
+                job["warnings"] = job.get("warnings", []) + [
+                    f"Custom event fetch failed: {e}. Custom events skipped."
+                ]
 
         all_results = []
         for stay_id in sample_ids:
@@ -553,6 +821,11 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                 f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
                 [str(stay_id)],
             ).df()
+
+            custom_df = custom_events_by_stay.get(str(stay_id))
+            if custom_df is not None and not custom_df.empty:
+                df = pd.concat([df, custom_df], ignore_index=True)
+                df = df.sort_values("timestamp").reset_index(drop=True)
 
             if not df.empty:
                 for episode_df in _split_into_episodes(df, request.trigger_event):
@@ -610,6 +883,43 @@ def _build_minimal_summary(results: list, model) -> dict[str, Any]:
         "violation_frequency": violation_frequency,
         "stay_summaries": [],
     }
+
+
+@app.post("/api/query")
+def run_query(req: QueryRequest) -> dict[str, Any]:
+    """Execute a read-only SQL query against MIMIC and return preview rows."""
+    from database.client import get_postgres_connection
+
+    stripped = req.sql.strip()
+    if not stripped.lower().startswith("select"):
+        raise HTTPException(status_code=400, detail="Only SELECT queries are allowed.")
+
+    limit = min(req.limit, 500)
+    sql_lower = stripped.lower()
+    if " limit " not in sql_lower:
+        query = f"SELECT * FROM ({stripped.rstrip(';')}) __preview LIMIT {limit}"
+    else:
+        query = stripped
+
+    conn = None
+    try:
+        conn = get_postgres_connection()
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '10s'")
+        cur.execute(query)
+        columns = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        cur.close()
+        return {
+            "columns": columns,
+            "rows": [list(r) for r in rows],
+            "count": len(rows),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.post("/api/run")

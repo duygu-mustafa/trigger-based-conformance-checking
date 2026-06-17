@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import DeclareVisualizer from './DeclareVisualizer'
+import CustomEventModal from './CustomEventModal'
+import { UilPen } from '@iconscout/react-unicons'
 
 // Templates offered to clinicians, grouped for usability
 const TEMPLATE_OPTIONS = [
@@ -220,8 +222,10 @@ function ConditionTree({ tree, onChange, itemOptions }) {
   )
 }
 
-export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRule }) {
+export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRule, customEventTypes = [], onSaveCustomEvent, onDeleteCustomEvent }) {
   const [step, setStep] = useState('template')
+  const [showEventModal, setShowEventModal] = useState(false)
+  const [editingRuleId, setEditingRuleId] = useState(null)
   const [rule, setRule] = useState({
     template: '',
     activation: '',
@@ -284,7 +288,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
     const correlationExpr = treeToExpr(rule.correlation_condition_tree)
     const toSave = {
       ...rule,
-      id: `CUSTOM-${Date.now()}`,
+      id: editingRuleId || `CUSTOM-${Date.now()}`,
       label: rule.label || `${rule.template}: ${rule.activation}${rule.target ? ` → ${rule.target}` : ''}`,
       min_gap_hours: rule.min_gap_hours ? parseFloat(rule.min_gap_hours) : undefined,
       max_gap_hours: rule.max_gap_hours ? parseFloat(rule.max_gap_hours) : undefined,
@@ -292,10 +296,13 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
       correlation_condition_expr: correlationExpr || undefined,
       category: 'custom',
     }
-    const updated = [...savedRules, toSave]
+    const updated = editingRuleId
+      ? savedRules.map(r => r.id === editingRuleId ? toSave : r)
+      : [...savedRules, toSave]
     setSavedRules(updated)
     localStorage.setItem('studio_custom_rules', JSON.stringify(updated))
     onSaveRule?.(toSave)
+    setEditingRuleId(null)
     setRule({
       template: '', activation: '', target: '',
       min_gap_hours: '', max_gap_hours: '',
@@ -308,9 +315,40 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
   }
 
   function deleteCustomRule(id) {
+    if (editingRuleId === id) cancelEdit()
     const updated = savedRules.filter(r => r.id !== id)
     setSavedRules(updated)
     localStorage.setItem('studio_custom_rules', JSON.stringify(updated))
+  }
+
+  function editRule(r) {
+    setEditingRuleId(r.id)
+    setRule({
+      template: r.template,
+      activation: r.activation,
+      target: r.target,
+      min_gap_hours: r.min_gap_hours ?? '',
+      max_gap_hours: r.max_gap_hours ?? '',
+      activation_condition_tree: r.activation_condition_tree ?? null,
+      correlation_condition_tree: r.correlation_condition_tree ?? null,
+      label: r.label ?? '',
+      rationale: r.rationale ?? '',
+      severity: r.severity ?? { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
+    })
+    setStep('activities')
+  }
+
+  function cancelEdit() {
+    setEditingRuleId(null)
+    setRule({
+      template: '', activation: '', target: '',
+      min_gap_hours: '', max_gap_hours: '',
+      activation_condition_tree: null,
+      correlation_condition_tree: null,
+      label: '', rationale: '',
+      severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
+    })
+    setStep('template')
   }
 
   return (
@@ -392,6 +430,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                         {activities.interventions.map(a => <option key={a} value={a}>{a}</option>)}
                       </optgroup>
                     )}
+                    {activities.custom?.length > 0 && (
+                      <optgroup label="Custom events">
+                        {activities.custom.map(a => <option key={a} value={a}>{a}</option>)}
+                      </optgroup>
+                    )}
                     {allActivities.length === 0 && (
                       <option disabled>No activities loaded</option>
                     )}
@@ -426,9 +469,20 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                           {activities.interventions.map(a => <option key={a} value={a}>{a}</option>)}
                         </optgroup>
                       )}
+                      {activities.custom?.length > 0 && (
+                        <optgroup label="Custom events">
+                          {activities.custom.map(a => <option key={a} value={a}>{a}</option>)}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                 )}
+                <div className="define-event-trigger">
+                  <span className="define-event-trigger-text">Can't find the event you're looking for?</span>
+                  <button type="button" className="define-event-link" onClick={() => setShowEventModal(true)}>
+                    Define it here
+                  </button>
+                </div>
               </div>
             )}
 
@@ -558,6 +612,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
               <button type="button" className="wizard-back-btn" onClick={prevStep}>← Back</button>
             )}
             <div className="wizard-nav-spacer" />
+            {editingRuleId && (
+              <button type="button" className="wizard-cancel-btn" onClick={cancelEdit}>
+                Cancel
+              </button>
+            )}
             {step !== 'metadata' ? (
               <button
                 type="button"
@@ -569,7 +628,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
               </button>
             ) : (
               <button type="button" className="wizard-save-btn" onClick={saveRule}>
-                Save to My Rules
+                {editingRuleId ? 'Update Rule' : 'Save to My Rules'}
               </button>
             )}
           </div>
@@ -657,17 +716,33 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                   <span className="my-rule-label">{r.label}</span>
                   <span className="my-rule-template">{r.template.replace(/_/g, ' ')}</span>
                 </div>
-                <button
-                  type="button"
-                  className="my-rule-delete-btn"
-                  onClick={() => deleteCustomRule(r.id)}
-                  aria-label="Delete rule"
-                >×</button>
+                <div className="my-rule-actions">
+                  <button
+                    type="button"
+                    className="my-rule-edit-btn"
+                    onClick={() => editRule(r)}
+                    aria-label="Edit rule"
+                  ><UilPen size="20" /></button>
+                  <button
+                    type="button"
+                    className="my-rule-delete-btn"
+                    onClick={() => deleteCustomRule(r.id)}
+                    aria-label="Delete rule"
+                  >×</button>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      <CustomEventModal
+        isOpen={showEventModal}
+        onClose={() => setShowEventModal(false)}
+        savedEventTypes={customEventTypes}
+        onSave={onSaveCustomEvent}
+        onDelete={onDeleteCustomEvent}
+      />
     </div>
   )
 }

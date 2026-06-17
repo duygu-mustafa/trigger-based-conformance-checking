@@ -43,6 +43,11 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   })()
   const allCustomRules = [...customRules, ...savedRules]
 
+  const savedEventTypes = (() => {
+    try { return JSON.parse(localStorage.getItem('studio_custom_event_types') || '[]') }
+    catch { return [] }
+  })()
+
   async function startRun() {
     setJobState({ status: 'running', progress: 0, total: sampleSize, done: 0, result: null, error: null })
     setJobId(null)
@@ -68,6 +73,14 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
         correlation_condition_expr: r.correlation_condition_expr || null,
         rationale: r.rationale || '',
       })) : [],
+      custom_event_types: savedEventTypes.map(et => ({
+        name: et.name,
+        kind: et.kind || 'table',
+        source_table: et.source_table || null,
+        itemids: et.itemids || [],
+        value_filter: et.value_filter || null,
+        sql: et.sql || null,
+      })),
     }
 
     const res = await fetch('/api/run', {
@@ -192,6 +205,12 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
               {allCustomRules.length === 0 ? 'None saved yet' : `${allCustomRules.length} rule(s)`}
             </span>
           </label>
+          <div className="rules-toggle-card rules-toggle-card--info">
+            <span className="toggle-card-title">Custom event types</span>
+            <span className="toggle-card-count">
+              {savedEventTypes.length === 0 ? 'None defined' : `${savedEventTypes.length} type(s) — always included`}
+            </span>
+          </div>
         </div>
 
         <div className="runner-actions">
