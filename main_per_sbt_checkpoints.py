@@ -148,7 +148,7 @@ def _evaluate_stay_for_checkpoint(
             else:
                 last_relevant = df_full[
                     df_full["activity"].isin(
-                        ["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"]
+                        ["InvasiveVentilationStarted", "SBTStarted"]
                     )
                 ].sort_values("timestamp").iloc[-1:]
                 if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":

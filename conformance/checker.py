@@ -254,10 +254,6 @@ def _build_eval_context(
         sbt_failed_prior = (
             (prior["activity"] == "SBTFailed").any()
             or (prior["activity"] == "SBTStopped").any()
-            or (
-                (prior["activity"] == "SBTCompleted")
-                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("failure")
-            ).any()
         )
 
     # Check if patient is marked as chronic ventilation dependent

@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
+import { getConstraintIcon, formatPercent } from '../SummaryView/utils'
+import StatsDeepDive from '../SummaryView/StatsDeepDive'
+import ContrastBarChart from '../SummaryView/ContrastBarChart'
+import OutcomeScatterPlot from '../SummaryView/OutcomeScatterPlot'
+import ConstraintDetailView from '../SummaryView/ConstraintDetailView'
 
 const SAMPLE_PRESETS = [10, 25, 50, 100, 200]
+const RESULT_TABS = ['Frequencies', 'Statistics', 'Patients']
 
 function KpiCard({ label, value, sub }) {
   return (
@@ -12,30 +18,59 @@ function KpiCard({ label, value, sub }) {
   )
 }
 
-function ViolationBar({ label, share, maxShare }) {
-  const w = maxShare > 0 ? (share / maxShare) * 100 : 0
+function RunConstraintRow({ item, selected, onSelect }) {
+  const icon = getConstraintIcon(item.constraint_id)
+  const pct = ((item.episode_share || 0) * 100).toFixed(1)
+  const cls = item.rule_class || 'neutral'
+
   return (
-    <div className="vbar-row">
-      <span className="vbar-label" title={label}>{label}</span>
-      <div className="vbar-tracks">
-        <div className="vbar-track vbar-track--run" title={`${(share * 100).toFixed(1)}%`}>
-          <div className="vbar-fill vbar-fill--run" style={{ width: `${w}%` }} />
-        </div>
+    <div
+      className={`run-constraint-row ${selected ? 'run-constraint-row--selected' : ''}`}
+      onClick={() => onSelect(item.constraint_id)}
+    >
+      <div className="run-constraint-row-top">
+        {icon && <img className="run-constraint-icon" src={icon} alt="" />}
+        <span className="run-constraint-label">{item.constraint_label || item.constraint_id}</span>
+        <span className={`run-constraint-class run-constraint-class--${cls}`}>{cls}</span>
       </div>
-      <span className="vbar-val vbar-val--run">{(share * 100).toFixed(0)}%</span>
+      <div className="run-constraint-bar-wrap">
+        <div className="run-constraint-bar-track">
+          <div className="run-constraint-bar-viol" style={{ width: `${((item.violation_rate_failure || 0) * 100).toFixed(1)}%` }} title={`Failure: ${((item.violation_rate_failure || 0) * 100).toFixed(1)}%`} />
+          <div className="run-constraint-bar-succ" style={{ width: `${((item.violation_rate_success || 0) * 100).toFixed(1)}%` }} title={`Success: ${((item.violation_rate_success || 0) * 100).toFixed(1)}%`} />
+        </div>
+        <span className="run-constraint-pct">{pct}%</span>
+      </div>
     </div>
   )
 }
 
+function loadPersistedResult() {
+  try {
+    const saved = localStorage.getItem('analysis_runner_result')
+    return saved ? JSON.parse(saved) : null
+  } catch { return null }
+}
+
 export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
-  const [sampleSize, setSampleSize] = useState(50)
+  const [sampleSize, setSampleSize] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('analysis_runner_sample_size') || '50') } catch { return 50 }
+  })
   const [seed, setSeed] = useState(42)
   const [triggerEvent, setTriggerEvent] = useState('InvasiveVentilationStarted')
   const [includePredefined, setIncludePredefined] = useState(true)
   const [includeCustom, setIncludeCustom] = useState(true)
   const [jobId, setJobId] = useState(null)
-  const [jobState, setJobState] = useState(null)
+  const [jobState, setJobState] = useState(loadPersistedResult)
+  const [activeTab, setActiveTab] = useState('Frequencies')
+  const [selectedConstraintId, setSelectedConstraintId] = useState(null)
+  const [analysisMode, setAnalysisMode] = useState('violation')
   const pollRef = useRef(null)
+
+  useEffect(() => {
+    if (jobState?.status === 'done' && jobState?.result) {
+      localStorage.setItem('analysis_runner_result', JSON.stringify(jobState))
+    }
+  }, [jobState?.status])
 
   const savedRules = (() => {
     try { return JSON.parse(localStorage.getItem('studio_custom_rules') || '[]') }
@@ -49,8 +84,12 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   })()
 
   async function startRun() {
+    localStorage.setItem('analysis_runner_sample_size', JSON.stringify(sampleSize))
+    localStorage.removeItem('analysis_runner_result')
     setJobState({ status: 'running', progress: 0, total: sampleSize, done: 0, result: null, error: null })
     setJobId(null)
+    setSelectedConstraintId(null)
+    setActiveTab('Frequencies')
 
     const body = {
       sample_size: sampleSize,
@@ -124,11 +163,15 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
 
   const runViolations = result?.violation_frequency || []
   const runEpisodes = result?.total_episodes ?? '—'
-  const maxRunShare = Math.max(...runViolations.map(v => v.episode_share || 0), 0.01)
+  const successEps = result?.conformance_vs_outcome?.success?.episodes ?? 0
+  const failureEps = result?.conformance_vs_outcome?.failure?.episodes ?? 0
+  const noSbtAttemptEps = result?.conformance_vs_outcome?.no_sbt_attempt?.episodes ?? 0
 
-  const topRunViolations = [...runViolations]
+  const topViolations = [...runViolations]
     .sort((a, b) => (b.episode_share || 0) - (a.episode_share || 0))
-    .slice(0, 15)
+    .slice(0, 20)
+
+  const selectedConstraint = runViolations.find(v => v.constraint_id === selectedConstraintId) || runViolations[0] || null
 
   const progress = isRunning
     ? (jobState.total > 0 ? Math.round((jobState.done / jobState.total) * 100) : 0)
@@ -261,76 +304,141 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
 
       {isDone && result && (
         <div className="runner-results">
-          <h3 className="runner-results-title">Run Results — n={sampleSize}</h3>
-
-          <div className="kpi-cards" style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-            <KpiCard label="Episodes analysed" value={runEpisodes} />
-            <KpiCard
-              label="Top violation"
-              value={runViolations.length > 0 ? `${(runViolations[0].episode_share * 100).toFixed(0)}%` : '—'}
-              sub={runViolations[0]?.constraint_label || runViolations[0]?.constraint_id}
-            />
-            <KpiCard
-              label="Constraints checked"
-              value={runViolations.length > 0 ? runViolations.length : '—'}
-            />
+          <div className="runner-results-header">
+            <h3 className="runner-results-title">Run Results — n={sampleSize}</h3>
+            <div className="runner-kpis">
+              <KpiCard label="Episodes" value={runEpisodes} />
+              <KpiCard label="Success" value={successEps} />
+              <KpiCard label="Failure" value={failureEps} />
+              <KpiCard label="No SBT" value={noSbtAttemptEps} />
+              <KpiCard
+                label="Top violation"
+                value={topViolations.length > 0 ? formatPercent(topViolations[0].episode_share || 0) : '—'}
+                sub={topViolations[0]?.constraint_label}
+              />
+              <KpiCard label="Rules checked" value={runViolations.length || '—'} />
+            </div>
           </div>
 
-          {topRunViolations.length > 0 && (
-            <div className="vbar-section">
-              <h4 className="runner-section-heading">Violation Frequencies — This Run</h4>
-              <div className="vbar-list">
-                {topRunViolations.map(row => (
-                  <ViolationBar
-                    key={row.constraint_id}
-                    label={row.constraint_label || row.constraint_id}
-                    share={row.episode_share || 0}
-                    maxShare={maxRunShare}
-                  />
-                ))}
+          <div className="runner-tabs">
+            {RESULT_TABS.map(tab => (
+              <button
+                key={tab}
+                type="button"
+                className={`runner-tab-btn ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab)}
+              >{tab}</button>
+            ))}
+          </div>
+
+          {activeTab === 'Frequencies' && (
+            <div className="runner-frequencies">
+              <div className="runner-freq-legend">
+                <span className="runner-freq-legend-item runner-freq-legend-item--fail">Failure violation rate</span>
+                <span className="runner-freq-legend-item runner-freq-legend-item--succ">Success violation rate</span>
+              </div>
+              <div className="runner-freq-split">
+                <div className="runner-freq-list">
+                  {topViolations.length === 0 && (
+                    <p className="runner-empty">No violations recorded in this run.</p>
+                  )}
+                  {topViolations.map(item => (
+                    <RunConstraintRow
+                      key={item.constraint_id}
+                      item={item}
+                      selected={(selectedConstraintId ?? selectedConstraint?.constraint_id) === item.constraint_id}
+                      onSelect={id => setSelectedConstraintId(id === selectedConstraintId ? null : id)}
+                    />
+                  ))}
+                </div>
+                {selectedConstraint && (
+                  <div className="runner-freq-detail">
+                    <ConstraintDetailView
+                      constraint={selectedConstraint}
+                      itemLabels={result.item_labels || {}}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {result.stay_summaries?.length > 0 && (
+          {activeTab === 'Statistics' && (
+            <div className="runner-statistics">
+              <StatsDeepDive summaryData={result} />
+
+              {runViolations.length > 0 && (
+                <div className="runner-correlation-section">
+                  <div className="runner-mode-toggle">
+                    <button
+                      type="button"
+                      className={`runner-mode-btn ${analysisMode === 'violation' ? 'active' : ''}`}
+                      onClick={() => setAnalysisMode('violation')}
+                    >Violations</button>
+                    <button
+                      type="button"
+                      className={`runner-mode-btn ${analysisMode === 'satisfaction' ? 'active' : ''}`}
+                      onClick={() => setAnalysisMode('satisfaction')}
+                    >Satisfactions</button>
+                  </div>
+                  <div className="runner-charts-row">
+                    <div className="runner-chart-panel">
+                      <OutcomeScatterPlot items={runViolations} mode={analysisMode} />
+                    </div>
+                    <div className="runner-chart-panel runner-chart-panel--bars">
+                      <ContrastBarChart items={runViolations} mode={analysisMode} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'Patients' && (
             <div className="run-stays-section">
-              <h4 className="run-stays-title">Episodes in this run</h4>
-              <div className="run-stays-table-wrap">
-                <table className="run-stays-table">
-                  <thead>
-                    <tr>
-                      <th>Stay ID</th>
-                      <th>Outcome</th>
-                      <th>Episodes</th>
-                      <th>Violations</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.stay_summaries.slice(0, 50).map(stay => (
-                      <tr key={stay.stay_id}>
-                        <td className="stay-id-cell">{stay.stay_id}</td>
-                        <td>
-                          <span className={`outcome-badge outcome-badge--${String(stay.overall_outcome || '').toLowerCase().replace(/\s/g, '-')}`}>
-                            {stay.overall_outcome || '—'}
-                          </span>
-                        </td>
-                        <td>{stay.episodes ?? '—'}</td>
-                        <td>{stay.total_mandatory_violations ?? '—'}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className="open-timeline-btn"
-                            onClick={() => onOpenTimeline?.(String(stay.stay_id))}
-                          >
-                            View timeline
-                          </button>
-                        </td>
+              {result.stay_summaries?.length === 0 && (
+                <p className="runner-empty">No stay summaries available.</p>
+              )}
+              {result.stay_summaries?.length > 0 && (
+                <div className="run-stays-table-wrap">
+                  <table className="run-stays-table">
+                    <thead>
+                      <tr>
+                        <th>Stay ID</th>
+                        <th>Outcome</th>
+                        <th>Episodes</th>
+                        <th>Violations</th>
+                        <th>Avg / episode</th>
+                        <th></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {result.stay_summaries.slice(0, 100).map(stay => (
+                        <tr key={stay.stay_id}>
+                          <td className="stay-id-cell">{stay.stay_id}</td>
+                          <td>
+                            <span className={`outcome-badge outcome-badge--${String(stay.overall_outcome || '').toLowerCase().replace(/\s/g, '-')}`}>
+                              {stay.overall_outcome || '—'}
+                            </span>
+                          </td>
+                          <td>{stay.episodes ?? '—'}</td>
+                          <td>{stay.total_mandatory_violations ?? '—'}</td>
+                          <td>{stay.avg_mandatory_violations != null ? stay.avg_mandatory_violations.toFixed(1) : '—'}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="open-timeline-btn"
+                              onClick={() => onOpenTimeline?.(String(stay.stay_id))}
+                            >
+                              View timeline
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

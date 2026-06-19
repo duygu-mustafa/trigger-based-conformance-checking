@@ -146,96 +146,45 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     """Generate derived activities from mapped activities.
 
     Currently implements:
-    - SBTFailed: Fired when SBTCompleted.value == "Failure" or re-ventilation within 48 h.
-    - SBTSucceeded: Fired when SBTCompleted.value == "Success".
+    - SBTFailed: Fired when InvasiveVentilationStarted occurs within 48h after SBTStarted.
+    - SBTSucceeded: Fired when no re-ventilation occurs within 48h after SBTStarted.
     """
     derived_frames: list[pd.DataFrame] = []
 
-    # ── SBTFailed ────────────────────────────────────────────────────────────
-    # Case 1: SBTCompleted with value_raw == "Failure"
-    sbt_completed = activity_df[activity_df["activity"] == "SBTCompleted"].copy()
-    if not sbt_completed.empty:
-        failed_mask = (
-            sbt_completed.get("value_raw", pd.Series(index=sbt_completed.index, dtype=object))
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .eq("failure")
-        )
-        sbt_failed_completed = sbt_completed[failed_mask].copy()
-        if not sbt_failed_completed.empty:
-            sbt_failed_from_completed = pd.DataFrame(
-                {
-                    "case_id": sbt_failed_completed["case_id"],
-                    "activity": "SBTFailed",
-                    "timestamp": sbt_failed_completed["timestamp"],
-                    "source_table": sbt_failed_completed["source_table"],
-                    "itemid": sbt_failed_completed["itemid"],
-                    "value_raw": sbt_failed_completed.get("value_raw"),
-                    "value_num": sbt_failed_completed.get("value_num"),
-                    "unit": sbt_failed_completed.get("unit"),
-                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=Failure"}] * len(sbt_failed_completed),
-                    "patient_id": sbt_failed_completed.get("patient_id"),
-                    "stay_id": sbt_failed_completed.get("stay_id"),
-                }
-            )
-            derived_frames.append(sbt_failed_from_completed)
+    # ── SBT Outcomes (48h window / re-ventilation rule) ──────────────────────
+    # For each SBTStarted: if InvasiveVentilationStarted occurs within the
+    # episode window (bounded by next SBTStarted and 48h), emit SBTFailed at
+    # that timestamp. Otherwise emit SBTSucceeded at min(start+48h, stay_end).
+    # One outcome per start, mutual exclusivity guaranteed by the if/else.
+    failure_window = pd.Timedelta(hours=48)
+    sbt_started = activity_df[activity_df["activity"] == "SBTStarted"].copy()
+    vent_starts = activity_df[activity_df["activity"] == "InvasiveVentilationStarted"].copy()
 
-    # ── SBTSucceeded ─────────────────────────────────────────────────────────
-    # Symmetric to SBTFailed: fired when SBTCompleted.value == "Success"
-    if not sbt_completed.empty:
-        success_mask = (
-            sbt_completed.get("value_raw", pd.Series(index=sbt_completed.index, dtype=object))
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .eq("success")
-        )
-        sbt_succeeded_rows = sbt_completed[success_mask].copy()
-        if not sbt_succeeded_rows.empty:
-            sbt_succeeded_frame = pd.DataFrame(
-                {
-                    "case_id": sbt_succeeded_rows["case_id"],
-                    "activity": "SBTSucceeded",
-                    "timestamp": sbt_succeeded_rows["timestamp"],
-                    "source_table": sbt_succeeded_rows["source_table"],
-                    "itemid": sbt_succeeded_rows["itemid"],
-                    "value_raw": sbt_succeeded_rows.get("value_raw"),
-                    "value_num": sbt_succeeded_rows.get("value_num"),
-                    "unit": sbt_succeeded_rows.get("unit"),
-                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=Success"}] * len(sbt_succeeded_rows),
-                    "patient_id": sbt_succeeded_rows.get("patient_id"),
-                    "stay_id": sbt_succeeded_rows.get("stay_id"),
-                }
-            )
-            derived_frames.append(sbt_succeeded_frame)
+    outcome_rows: list[dict[str, object]] = []
+    for case_id, case_starts in sbt_started.groupby("case_id", sort=False):
+        case_starts = case_starts.sort_values("timestamp").reset_index(drop=True)
+        stay_end_ts = activity_df[activity_df["case_id"] == case_id]["timestamp"].max()
+        case_vents = vent_starts[vent_starts["case_id"] == case_id]
 
-    # Case 2: Re-ventilation after an SBT start implies a failed attempt.
-    # For each SBTStarted, if an InvasiveVentilationStarted occurs within
-    # `failure_window_hours` after the SBT start, emit a derived SBTFailed
-    # event at the timestamp of the re-ventilation.
-    failure_window_hours = 48.0
-    sbt_started = activity_df[activity_df["activity"] == "SBTStarted"].copy().sort_values("timestamp")
-    vent_starts = activity_df[activity_df["activity"] == "InvasiveVentilationStarted"].copy().sort_values("timestamp")
-    revent_rows: list[dict[str, object]] = []
-    if not sbt_started.empty and not vent_starts.empty:
-        for _, srow in sbt_started.iterrows():
-            s_ts = srow["timestamp"]
-            window_end = s_ts + pd.Timedelta(hours=failure_window_hours)
-            later_vents = vent_starts[
-                (vent_starts["case_id"] == srow["case_id"]) &
-                (vent_starts["timestamp"] > s_ts) &
-                (vent_starts["timestamp"] <= window_end)
+        for _, srow in case_starts.iterrows():
+            start_ts = srow["timestamp"]
+
+            later_starts = case_starts[case_starts["timestamp"] > start_ts]["timestamp"]
+            next_start_ts = later_starts.min() if not later_starts.empty else pd.NaT
+
+            window_end = start_ts + failure_window
+            if pd.notna(next_start_ts):
+                window_end = min(window_end, next_start_ts)
+
+            near_vents = case_vents[
+                (case_vents["timestamp"] > start_ts) & (case_vents["timestamp"] <= window_end)
             ]
-            if later_vents.empty:
-                continue
-            # Take the earliest re-ventilation after the SBT start
-            first_vent_ts = later_vents.iloc[0]["timestamp"]
-            revent_rows.append(
-                {
-                    "case_id": srow.get("case_id"),
+
+            if not near_vents.empty:
+                outcome_rows.append({
+                    "case_id": case_id,
                     "activity": "SBTFailed",
-                    "timestamp": first_vent_ts,
+                    "timestamp": near_vents["timestamp"].min(),
                     "source_table": "derived_revent",
                     "itemid": None,
                     "value_raw": None,
@@ -244,59 +193,25 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
                     "attrs": [{"kind": "derived_activity", "trigger": "reventilation"}],
                     "patient_id": srow.get("patient_id"),
                     "stay_id": srow.get("stay_id"),
-                }
-            )
+                })
+            else:
+                success_ts = min(start_ts + failure_window, stay_end_ts)
+                outcome_rows.append({
+                    "case_id": case_id,
+                    "activity": "SBTSucceeded",
+                    "timestamp": success_ts,
+                    "source_table": "derived_implicit",
+                    "itemid": None,
+                    "value_raw": "Success",
+                    "value_num": 1.0,
+                    "unit": None,
+                    "attrs": [{"kind": "derived_activity", "trigger": "no_revent_48h"}],
+                    "patient_id": srow.get("patient_id"),
+                    "stay_id": srow.get("stay_id"),
+                })
 
-        if revent_rows:
-            df_revent = pd.DataFrame(revent_rows)
-            derived_frames.append(df_revent)
-
-    # ── Implicit SBTSucceeded ─────────────────────────────────────────────────
-    # Case 3: SBTStarted with no outcome event and no re-ventilation within 48h.
-    # Clinical interpretation: patient was never re-ventilated → SBT succeeded.
-    # Emit SBTSucceeded at the last observed event timestamp for that case.
-    implicit_success_rows: list[dict[str, object]] = []
-    for _, srow in sbt_started.iterrows():
-        case_id = srow["case_id"]
-        s_ts = srow["timestamp"]
-
-        # Skip if there is already an end event at or after this start in this case
-        case_end = activity_df[
-            (activity_df["case_id"] == case_id)
-            & (activity_df["activity"].isin({"SBTCompleted", "SBTFailed", "SBTSucceeded"}))
-            & (activity_df["timestamp"] >= s_ts)
-        ]
-        if not case_end.empty:
-            continue
-
-        # Skip if Pathway 2 will emit SBTFailed for this start
-        window_end = s_ts + pd.Timedelta(hours=failure_window_hours)
-        same_case_vents = vent_starts[vent_starts["case_id"] == case_id]
-        near_vents = same_case_vents[
-            (same_case_vents["timestamp"] > s_ts) & (same_case_vents["timestamp"] <= window_end)
-        ]
-        if not near_vents.empty:
-            continue
-
-        last_ts = activity_df[activity_df["case_id"] == case_id]["timestamp"].max()
-        implicit_success_rows.append(
-            {
-                "case_id": case_id,
-                "activity": "SBTSucceeded",
-                "timestamp": last_ts,
-                "source_table": "derived_implicit",
-                "itemid": None,
-                "value_raw": "Success",
-                "value_num": 1.0,
-                "unit": None,
-                "attrs": [{"kind": "derived_activity", "trigger": "implicit_success_no_revent"}],
-                "patient_id": srow.get("patient_id"),
-                "stay_id": srow.get("stay_id"),
-            }
-        )
-
-    if implicit_success_rows:
-        derived_frames.append(pd.DataFrame(implicit_success_rows))
+    if outcome_rows:
+        derived_frames.append(pd.DataFrame(outcome_rows))
 
     # ── Readiness Criterion Activities ────────────────────────────────────────
     # Emit a named event only when the criterion IS satisfied so PRECEDENCE rules

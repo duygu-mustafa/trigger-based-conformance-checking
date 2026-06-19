@@ -142,7 +142,7 @@ export default function App() {
     setDrawerLoading(true)
     setDrawerCaseData(null)
     fetch(`/data/case_${drawerStayId}.json`)
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : fetch(`/api/case/${drawerStayId}`).then(r2 => r2.ok ? r2.json() : null))
       .then(d => { setDrawerCaseData(d); setDrawerLoading(false) })
       .catch(() => setDrawerLoading(false))
   }, [drawerStayId])

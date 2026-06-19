@@ -226,14 +226,14 @@ model:
       label: "SBT should be attempted within 72 h of stay start"
       template: NOT_RESPONDED_EXISTENCE
       # Encoding: if SBTStarted occurs and hours_since_stay_start > 72, then
-      # SBTCompleted must never be observed — the late trial is flagged as a
-      # deviation at the point SBTCompleted is recorded.
+      # SBTSucceeded must never be observed — the late trial is flagged as a
+      # deviation at the point the episode closes successfully.
       # Note: this is an operational interpretation of the Akella 48-72 h
       # readiness assessment window, not a literal deadline stated in the paper.
       activation: SBTStarted
       activation_condition: "hours_since_stay_start > 72"
       activation_condition_display: "Stay > 72 h"
-      target: SBTCompleted
+      target: SBTSucceeded
       rationale: >
         Readiness criteria should be assessed as early as 48-72 h after ICU
         admission (Akella et al., 2022). An SBT initiated beyond 72 h of stay

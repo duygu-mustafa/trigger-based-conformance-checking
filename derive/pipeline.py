@@ -26,10 +26,14 @@ def build_sbt_episodes(weaning_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def sbt_episodes_to_events(episodes_df: pd.DataFrame) -> pd.DataFrame:
-    """Transform SBT episodes into normalized event rows for the activity emitter."""
+    """Transform SBT episodes into normalized event rows for the activity emitter.
+
+    Emits only SBTStarted anchors. Outcomes (SBTFailed/SBTSucceeded) are
+    derived downstream in activity_emitter._derive_activities() via the
+    48-hour re-ventilation rule.
+    """
     events = []
     for _, row in episodes_df.iterrows():
-        # Start event
         events.append({
             'source_table': 'sbt_derived',
             'stay_id': row['stay_id'],
@@ -39,20 +43,6 @@ def sbt_episodes_to_events(episodes_df: pd.DataFrame) -> pd.DataFrame:
             'value_text': 'Started',
             'value_num': 1.0
         })
-        
-        # End event
-        outcome_time = row.get('extubation_time') or row.get('failure_time') or row.get('last_time')
-        if outcome_time:
-            events.append({
-                'source_table': 'sbt_derived',
-                'stay_id': row['stay_id'],
-                'event_time': outcome_time,
-                'itemid': 'sbt_outcome',
-                'label': 'SBT outcome',
-                'value_text': 'Success' if row['is_success'] else 'Failure',
-                'value_num': 1.0 if row['is_success'] else 0.0
-            })
-            
     return pd.DataFrame(events)
 
 

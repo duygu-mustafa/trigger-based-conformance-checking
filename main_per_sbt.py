@@ -71,20 +71,7 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     if prior.empty:
         return None
 
-    completed_failed = prior[
-        (prior["activity"] == "SBTCompleted")
-        & prior.get("value_raw", pd.Series(index=prior.index, dtype=object))
-        .astype(str)
-        .str.lower()
-        .isin(["no", "failure", "failed"])
-    ]
-    failures = pd.concat(
-        [
-            prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])],
-            completed_failed,
-        ],
-        axis=0,
-    ).sort_values("timestamp")
+    failures = prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])].sort_values("timestamp")
     if failures.empty:
         return None
     return failures.iloc[-1]["timestamp"]
@@ -226,8 +213,8 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         whitelist_ids.update(str(k) for k in source.keys())
     
     # Also whitelist derived ventilation/sbt IDs
-    whitelist_ids.update(["sbt_status", "sbt_outcome", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
-    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed", "SBTSucceeded"]
+    whitelist_ids.update(["sbt_status", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
+    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTFailed", "SBTSucceeded"]
 
     # 2. Extract constraint definitions keyed by canonical IDs for frontend lookup.
     constraint_defs = {}
@@ -450,7 +437,7 @@ def main() -> None:
                     sbt_end = matching_vent.iloc[0]["timestamp"]
                 else:
                     # Right-censored case: Check the very last activity in the stay
-                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"])].sort_values("timestamp").iloc[-1:]
+                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted"])].sort_values("timestamp").iloc[-1:]
                     if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":
                          outcome_val = "Failure (Last State: Invasive Vent)"
                     else:

@@ -3899,6 +3899,266 @@
 }
 
 /* ============================================================
+   RUNNER ENRICHED RESULTS
+   ============================================================ */
+
+.runner-results-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.runner-kpis {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-card, #1e2a3a);
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 8px;
+}
+
+/* Result tabs */
+.runner-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--color-border, #2a3a52);
+  padding-bottom: 0;
+}
+
+.runner-tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text-dim, #7a8aa0);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.runner-tab-btn:hover { color: var(--color-text-main, #e8edf5); }
+
+.runner-tab-btn.active {
+  color: var(--color-primary, #5b8dee);
+  border-bottom-color: var(--color-primary, #5b8dee);
+}
+
+/* Frequencies tab */
+.runner-frequencies {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.runner-freq-legend {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.7rem;
+  color: var(--color-text-dim, #7a8aa0);
+}
+
+.runner-freq-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.runner-freq-legend-item::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.runner-freq-legend-item--fail::before { background: #e05252; }
+.runner-freq-legend-item--succ::before { background: #4db580; }
+
+.runner-freq-split {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.runner-freq-list {
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.runner-freq-detail {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 520px;
+}
+
+/* Constraint rows in the frequency list */
+.run-constraint-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.run-constraint-row:hover {
+  background: rgba(91, 141, 238, 0.06);
+  border-color: var(--color-border, #2a3a52);
+}
+
+.run-constraint-row--selected {
+  background: rgba(91, 141, 238, 0.1);
+  border-color: var(--color-primary, #5b8dee);
+}
+
+.run-constraint-row-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.run-constraint-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.run-constraint-label {
+  font-size: 0.78rem;
+  color: var(--color-text-main, #e8edf5);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-constraint-class {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.run-constraint-class--useful { background: rgba(77, 181, 128, 0.15); color: #4db580; }
+.run-constraint-class--harmful { background: rgba(224, 82, 82, 0.15); color: #e05252; }
+.run-constraint-class--neutral { background: rgba(122, 138, 160, 0.1); color: #7a8aa0; }
+
+.run-constraint-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-constraint-bar-track {
+  flex: 1;
+  height: 5px;
+  background: rgba(122, 138, 160, 0.1);
+  border-radius: 3px;
+  display: flex;
+  overflow: hidden;
+}
+
+.run-constraint-bar-viol {
+  height: 100%;
+  background: #e05252;
+  transition: width 0.3s;
+}
+
+.run-constraint-bar-succ {
+  height: 100%;
+  background: #4db580;
+  opacity: 0.6;
+  transition: width 0.3s;
+}
+
+.run-constraint-pct {
+  font-size: 0.68rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--color-text-dim, #7a8aa0);
+  flex-shrink: 0;
+  width: 32px;
+  text-align: right;
+}
+
+/* Statistics tab */
+.runner-statistics {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.runner-correlation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.runner-mode-toggle {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.runner-mode-btn {
+  background: none;
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  color: var(--color-text-dim, #7a8aa0);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.runner-mode-btn.active {
+  background: rgba(91, 141, 238, 0.12);
+  border-color: var(--color-primary, #5b8dee);
+  color: var(--color-primary, #5b8dee);
+}
+
+.runner-charts-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.runner-chart-panel {
+  flex: 0 0 auto;
+}
+
+.runner-chart-panel--bars {
+  flex: 1;
+  min-width: 300px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.runner-empty {
+  color: var(--color-text-dim, #7a8aa0);
+  font-size: 0.82rem;
+  padding: 1rem 0;
+}
+
+/* ============================================================
    NEW SHELL LAYOUT
    ============================================================ */
 

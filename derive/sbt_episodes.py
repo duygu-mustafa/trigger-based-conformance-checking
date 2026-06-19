@@ -173,69 +173,68 @@ def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) ->
 
     df['weaning_state'] = df.apply(map_weaning_state, axis=1)
 
-    # Sort by time and reset index
-    df = df.sort_values('charttime').reset_index(drop=True)
+    all_episodes = []
+    for _, group in df.groupby('stay_id', sort=False):
+        group = group.sort_values('charttime').reset_index(drop=True)
 
-    episodes = []
-    current_episode = None
+        episodes = []
+        current_episode = None
 
-    for i, row in df.iterrows():
-        state = row['weaning_state']
-        time = row['charttime']
+        for i, row in group.iterrows():
+            state = row['weaning_state']
+            time = row['charttime']
 
-        # Transition to SBT Candidate: Start an episode if not already in one
-        if state == 'SBT Candidate' and current_episode is None:
-            current_episode = {
-                'stay_id': row['stay_id'],
-                'sbt_start_time': time,
-                'last_time': time,
-                'is_success': False 
-            }
-        
-        elif current_episode is not None:
-            # Transition to Liberated: Mark success and close episode
-            if state == 'Liberated':
-                current_episode['extubation_time'] = time
-                current_episode['is_success'] = True
-                current_episode['sbt_duration_minutes'] = (time - current_episode['sbt_start_time']).total_seconds() / 60
-                episodes.append(current_episode)
-                current_episode = None
-            
-            # Transition back to Full Support: Check for failure vs brief fluctuation
-            elif state == 'Full Support':
-                # Look ahead to see if they return to SBT Candidate soon (debounce)
-                is_permanent_failure = True
-                look_ahead_idx = i + 1
-                while look_ahead_idx < len(df):
-                    next_row = df.iloc[look_ahead_idx]
-                    gap = (next_row['charttime'] - time).total_seconds() / 60
-                    if gap > debounce_minutes:
-                        break
-                    if next_row['weaning_state'] == 'SBT Candidate':
-                        is_permanent_failure = False # Brief dip, don't fail yet
-                        break
-                    look_ahead_idx += 1
-                
-                if is_permanent_failure:
-                    current_episode['failure_time'] = time
-                    current_episode['is_success'] = False
+            # Transition to SBT Candidate: Start an episode if not already in one
+            if state == 'SBT Candidate' and current_episode is None:
+                current_episode = {
+                    'stay_id': row['stay_id'],
+                    'sbt_start_time': time,
+                    'last_time': time,
+                    'is_success': False
+                }
+
+            elif current_episode is not None:
+                # Transition to Liberated: Mark success and close episode
+                if state == 'Liberated':
+                    current_episode['extubation_time'] = time
+                    current_episode['is_success'] = True
                     current_episode['sbt_duration_minutes'] = (time - current_episode['sbt_start_time']).total_seconds() / 60
                     episodes.append(current_episode)
                     current_episode = None
-                else:
-                    # Brief fluctuation, keep current episode alive
-                    current_episode['last_time'] = time
-            
-            # Handle End of Data
-            elif i == len(df) - 1:
-                current_episode['extubation_time'] = time
-                current_episode['is_success'] = True
-                current_episode['sbt_duration_minutes'] = (time - current_episode['sbt_start_time']).total_seconds() / 60
-                episodes.append(current_episode)
-                current_episode = None
-            
-            else:
-                current_episode['last_time'] = time
 
-    return pd.DataFrame(episodes)
+                # Transition back to Full Support: Check for failure vs brief fluctuation
+                elif state == 'Full Support':
+                    # Look ahead to see if they return to SBT Candidate soon (debounce)
+                    is_permanent_failure = True
+                    look_ahead_idx = i + 1
+                    while look_ahead_idx < len(group):
+                        next_row = group.iloc[look_ahead_idx]
+                        gap = (next_row['charttime'] - time).total_seconds() / 60
+                        if gap > debounce_minutes:
+                            break
+                        if next_row['weaning_state'] == 'SBT Candidate':
+                            is_permanent_failure = False # Brief dip, don't fail yet
+                            break
+                        look_ahead_idx += 1
+
+                    if is_permanent_failure:
+                        current_episode['failure_time'] = time
+                        current_episode['is_success'] = False
+                        current_episode['sbt_duration_minutes'] = (time - current_episode['sbt_start_time']).total_seconds() / 60
+                        episodes.append(current_episode)
+                        current_episode = None
+                    else:
+                        # Brief fluctuation, keep current episode alive
+                        current_episode['last_time'] = time
+
+                else:
+                    current_episode['last_time'] = time
+
+        # Episode still open at end of stay — emit start anchor, outcome decided by _derive_activities
+        if current_episode is not None:
+            episodes.append(current_episode)
+
+        all_episodes.extend(episodes)
+
+    return pd.DataFrame(all_episodes)
 

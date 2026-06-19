@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as _np
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,24 @@ from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _sanitize(obj):
+    """Recursively convert numpy scalars/arrays to native Python types."""
+    if isinstance(obj, _np.bool_):
+        return bool(obj)
+    if isinstance(obj, _np.integer):
+        return int(obj)
+    if isinstance(obj, _np.floating):
+        return None if _np.isnan(obj) else float(obj)
+    if isinstance(obj, _np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
 
 app = FastAPI(title="Clinician Studio API")
 
@@ -755,7 +774,7 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
         )
         from conformance.types import DeclareModel
 
-        event_log_path = PROJECT_ROOT / "data" / "icu_event_log.parquet"
+        event_log_path = PROJECT_ROOT / "data" / "icu_event_log_sample.parquet"
         if not event_log_path.exists():
             job["status"] = "error"
             job["error"] = "Event log not found. Run prepare_event_log.py first."
@@ -811,7 +830,9 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                     f"Custom event fetch failed: {e}. Custom events skipped."
                 ]
 
-        all_results = []
+        # Each entry: (stay_id, trace_results, episode_outcome)
+        all_episode_data = []
+
         for stay_id in sample_ids:
             if cancel_event.is_set():
                 job["status"] = "cancelled"
@@ -828,16 +849,31 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                 df = df.sort_values("timestamp").reset_index(drop=True)
 
             if not df.empty:
-                for episode_df in _split_into_episodes(df, request.trigger_event):
+                episodes = list(_split_into_episodes(df, request.trigger_event))
+                for ep_idx, episode_df in enumerate(episodes):
+                    activities = set(episode_df["activity"].dropna().tolist()) if "activity" in episode_df.columns else set()
+                    if "SBTStarted" not in activities:
+                        episode_outcome = "no_sbt_attempt"
+                    else:
+                        sbt_ts = episode_df[episode_df["activity"] == "SBTStarted"]["timestamp"].min()
+                        window_end = sbt_ts + pd.Timedelta(hours=48)
+                        revent_in_ep = (
+                            (episode_df["activity"] == "InvasiveVentilationStarted") &
+                            (episode_df["timestamp"] > sbt_ts) &
+                            (episode_df["timestamp"] <= window_end)
+                        ).any()
+                        next_ep_start = episodes[ep_idx + 1]["timestamp"].min() if ep_idx + 1 < len(episodes) else None
+                        next_in_window = next_ep_start is not None and sbt_ts < next_ep_start <= window_end
+                        episode_outcome = "failure" if (revent_in_ep or next_in_window) else "success"
+
                     trace_results = check_log_conformance(episode_df, combined)
                     if trace_results:
-                        all_results.extend(trace_results)
+                        all_episode_data.append((str(stay_id), trace_results, episode_outcome))
 
             job["done"] = job.get("done", 0) + 1
             job["progress"] = job["done"] / job["total"]
 
-        # Build summary in same shape as summary.json
-        summary = _build_minimal_summary(all_results, combined)
+        summary = _sanitize(_build_rich_summary(all_episode_data, combined))
 
         job["result"] = summary
         job["status"] = "done"
@@ -849,39 +885,249 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
         job["traceback"] = traceback.format_exc()
 
 
-def _build_minimal_summary(results: list, model) -> dict[str, Any]:
-    """Fallback summary builder when outcome_postprocessing is unavailable."""
+def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
+    """Build a rich summary matching SummaryView data shape, with per-run statistical tests."""
+    import math
+    from scipy.stats import fisher_exact as _fisher_exact
     from conformance.results import ConformanceOutcome
 
     label_map = {c.id: getattr(c, "label", c.id) for c in model.constraints}
+    rationale_map = {c.id: getattr(c, "rationale", "") for c in model.constraints}
+    template_map = {c.id: getattr(c, "template", None) for c in model.constraints}
+    min_gap_map = {c.id: getattr(c, "min_gap_hours", None) for c in model.constraints}
+    max_gap_map = {c.id: getattr(c, "max_gap_hours", None) for c in model.constraints}
+    activation_cond_map = {c.id: getattr(c, "activation_condition", None) for c in model.constraints}
+    target_cond_map = {c.id: getattr(c, "target_condition", None) for c in model.constraints}
 
-    violation_counts: dict[str, int] = {}
-    episode_count = 0
+    # Per-constraint aggregates
+    cid_counts: dict[str, dict] = {}
+    forensics_data: dict[str, dict] = {}
 
-    for r in results:
-        episode_count += 1
-        violated = [
-            cr.constraint_id
-            for cr in (r.constraint_results or [])
-            if cr.outcome == ConformanceOutcome.VIOLATED
-        ]
-        for cid in violated:
-            violation_counts[cid] = violation_counts.get(cid, 0) + 1
+    # Per-stay tracking
+    stay_map: dict[str, dict] = {}
 
-    violation_frequency = [
-        {
+    # Episode outcome totals
+    outcome_counts: dict[str, int] = {"success": 0, "failure": 0, "unknown": 0, "no_sbt_attempt": 0}
+    outcome_violations: dict[str, int] = {"success": 0, "failure": 0, "unknown": 0, "no_sbt_attempt": 0}
+
+    def _ensure_cid(cid: str) -> dict:
+        if cid not in cid_counts:
+            cid_counts[cid] = {"total": 0, "success": 0, "failure": 0, "satisfied": 0, "vacuous": 0}
+            forensics_data[cid] = {
+                "violation": {"delays": [], "delay_outcomes": [], "delta_distributions": {}},
+                "satisfaction": {"delays": [], "delay_outcomes": [], "delta_distributions": {}},
+            }
+        return cid_counts[cid]
+
+    for stay_id, trace_results, episode_outcome in episode_data:
+        outcome_counts[episode_outcome] = outcome_counts.get(episode_outcome, 0) + 1
+
+        if stay_id not in stay_map:
+            stay_map[stay_id] = {
+                "episodes": 0, "violations": 0,
+                "success_eps": 0, "failure_eps": 0, "unknown_eps": 0, "no_sbt_attempt_eps": 0,
+                "violated": set(), "satisfied": set(),
+            }
+        sm = stay_map[stay_id]
+        sm["episodes"] += 1
+        sm[f"{episode_outcome}_eps"] = sm.get(f"{episode_outcome}_eps", 0) + 1
+
+        episode_violations = 0
+        for trace in trace_results:
+            for cr in (trace.constraint_results or []):
+                cid = cr.constraint_id
+                counts = _ensure_cid(cid)
+                fo = forensics_data[cid]
+
+                if cr.outcome == ConformanceOutcome.VIOLATED:
+                    counts["total"] += 1
+                    counts[episode_outcome] = counts.get(episode_outcome, 0) + 1
+                    sm["violated"].add(cid)
+                    episode_violations += 1
+                    fv = fo["violation"]
+                    if cr.delay_seconds is not None:
+                        fv["delays"].append(cr.delay_seconds / 3600.0)
+                        fv["delay_outcomes"].append(episode_outcome)
+                    for k, v in (cr.violation_deltas or {}).items():
+                        fv["delta_distributions"].setdefault(k, []).append(v)
+
+                elif cr.outcome == ConformanceOutcome.SATISFIED:
+                    counts["satisfied"] += 1
+                    sm["satisfied"].add(cid)
+                    fs = fo["satisfaction"]
+                    if cr.delay_seconds is not None:
+                        fs["delays"].append(cr.delay_seconds / 3600.0)
+                        fs["delay_outcomes"].append(episode_outcome)
+                    for k, v in (cr.satisfaction_deltas or {}).items():
+                        fs["delta_distributions"].setdefault(k, []).append(v)
+
+                elif cr.outcome == ConformanceOutcome.VACUOUS:
+                    counts["vacuous"] += 1
+
+        sm["violations"] += episode_violations
+        outcome_violations[episode_outcome] = outcome_violations.get(episode_outcome, 0) + episode_violations
+
+    total_episodes = len(episode_data)
+    total_success = outcome_counts["success"]
+    total_failure = outcome_counts["failure"]
+
+    def _compute_stats(a: int, b: int, c: int, d: int):
+        """2×2: a=viol&fail, b=viol&succ, c=noviol&fail, d=noviol&succ → p, OR, RR."""
+        try:
+            _, p_raw = _fisher_exact([[a, c], [b, d]], alternative="two-sided")
+        except Exception:
+            p_raw = None
+
+        # Use 0.5 continuity correction for OR/RR CI when any cell is 0
+        af, bf, cf, df_ = float(a), float(b), float(c), float(d)
+        if min(af, bf, cf, df_) == 0.0:
+            af += 0.5; bf += 0.5; cf += 0.5; df_ += 0.5
+
+        or_val = or_low = or_high = None
+        if bf > 0 and cf > 0:
+            or_val = (af * df_) / (bf * cf)
+            try:
+                log_or = math.log(or_val)
+                se_or = math.sqrt(1/af + 1/bf + 1/cf + 1/df_)
+                or_low = math.exp(log_or - 1.96 * se_or)
+                or_high = math.exp(log_or + 1.96 * se_or)
+            except Exception:
+                pass
+
+        rr_val = rr_low = rr_high = None
+        denom_viol = af + bf
+        denom_noviol = cf + df_
+        if denom_viol > 0 and denom_noviol > 0:
+            p1 = af / denom_viol
+            p2 = cf / denom_noviol
+            if p1 > 0 and p2 > 0:
+                rr_val = p1 / p2
+                try:
+                    log_rr = math.log(rr_val)
+                    se_rr = math.sqrt((1 - p1) / af + (1 - p2) / cf)
+                    rr_low = math.exp(log_rr - 1.96 * se_rr)
+                    rr_high = math.exp(log_rr + 1.96 * se_rr)
+                except Exception:
+                    pass
+
+        return p_raw, or_val, or_low, or_high, rr_val, rr_low, rr_high
+
+    violation_frequency = []
+    for c in model.constraints:
+        cid = c.id
+        counts = cid_counts.get(cid, {"total": 0, "success": 0, "failure": 0, "satisfied": 0, "vacuous": 0})
+
+        a = counts.get("failure", 0)
+        b = counts.get("success", 0)
+        c_cell = max(0, total_failure - a)
+        d = max(0, total_success - b)
+
+        p_raw, or_val, or_low, or_high, rr_val, rr_low, rr_high = _compute_stats(a, b, c_cell, d)
+
+        vr_success = b / max(total_success, 1)
+        vr_failure = a / max(total_failure, 1)
+        overall_vr = counts["total"] / max(total_episodes, 1)
+
+        # Satisfaction rates approximate as (1 - violation_rate) per outcome group
+        sr_success = 1.0 - vr_success
+        sr_failure = 1.0 - vr_failure
+
+        lift_failure = vr_failure / overall_vr if overall_vr > 0 else 1.0
+        lift_success = sr_success / (1.0 - overall_vr) if overall_vr < 1.0 else 1.0
+
+        is_sig = p_raw is not None and p_raw < 0.05
+        if is_sig and or_val is not None:
+            rule_class = "useful" if or_val > 1 else "harmful"
+        else:
+            rule_class = "neutral"
+
+        template = template_map.get(cid)
+        template_str = template.value if hasattr(template, "value") else (str(template) if template else None)
+
+        violation_frequency.append({
             "constraint_id": cid,
             "constraint_label": label_map.get(cid, cid),
-            "count": cnt,
-            "episode_share": cnt / max(episode_count, 1),
-        }
-        for cid, cnt in sorted(violation_counts.items(), key=lambda x: -x[1])
-    ]
+            "rationale": rationale_map.get(cid, ""),
+            "template": template_str,
+            "activation_condition": activation_cond_map.get(cid),
+            "target_condition": target_cond_map.get(cid),
+            "min_gap_hours": min_gap_map.get(cid),
+            "max_gap_hours": max_gap_map.get(cid),
+            "count": counts["total"],
+            "count_success": b,
+            "count_failure": a,
+            "count_satisfied": counts.get("satisfied", 0),
+            "count_vacuous": counts.get("vacuous", 0),
+            "violation_rate_success": vr_success,
+            "violation_rate_failure": vr_failure,
+            "satisfaction_rate_success": sr_success,
+            "satisfaction_rate_failure": sr_failure,
+            "lift_failure": lift_failure,
+            "lift_success": lift_success,
+            "episode_share": overall_vr,
+            "n_exposed": counts["total"],
+            "n_unexposed": counts.get("satisfied", 0) + counts.get("vacuous", 0),
+            "p_value_raw": p_raw,
+            "is_significant": is_sig,
+            "odds_ratio": or_val,
+            "odds_ratio_low": or_low,
+            "odds_ratio_high": or_high,
+            "risk_ratio": rr_val,
+            "rr_ci_low": rr_low,
+            "rr_ci_high": rr_high,
+            "rule_class": rule_class,
+            "forensics": forensics_data.get(cid, {
+                "violation": {"delays": [], "delay_outcomes": [], "delta_distributions": {}},
+                "satisfaction": {"delays": [], "delay_outcomes": [], "delta_distributions": {}},
+            }),
+        })
+
+    violation_frequency.sort(key=lambda x: -x["count"])
+
+    # Stay summaries
+    stay_summaries = []
+    for stay_id, sm in stay_map.items():
+        s_eps = sm.get("success_eps", 0)
+        f_eps = sm.get("failure_eps", 0)
+        n_eps = sm.get("no_sbt_attempt_eps", 0)
+        if s_eps > 0 and f_eps == 0 and n_eps == 0:
+            overall = "Success"
+        elif f_eps > 0 and s_eps == 0 and n_eps == 0:
+            overall = "Failure"
+        elif s_eps > 0 and f_eps > 0:
+            overall = "Mixed"
+        elif n_eps > 0 and s_eps == 0 and f_eps == 0:
+            overall = "No SBT Attempt"
+        else:
+            overall = "Mixed"
+        eps = sm["episodes"]
+        stay_summaries.append({
+            "stay_id": stay_id,
+            "episodes": eps,
+            "overall_outcome": overall,
+            "total_mandatory_violations": sm["violations"],
+            "avg_mandatory_violations": sm["violations"] / max(eps, 1),
+            "violated_constraints": list(sm["violated"]),
+            "satisfied_constraints": list(sm["satisfied"]),
+            "violated_constraints_count": len(sm["violated"]),
+        })
+
+    def _avg_viol(outcome: str) -> float:
+        eps = outcome_counts.get(outcome, 0)
+        return outcome_violations.get(outcome, 0) / max(eps, 1)
 
     return {
-        "total_episodes": episode_count,
+        "total_stays": len(stay_map),
+        "total_episodes": total_episodes,
         "violation_frequency": violation_frequency,
-        "stay_summaries": [],
+        "stay_summaries": stay_summaries,
+        "conformance_vs_outcome": {
+            "success": {"episodes": total_success, "avg_mandatory_violations": _avg_viol("success")},
+            "failure": {"episodes": total_failure, "avg_mandatory_violations": _avg_viol("failure")},
+            "unknown": {"episodes": outcome_counts["unknown"], "avg_mandatory_violations": _avg_viol("unknown")},
+            "no_sbt_attempt": {"episodes": outcome_counts["no_sbt_attempt"], "avg_mandatory_violations": _avg_viol("no_sbt_attempt")},
+        },
+        "item_labels": {},
     }
 
 
@@ -967,3 +1213,38 @@ def cancel_job(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Job not found")
     _job_cancel[job_id].set()
     return {"status": "cancellation_requested"}
+
+
+@app.get("/api/case/{stay_id}")
+def get_case_data(stay_id: str):
+    """Serve case event data on demand from the event log parquet."""
+    import duckdb as _duckdb
+    import math as _math
+
+    event_log_path = PROJECT_ROOT / "data" / "icu_event_log_sample.parquet"
+    if not event_log_path.exists():
+        raise HTTPException(status_code=404, detail="Event log not available")
+
+    con = _duckdb.connect(database=":memory:")
+    con.execute(f"CREATE TABLE events AS SELECT * FROM read_parquet('{event_log_path}')")
+    columns = {row[1] for row in con.execute("PRAGMA table_info('events')").fetchall()}
+    key_col = "case_id" if "case_id" in columns else "stay_id"
+
+    df = con.execute(f"SELECT * FROM events WHERE {key_col} = ?", [stay_id]).df()
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"No data for case {stay_id}")
+
+    df = df.sort_values("timestamp")
+    events = []
+    for row in df.to_dict(orient="records"):
+        cleaned = {}
+        for k, v in row.items():
+            if hasattr(v, "isoformat"):
+                cleaned[k] = v.isoformat()
+            elif isinstance(v, float) and _math.isnan(v):
+                cleaned[k] = None
+            else:
+                cleaned[k] = v
+        events.append(cleaned)
+
+    return {"case_id": stay_id, "events": events, "conformance": []}

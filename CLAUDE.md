@@ -2,6 +2,10 @@
 
 Master's thesis: SBT Conformance Checking on MIMIC-IV.
 
+- Read only the files directly relevant to the task. Don't explore speculatively.
+- Prefer targeted file reads over broad codebase searches.
+- Don't summarize work already visible in the conversation.
+
 ## Data Flow
 ```
 MIMIC-IV → icu_event_level_sbt.parquet → icu_event_log_full.parquet → conformance_results.csv
