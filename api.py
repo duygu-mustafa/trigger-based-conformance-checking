@@ -896,8 +896,8 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
     template_map = {c.id: getattr(c, "template", None) for c in model.constraints}
     min_gap_map = {c.id: getattr(c, "min_gap_hours", None) for c in model.constraints}
     max_gap_map = {c.id: getattr(c, "max_gap_hours", None) for c in model.constraints}
-    activation_cond_map = {c.id: getattr(c, "activation_condition", None) for c in model.constraints}
-    target_cond_map = {c.id: getattr(c, "target_condition", None) for c in model.constraints}
+    activation_cond_map = {c.id: getattr(c, "activation_condition_raw", None) for c in model.constraints}
+    target_cond_map = {c.id: getattr(c, "target_condition_raw", None) for c in model.constraints}
 
     # Per-constraint aggregates
     cid_counts: dict[str, dict] = {}
@@ -1127,7 +1127,7 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
             "unknown": {"episodes": outcome_counts["unknown"], "avg_mandatory_violations": _avg_viol("unknown")},
             "no_sbt_attempt": {"episodes": outcome_counts["no_sbt_attempt"], "avg_mandatory_violations": _avg_viol("no_sbt_attempt")},
         },
-        "item_labels": {},
+        "item_labels": _ITEM_LABELS,
     }
 
 

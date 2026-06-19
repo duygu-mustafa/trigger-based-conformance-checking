@@ -64,7 +64,12 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   const [activeTab, setActiveTab] = useState('Frequencies')
   const [selectedConstraintId, setSelectedConstraintId] = useState(null)
   const [analysisMode, setAnalysisMode] = useState('violation')
+  const [itemLabels, setItemLabels] = useState({})
   const pollRef = useRef(null)
+
+  useEffect(() => {
+    fetch('/api/item_labels').then(r => r.ok ? r.json() : {}).then(setItemLabels).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (jobState?.status === 'done' && jobState?.result) {
@@ -355,7 +360,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
                   <div className="runner-freq-detail">
                     <ConstraintDetailView
                       constraint={selectedConstraint}
-                      itemLabels={result.item_labels || {}}
+                      itemLabels={itemLabels}
                     />
                   </div>
                 )}

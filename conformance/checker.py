@@ -596,6 +596,7 @@ def _evaluate_constraint_impl(
                 return False, corr_err, time_delta, corr_values
             if not corr_ok:
                 return False, None, time_delta, corr_values
+            return True, None, time_delta, corr_values
 
         return True, None, time_delta, {}
 
