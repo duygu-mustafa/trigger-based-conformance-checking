@@ -3220,6 +3220,247 @@
   font-size: 0.72rem;
 }
 
+/* ── Formula builder (flat token strip) ─────────────────────────────────── */
+
+.formula-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.formula-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 6px;
+  min-height: 2.5rem;
+}
+
+.formula-cond-card {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(74,158,255,0.07);
+  border: 1px solid rgba(74,158,255,0.25);
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+}
+
+.formula-cond-card--negated {
+  background: rgba(122,95,204,0.1);
+  border-color: rgba(122,95,204,0.4);
+}
+
+.formula-not-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #a98aff;
+  background: rgba(122,95,204,0.2);
+  border: 1px solid #7a5fcc;
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  flex-shrink: 0;
+}
+
+.formula-op {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--color-border, #2a3a52);
+  border-radius: 4px;
+  color: var(--color-text-muted, #7a8aa0);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.formula-op:hover {
+  background: rgba(74,158,255,0.12);
+  color: var(--color-primary, #5b8dee);
+  border-color: var(--color-primary, #5b8dee);
+}
+
+.formula-not-toggle {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+  border: 1px solid var(--color-border, #2a3a52);
+  background: transparent;
+  color: var(--color-text-dim, #7a8aa0);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+
+.formula-not-toggle:hover,
+.formula-not-toggle.active {
+  background: rgba(122,95,204,0.2);
+  color: #a98aff;
+  border-color: #7a5fcc;
+}
+
+.formula-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.formula-add-btn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #2a3a52);
+  background: transparent;
+  color: var(--color-text-muted, #7a8aa0);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.formula-add-btn:hover {
+  background: rgba(74,158,255,0.1);
+  color: var(--color-primary, #5b8dee);
+  border-color: var(--color-primary, #5b8dee);
+}
+
+.formula-add-btn--bracket {
+  color: #f59e0b;
+  border-color: rgba(245,158,11,0.3);
+}
+
+.formula-add-btn--bracket:hover {
+  background: rgba(245,158,11,0.1);
+  color: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.formula-bracket {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid rgba(245,158,11,0.35);
+  background: rgba(245,158,11,0.07);
+  flex-shrink: 0;
+}
+
+.formula-bracket--not {
+  border-color: rgba(122,95,204,0.4);
+  background: rgba(122,95,204,0.1);
+}
+
+.formula-bracket-char {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f59e0b;
+  line-height: 1;
+  user-select: none;
+}
+
+.formula-token-slot {
+  display: contents;
+}
+
+.formula-inserter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.formula-inserter-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.formula-strip:hover .formula-inserter-btn,
+.formula-inserter-btn:focus,
+.formula-inserter-btn:focus-visible {
+  opacity: 1;
+}
+
+.formula-inserter-btn:hover {
+  background: var(--color-primary, #5b8dee);
+  color: #fff;
+  border-color: var(--color-primary, #5b8dee);
+  opacity: 1;
+}
+
+.formula-inserter-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 110px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  z-index: 100;
+}
+
+.formula-inserter-action {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-main);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.formula-inserter-action:hover {
+  background: var(--color-neutral-bg);
+}
+
+.formula-inserter-action--bracket {
+  color: #f59e0b;
+}
+
+.formula-inserter-action--op {
+  color: var(--color-primary, #5b8dee);
+}
+
+.formula-inserter-datacond {
+  margin-top: 0.15rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-main);
+  font-size: 0.73rem;
+  cursor: pointer;
+}
+
 .preview-field-val--expr {
   font-family: 'Fira Code', 'Fira Mono', 'Cascadia Code', monospace;
   font-size: 0.68rem;
@@ -5268,5 +5509,39 @@
 
 .define-event-link:hover {
   color: #1557b0;
+}
+
+.save-cond-trigger {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-primary, #1a73e8);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s;
+}
+.save-cond-trigger:hover {
+  color: #1557b0;
+}
+
+.save-cond-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.save-cond-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem !important;
+  padding: 0.3rem 0.6rem !important;
+}
+.btn-sm {
+  padding: 0.3rem 0.75rem !important;
+  font-size: 0.8rem !important;
 }
 

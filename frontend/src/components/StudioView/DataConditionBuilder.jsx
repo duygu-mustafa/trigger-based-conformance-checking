@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ConditionTree, treeToExpr } from './ConditionTree'
+import { FormulaBuilder, tokensToExpr, validateTokens, treeToTokens, emptyCondToken } from './ConditionTree'
 import { UilPen } from '@iconscout/react-unicons'
 
 const SOURCE_TABLE_OPTIONS = [
@@ -198,25 +198,28 @@ function SqlTab({ onAdd }) {
 export default function DataConditionBuilder({ savedConditions = [], onSave, onDelete, itemOptions = [] }) {
   const [activeTab, setActiveTab] = useState('tables')
   const [name, setName] = useState('')
-  const [tree, setTree] = useState(null)
+  const [tokens, setTokens] = useState([emptyCondToken()])
   const [dataItems, setDataItems] = useState([])
   const [editingId, setEditingId] = useState(null)
   const [error, setError] = useState('')
 
   function resetForm() {
-    setName(''); setTree(null); setDataItems([]); setEditingId(null); setError('')
+    setName(''); setTokens([emptyCondToken()]); setDataItems([]); setEditingId(null); setError('')
   }
 
   function handleSave() {
     if (!name.trim()) { setError('Name is required.'); return }
-    const expr = treeToExpr(tree)
-    if (!expr) { setError('At least one condition is required.'); return }
-    onSave({ ...(editingId ? { id: editingId } : {}), name: name.trim(), tree, expression: expr, data_items: dataItems })
+    const validationError = validateTokens(tokens)
+    if (validationError) { setError(validationError); return }
+    const expr = tokensToExpr(tokens)
+    onSave({ ...(editingId ? { id: editingId } : {}), name: name.trim(), tokens, expression: expr, data_items: dataItems })
     resetForm()
   }
 
   function populateForm(cond) {
-    setName(cond.name); setTree(cond.tree); setDataItems(cond.data_items || [])
+    setName(cond.name)
+    setTokens(cond.tokens || treeToTokens(cond.tree))
+    setDataItems(cond.data_items || [])
     setEditingId(cond.id); setError('')
   }
 
@@ -299,7 +302,7 @@ export default function DataConditionBuilder({ savedConditions = [], onSave, onD
 
         <div className="field-group">
           <label className="field-label">Expression</label>
-          <ConditionTree tree={tree} onChange={setTree} itemOptions={[
+          <FormulaBuilder tokens={tokens} onChange={setTokens} itemOptions={[
             ...itemOptions,
             ...dataItems
               .filter(it => !itemOptions.find(o => o.key === String(it.itemid)))

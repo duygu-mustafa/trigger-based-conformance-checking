@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import DeclareVisualizer from './DeclareVisualizer'
 import CustomEventModal from './CustomEventModal'
 import DataConditionModal from './DataConditionModal'
-import { ConditionTree, treeToExpr, migrateFlat } from './ConditionTree'
+import { FormulaBuilder, tokensToExpr, treeToTokens, emptyCondToken, migrateFlat, validateTokensOptional, validateTokens } from './ConditionTree'
 import { UilPen } from '@iconscout/react-unicons'
 
 // Templates offered to clinicians, grouped for usability
@@ -89,22 +89,27 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
     target: '',
     min_gap_hours: '',
     max_gap_hours: '',
-    activation_condition_tree: null,
-    correlation_condition_tree: null,
+    activation_tokens: [emptyCondToken()],
+    correlation_tokens: [emptyCondToken()],
     label: '',
     rationale: '',
     severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
   })
+  const [condError, setCondError] = useState('')
+  const [saveCondOpen, setSaveCondOpen] = useState(null) // 'activation' | 'correlation' | null
+  const [saveCondName, setSaveCondName] = useState('')
   const [savedRules, setSavedRules] = useState(() => {
     try {
       const raw = JSON.parse(localStorage.getItem('studio_custom_rules') || '[]')
-      return raw.map(r => ({
-        ...r,
-        activation_condition_tree: r.activation_condition_tree
-          ?? migrateFlat(r.activation_conditions, r.activation_logic),
-        correlation_condition_tree: r.correlation_condition_tree
-          ?? migrateFlat(r.correlation_conditions, r.correlation_logic),
-      }))
+      return raw.map(r => {
+        const actTree = r.activation_condition_tree ?? migrateFlat(r.activation_conditions, r.activation_logic)
+        const corrTree = r.correlation_condition_tree ?? migrateFlat(r.correlation_conditions, r.correlation_logic)
+        return {
+          ...r,
+          activation_tokens: r.activation_tokens || treeToTokens(actTree),
+          correlation_tokens: r.correlation_tokens || treeToTokens(corrTree),
+        }
+      })
     }
     catch { return [] }
   })
@@ -137,6 +142,13 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
   }
 
   function nextStep() {
+    if (step === 'conditions') {
+      const err = validateTokensOptional(rule.activation_tokens)
+        || (!isUnary ? validateTokensOptional(rule.correlation_tokens) : null)
+        || null
+      if (err) { setCondError(err); return }
+      setCondError('')
+    }
     const idx = STEPS.findIndex(s => s.id === step)
     if (idx < STEPS.length - 1) setStep(STEPS[idx + 1].id)
   }
@@ -147,8 +159,13 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
   }
 
   function saveRule() {
-    const activationExpr = treeToExpr(rule.activation_condition_tree)
-    const correlationExpr = treeToExpr(rule.correlation_condition_tree)
+    const err = validateTokensOptional(rule.activation_tokens)
+      || (!isUnary ? validateTokensOptional(rule.correlation_tokens) : null)
+      || null
+    if (err) { setCondError(err); setStep('conditions'); return }
+    setCondError('')
+    const activationExpr = tokensToExpr(rule.activation_tokens)
+    const correlationExpr = tokensToExpr(rule.correlation_tokens)
     const toSave = {
       ...rule,
       id: editingRuleId || `CUSTOM-${Date.now()}`,
@@ -169,8 +186,8 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
     setRule({
       template: '', activation: '', target: '',
       min_gap_hours: '', max_gap_hours: '',
-      activation_condition_tree: null,
-      correlation_condition_tree: null,
+      activation_tokens: [emptyCondToken()],
+      correlation_tokens: [emptyCondToken()],
       label: '', rationale: '',
       severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
     })
@@ -192,8 +209,8 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
       target: r.target,
       min_gap_hours: r.min_gap_hours ?? '',
       max_gap_hours: r.max_gap_hours ?? '',
-      activation_condition_tree: r.activation_condition_tree ?? null,
-      correlation_condition_tree: r.correlation_condition_tree ?? null,
+      activation_tokens: r.activation_tokens || treeToTokens(r.activation_condition_tree ?? null),
+      correlation_tokens: r.correlation_tokens || treeToTokens(r.correlation_condition_tree ?? null),
       label: r.label ?? '',
       rationale: r.rationale ?? '',
       severity: r.severity ?? { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
@@ -201,13 +218,33 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
     setStep('activities')
   }
 
+  function saveConditionInline(which) {
+    if (!saveCondName.trim()) return
+    const tokens = which === 'activation' ? rule.activation_tokens : rule.correlation_tokens
+    const err = validateTokens(tokens)
+    if (err) { setCondError(err); return }
+    const expression = tokensToExpr(tokens)
+    onSaveCustomDataCondition?.({ name: saveCondName.trim(), tokens, expression, data_items: [] })
+    setSaveCondOpen(null); setSaveCondName(''); setCondError('')
+  }
+
+  function resetStep() {
+    switch (step) {
+      case 'template': updateRule({ template: '' }); break
+      case 'activities': updateRule({ activation: '', target: '' }); break
+      case 'time': updateRule({ min_gap_hours: '', max_gap_hours: '' }); break
+      case 'conditions': updateRule({ activation_tokens: [emptyCondToken()], correlation_tokens: [emptyCondToken()] }); setCondError(''); break
+      case 'metadata': updateRule({ label: '', rationale: '', severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 } }); break
+    }
+  }
+
   function cancelEdit() {
     setEditingRuleId(null)
     setRule({
       template: '', activation: '', target: '',
       min_gap_hours: '', max_gap_hours: '',
-      activation_condition_tree: null,
-      correlation_condition_tree: null,
+      activation_tokens: [emptyCondToken()],
+      correlation_tokens: [emptyCondToken()],
       label: '', rationale: '',
       severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 },
     })
@@ -397,7 +434,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                           value=""
                           onChange={e => {
                             const cond = customDataConditions.find(c => c.id === e.target.value)
-                            if (cond) updateRule({ activation_condition_tree: cond.tree })
+                            if (cond) updateRule({ activation_tokens: cond.tokens || treeToTokens(cond.tree) })
                           }}
                         >
                           <option value="">Load saved…</option>
@@ -405,15 +442,36 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                         </select>
                       )}
                       <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
-                        Define new condition
+                        Manage data conditions
                       </button>
                     </div>
                   </div>
-                  <ConditionTree
-                    tree={rule.activation_condition_tree}
-                    onChange={tree => updateRule({ activation_condition_tree: tree })}
+                  <FormulaBuilder
+                    tokens={rule.activation_tokens}
+                    onChange={tokens => { setCondError(''); updateRule({ activation_tokens: tokens }) }}
                     itemOptions={itemOptions}
+                    customDataConditions={customDataConditions}
                   />
+                  {tokensToExpr(rule.activation_tokens) && (
+                    saveCondOpen === 'activation' ? (
+                      <div className="save-cond-inline">
+                        <input
+                          className="studio-input save-cond-name-input"
+                          placeholder="Condition name…"
+                          value={saveCondName}
+                          onChange={e => setSaveCondName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveConditionInline('activation'); if (e.key === 'Escape') setSaveCondOpen(null) }}
+                          autoFocus
+                        />
+                        <button type="button" className="btn-primary btn-sm" onClick={() => saveConditionInline('activation')} disabled={!saveCondName.trim()}>Save</button>
+                        <button type="button" className="btn-secondary btn-sm" onClick={() => setSaveCondOpen(null)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button type="button" className="save-cond-trigger" onClick={() => { setSaveCondOpen('activation'); setSaveCondName('') }}>
+                        Save as reusable condition
+                      </button>
+                    )
+                  )}
                 </div>
 
                 {!isUnary && (
@@ -427,7 +485,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                             value=""
                             onChange={e => {
                               const cond = customDataConditions.find(c => c.id === e.target.value)
-                              if (cond) updateRule({ correlation_condition_tree: cond.tree })
+                              if (cond) updateRule({ correlation_tokens: cond.tokens || treeToTokens(cond.tree) })
                             }}
                           >
                             <option value="">Load saved…</option>
@@ -435,17 +493,39 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                           </select>
                         )}
                         <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
-                          Define new condition
+                          Manage data conditions
                         </button>
                       </div>
                     </div>
-                    <ConditionTree
-                      tree={rule.correlation_condition_tree}
-                      onChange={tree => updateRule({ correlation_condition_tree: tree })}
+                    <FormulaBuilder
+                      tokens={rule.correlation_tokens}
+                      onChange={tokens => { setCondError(''); updateRule({ correlation_tokens: tokens }) }}
                       itemOptions={itemOptions}
+                      customDataConditions={customDataConditions}
                     />
+                    {tokensToExpr(rule.correlation_tokens) && (
+                      saveCondOpen === 'correlation' ? (
+                        <div className="save-cond-inline">
+                          <input
+                            className="studio-input save-cond-name-input"
+                            placeholder="Condition name…"
+                            value={saveCondName}
+                            onChange={e => setSaveCondName(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveConditionInline('correlation'); if (e.key === 'Escape') setSaveCondOpen(null) }}
+                            autoFocus
+                          />
+                          <button type="button" className="btn-primary btn-sm" onClick={() => saveConditionInline('correlation')} disabled={!saveCondName.trim()}>Save</button>
+                          <button type="button" className="btn-secondary btn-sm" onClick={() => setSaveCondOpen(null)}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button type="button" className="save-cond-trigger" onClick={() => { setSaveCondOpen('correlation'); setSaveCondName('') }}>
+                          Save as reusable condition
+                        </button>
+                      )
+                    )}
                   </div>
                 )}
+                {condError && <div className="form-error" style={{ marginTop: '0.75rem' }}>{condError}</div>}
               </div>
             )}
 
@@ -511,11 +591,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
               <button type="button" className="wizard-back-btn" onClick={prevStep}>← Back</button>
             )}
             <div className="wizard-nav-spacer" />
-            {editingRuleId && (
-              <button type="button" className="wizard-cancel-btn" onClick={cancelEdit}>
-                Cancel
-              </button>
-            )}
+            {editingRuleId ? (
+              <button type="button" className="wizard-cancel-btn" onClick={cancelEdit}>Cancel</button>
+            ) : rule.template ? (
+              <button type="button" className="wizard-cancel-btn" onClick={resetStep}>Reset</button>
+            ) : null}
             {step !== 'metadata' ? (
               <button
                 type="button"
@@ -576,8 +656,8 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                   </span>
                 </div>
               )}
-              {rule.activation_condition_tree && (() => {
-                const expr = treeToExpr(rule.activation_condition_tree)
+              {(() => {
+                const expr = tokensToExpr(rule.activation_tokens)
                 return expr ? (
                   <div className="preview-field">
                     <span className="preview-field-key">Activation cond.</span>
@@ -587,8 +667,8 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                   </div>
                 ) : null
               })()}
-              {!isUnary && rule.correlation_condition_tree && (() => {
-                const expr = treeToExpr(rule.correlation_condition_tree)
+              {!isUnary && (() => {
+                const expr = tokensToExpr(rule.correlation_tokens)
                 return expr ? (
                   <div className="preview-field">
                     <span className="preview-field-key">Target cond.</span>
