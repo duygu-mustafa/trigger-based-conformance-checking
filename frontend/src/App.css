@@ -3032,7 +3032,7 @@
 }
 
 .logic-btn {
-  padding: 0.15rem 0.5rem;
+  padding: 0.2rem 0.65rem;
   border: 1px solid var(--color-border, #2a3a52);
   border-radius: 4px;
   background: none;
@@ -3041,12 +3041,14 @@
   color: var(--color-text-dim, #7a8aa0);
   cursor: pointer;
   transition: all 0.15s;
+  letter-spacing: 0.04em;
 }
 
 .logic-btn.active {
   background: var(--color-primary, #5b8dee);
   border-color: var(--color-primary, #5b8dee);
   color: #fff;
+  box-shadow: 0 0 0 2px rgba(91,141,238,0.25);
 }
 
 .condition-row {
@@ -3126,14 +3128,21 @@
 
 .condition-group {
   border: 1px solid var(--color-border, #2a3a52);
+  border-left-width: 3px;
   border-radius: 6px;
   padding: 0.5rem 0.6rem 0.5rem 0.6rem;
   margin-bottom: 0.4rem;
   background: rgba(255,255,255,0.02);
 }
 
+/* depth accent colors cycling 0–3 */
+.condition-group--depth-0 { border-left-color: #4a9eff; }
+.condition-group--depth-1 { border-left-color: #a78bfa; }
+.condition-group--depth-2 { border-left-color: #34d399; }
+.condition-group--depth-3 { border-left-color: #fb923c; }
+
 .condition-group--not {
-  border-color: #7a5fcc;
+  border-left-color: #7a5fcc !important;
   background: rgba(122,95,204,0.06);
 }
 
@@ -3142,6 +3151,49 @@
   align-items: center;
   gap: 0.4rem;
   margin-bottom: 0.5rem;
+}
+
+.condition-group-children {
+  margin-left: 16px;
+}
+
+.condition-collapse-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-text-dim, #7a8aa0);
+  flex-shrink: 0;
+}
+
+.condition-collapse-btn:hover {
+  color: var(--color-text-main, #e8edf5);
+}
+
+.condition-collapse-chevron {
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-block;
+  transform: rotate(90deg);
+  transition: transform 0.15s;
+  user-select: none;
+}
+
+.condition-collapse-chevron.collapsed {
+  transform: rotate(0deg);
+}
+
+.condition-collapsed-count {
+  font-size: 0.7rem;
+  color: var(--color-text-dim, #7a8aa0);
+  font-style: italic;
+  margin-left: auto;
+  margin-right: 0.25rem;
 }
 
 .condition-group-not-badge {

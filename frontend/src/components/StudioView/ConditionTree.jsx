@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 export const OPERATORS = ['≥', '≤', '=', '≠', '>', '<']
 export const REVERSE_OP_MAP = { '≥': '>=', '≤': '<=', '=': '==', '≠': '!=', '>': '>', '<': '<' }
 
@@ -67,64 +69,83 @@ function ConditionNode({ node, onChange, onRemove, itemOptions, depth }) {
 }
 
 function ConditionGroup({ node, onChange, onRemove, itemOptions, depth = 0 }) {
-  const indent = depth > 0 ? { marginLeft: depth * 14 } : {}
+  const [collapsed, setCollapsed] = useState(false)
+  const depthClass = `condition-group--depth-${depth % 4}`
 
   if (node.type === 'NOT') {
     return (
-      <div className="condition-group condition-group--not" style={indent}>
+      <div className={`condition-group condition-group--not ${depthClass}`}>
         <div className="condition-group-header">
+          <button type="button" className="condition-collapse-btn" onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? 'Expand' : 'Collapse'}>
+            <span className={`condition-collapse-chevron${collapsed ? ' collapsed' : ''}`}>›</span>
+          </button>
           <span className="condition-group-not-badge">NOT</span>
           {onRemove && (
             <button className="condition-remove-btn" type="button" onClick={onRemove} aria-label="Remove NOT group">×</button>
           )}
         </div>
-        <ConditionNode
-          node={node.child || { type: 'AND', children: [] }}
-          onChange={child => onChange({ ...node, child })}
-          onRemove={null}
-          itemOptions={itemOptions}
-          depth={depth + 1}
-        />
+        {!collapsed && (
+          <div className="condition-group-children">
+            <ConditionNode
+              node={node.child || { type: 'AND', children: [] }}
+              onChange={child => onChange({ ...node, child })}
+              onRemove={null}
+              itemOptions={itemOptions}
+              depth={depth + 1}
+            />
+          </div>
+        )}
       </div>
     )
   }
 
+  const childCount = (node.children || []).length
   return (
-    <div className="condition-group" style={indent}>
+    <div className={`condition-group ${depthClass}`}>
       <div className="condition-group-header">
+        <button type="button" className="condition-collapse-btn" onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? 'Expand' : 'Collapse'}>
+          <span className={`condition-collapse-chevron${collapsed ? ' collapsed' : ''}`}>›</span>
+        </button>
         <div className="logic-toggle">
           {['AND', 'OR'].map(l => (
             <button key={l} type="button" className={`logic-btn ${node.type === l ? 'active' : ''}`}
               onClick={() => onChange({ ...node, type: l })}>{l}</button>
           ))}
         </div>
+        {collapsed && childCount > 0 && (
+          <span className="condition-collapsed-count">{childCount} condition{childCount !== 1 ? 's' : ''}</span>
+        )}
         {onRemove && (
           <button className="condition-remove-btn" type="button" onClick={onRemove} aria-label="Remove group">×</button>
         )}
       </div>
-      {(node.children || []).map((child, i) => (
-        <ConditionNode
-          key={i} node={child}
-          onChange={updated => onChange({ ...node, children: node.children.map((c, j) => j === i ? updated : c) })}
-          onRemove={() => onChange({ ...node, children: node.children.filter((_, j) => j !== i) })}
-          itemOptions={itemOptions}
-          depth={depth + 1}
-        />
-      ))}
-      <div className="condition-add-row">
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'leaf', item_key: '', item_label: '', operator: '≥', value: '' }] })}>
-          + Condition
-        </button>
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'OR', children: [] }] })}>
-          + Group
-        </button>
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'NOT', child: { type: 'AND', children: [] } }] })}>
-          + NOT
-        </button>
-      </div>
+      {!collapsed && (
+        <div className="condition-group-children">
+          {(node.children || []).map((child, i) => (
+            <ConditionNode
+              key={i} node={child}
+              onChange={updated => onChange({ ...node, children: node.children.map((c, j) => j === i ? updated : c) })}
+              onRemove={() => onChange({ ...node, children: node.children.filter((_, j) => j !== i) })}
+              itemOptions={itemOptions}
+              depth={depth + 1}
+            />
+          ))}
+          <div className="condition-add-row">
+            <button type="button" className="add-condition-btn"
+              onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'leaf', item_key: '', item_label: '', operator: '≥', value: '' }] })}>
+              + Condition
+            </button>
+            <button type="button" className="add-condition-btn"
+              onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'OR', children: [] }] })}>
+              + Group
+            </button>
+            <button type="button" className="add-condition-btn"
+              onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'NOT', child: { type: 'AND', children: [] } }] })}>
+              + NOT
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
