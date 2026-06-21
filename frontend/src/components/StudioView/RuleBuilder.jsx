@@ -593,6 +593,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
             <div className="wizard-nav-spacer" />
             {editingRuleId ? (
               <button type="button" className="wizard-cancel-btn" onClick={cancelEdit}>Cancel</button>
+            ) : rule.template && step === 'conditions' ? (
+              <>
+                <button type="button" className="wizard-cancel-btn" onClick={() => { updateRule({ activation_tokens: [emptyCondToken()] }); setCondError('') }}>Reset Activation</button>
+                {!isUnary && <button type="button" className="wizard-cancel-btn" onClick={() => { updateRule({ correlation_tokens: [emptyCondToken()] }); setCondError('') }}>Reset Target</button>}
+              </>
             ) : rule.template ? (
               <button type="button" className="wizard-cancel-btn" onClick={resetStep}>Reset</button>
             ) : null}
