@@ -81,6 +81,10 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('studio_custom_event_types') || '[]') }
     catch { return [] }
   })
+  const [customDataConditions, setCustomDataConditions] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('studio_custom_data_conditions') || '[]') }
+    catch { return [] }
+  })
 
   // Load case manifest
   useEffect(() => {
@@ -185,6 +189,20 @@ export default function App() {
             const updated = customEventTypes.filter(e => e.id !== id)
             setCustomEventTypes(updated)
             localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
+          }}
+          customDataConditions={customDataConditions}
+          onSaveCustomDataCondition={cond => {
+            const condWithId = cond.id ? cond : { ...cond, id: `CDC-${Date.now()}` }
+            const updated = cond.id
+              ? customDataConditions.map(c => c.id === cond.id ? condWithId : c)
+              : [...customDataConditions, condWithId]
+            setCustomDataConditions(updated)
+            localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
+          }}
+          onDeleteCustomDataCondition={id => {
+            const updated = customDataConditions.filter(c => c.id !== id)
+            setCustomDataConditions(updated)
+            localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
           }}
         />
       )

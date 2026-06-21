@@ -4880,6 +4880,27 @@
   gap: 0.6rem;
 }
 
+.saved-event-types-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text-muted, #4a6278);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.4rem 0;
+}
+
+.condition-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.studio-select--inline {
+  width: auto;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+}
+
 .custom-event-card {
   background: var(--color-bg-card, #fff);
   border: 1px solid var(--color-border-light, #cfd8dc);

@@ -437,12 +437,18 @@ class QueryRequest(BaseModel):
     limit: int = 200
 
 
+class CustomDataItem(BaseModel):
+    source_table: str
+    itemids: list[int]
+
+
 class RunRequest(BaseModel):
     sample_size: int = 50
     seed: int = 42
     include_predefined: bool = True
     custom_rules: list[CustomRuleInput] = []
     custom_event_types: list[CustomEventType] = []
+    custom_data_items: list[CustomDataItem] = []
     trigger_event: str = "InvasiveVentilationStarted"
 
 
@@ -756,6 +762,88 @@ def _fetch_custom_events(
     return result
 
 
+def _fetch_condition_data(
+    stay_ids: list[int],
+    data_items: list[CustomDataItem],
+) -> dict[str, Any]:
+    """Fetch raw measurements for custom data condition items, keyed by stay_id string.
+
+    Returns rows with itemid/value_num/value_raw but no activity, so they populate
+    the items dict in _build_items_snapshot without creating spurious activities.
+    """
+    import pandas as pd
+    from database.client import get_postgres_connection
+
+    TABLE_QUERIES = {
+        "chartevents": (
+            "SELECT stay_id, itemid, charttime AS event_time,"
+            " value AS value_raw, valuenum AS value_num"
+            " FROM mimiciv_icu.chartevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+            " AND (error IS NULL OR error = 0)"
+        ),
+        "inputevents": (
+            "SELECT stay_id, itemid, starttime AS event_time,"
+            " NULL AS value_raw, amount AS value_num"
+            " FROM mimiciv_icu.inputevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+        ),
+        "outputevents": (
+            "SELECT stay_id, itemid, charttime AS event_time,"
+            " NULL AS value_raw, value AS value_num"
+            " FROM mimiciv_icu.outputevents"
+            " WHERE stay_id = ANY(%(stay_ids)s) AND itemid = ANY(%(itemids)s)"
+        ),
+        "labevents": (
+            "SELECT s.stay_id, l.itemid, l.charttime AS event_time,"
+            " l.value AS value_raw, l.valuenum AS value_num"
+            " FROM mimiciv_hosp.labevents l"
+            " JOIN mimiciv_icu.icustays s ON l.hadm_id = s.hadm_id"
+            " WHERE s.stay_id = ANY(%(stay_ids)s) AND l.itemid = ANY(%(itemids)s)"
+        ),
+    }
+
+    all_rows: list[dict] = []
+    conn = None
+    try:
+        conn = get_postgres_connection()
+        cur = conn.cursor()
+        for item in data_items:
+            sql = TABLE_QUERIES.get(item.source_table)
+            if not sql or not item.itemids:
+                continue
+            cur.execute(sql, {"stay_ids": stay_ids, "itemids": item.itemids})
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                r = dict(zip(cols, row))
+                all_rows.append({
+                    "case_id": str(r["stay_id"]),
+                    "activity": None,
+                    "timestamp": pd.to_datetime(r["event_time"]),
+                    "source_table": item.source_table,
+                    "itemid": r["itemid"],
+                    "value_raw": r.get("value_raw"),
+                    "value_num": r.get("value_num"),
+                    "unit": None,
+                    "attrs": None,
+                    "patient_id": None,
+                    "stay_id": r["stay_id"],
+                })
+        cur.close()
+    finally:
+        if conn:
+            conn.close()
+
+    if not all_rows:
+        return {}
+
+    df = pd.DataFrame(all_rows)
+    result: dict[str, Any] = {}
+    for sid, grp in df.groupby("case_id"):
+        result[str(sid)] = grp.reset_index(drop=True)
+    return result
+
+
 def _run_analysis(job_id: str, request: RunRequest) -> None:
     """Background thread: run conformance on a sample and store result."""
     cancel_event = _job_cancel[job_id]
@@ -830,6 +918,18 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                     f"Custom event fetch failed: {e}. Custom events skipped."
                 ]
 
+        condition_data_by_stay: dict[str, Any] = {}
+        if request.custom_data_items:
+            try:
+                condition_data_by_stay = _fetch_condition_data(
+                    [int(s) for s in sample_ids],
+                    request.custom_data_items,
+                )
+            except Exception as e:
+                job["warnings"] = job.get("warnings", []) + [
+                    f"Condition data fetch failed: {e}. Extra measurements skipped."
+                ]
+
         # Each entry: (stay_id, trace_results, episode_outcome)
         all_episode_data = []
 
@@ -846,6 +946,12 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
             custom_df = custom_events_by_stay.get(str(stay_id))
             if custom_df is not None and not custom_df.empty:
                 df = pd.concat([df, custom_df], ignore_index=True)
+
+            cond_df = condition_data_by_stay.get(str(stay_id))
+            if cond_df is not None and not cond_df.empty:
+                df = pd.concat([df, cond_df], ignore_index=True)
+
+            if custom_df is not None or cond_df is not None:
                 df = df.sort_values("timestamp").reset_index(drop=True)
 
             if not df.empty:

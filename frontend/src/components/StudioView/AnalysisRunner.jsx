@@ -88,6 +88,27 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
     catch { return [] }
   })()
 
+  const savedDataConditions = (() => {
+    try { return JSON.parse(localStorage.getItem('studio_custom_data_conditions') || '[]') }
+    catch { return [] }
+  })()
+
+  // Deduplicate data items by (source_table, itemid) across all saved conditions
+  const customDataItems = (() => {
+    const byTable = {}
+    for (const cond of savedDataConditions) {
+      for (const item of (cond.data_items || [])) {
+        const key = item.source_table
+        if (!byTable[key]) byTable[key] = new Set()
+        byTable[key].add(item.itemid)
+      }
+    }
+    return Object.entries(byTable).map(([source_table, ids]) => ({
+      source_table,
+      itemids: [...ids],
+    }))
+  })()
+
   async function startRun() {
     localStorage.setItem('analysis_runner_sample_size', JSON.stringify(sampleSize))
     localStorage.removeItem('analysis_runner_result')
@@ -125,6 +146,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
         value_filter: et.value_filter || null,
         sql: et.sql || null,
       })),
+      custom_data_items: customDataItems,
     }
 
     const res = await fetch('/api/run', {

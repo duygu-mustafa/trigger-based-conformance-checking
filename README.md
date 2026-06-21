@@ -119,7 +119,7 @@ For long runs, use `tmux` so the process survives terminal disconnects.
 
 ```bash
 tmux new -s eventlog
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200
 # detach with Ctrl+b then d
 ```
 

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import DeclareVisualizer from './DeclareVisualizer'
 import CustomEventModal from './CustomEventModal'
+import DataConditionModal from './DataConditionModal'
+import { ConditionTree, treeToExpr, migrateFlat } from './ConditionTree'
 import { UilPen } from '@iconscout/react-unicons'
 
 // Templates offered to clinicians, grouped for usability
@@ -48,8 +50,6 @@ const TEMPLATE_MAP = Object.fromEntries(
   TEMPLATE_OPTIONS.flatMap(g => g.items.map(t => [t.id, t]))
 )
 
-const OPERATORS = ['≥', '≤', '=', '≠', '>', '<']
-
 const STEPS = [
   { id: 'template', label: 'Rule type' },
   { id: 'activities', label: 'Activities' },
@@ -78,153 +78,10 @@ function StepIndicator({ steps, currentStep }) {
   )
 }
 
-// ── Condition tree ─────────────────────────────────────────────────────────
-// leaf: { type:'leaf', item_key, item_label, operator, value }
-// group: { type:'AND'|'OR', children: ConditionNode[] }
-// not:  { type:'NOT', child: ConditionNode }
-
-const REVERSE_OP_MAP = { '≥': '>=', '≤': '<=', '=': '==', '≠': '!=', '>': '>', '<': '<' }
-
-function treeToExpr(node) {
-  if (!node) return ''
-  if (node.type === 'leaf') {
-    if (!node.item_key || node.value === '') return ''
-    const op = REVERSE_OP_MAP[node.operator] || node.operator
-    const val = isNaN(parseFloat(node.value)) ? `'${node.value}'` : node.value
-    return `items['${node.item_key}'] ${op} ${val}`
-  }
-  if (node.type === 'NOT') {
-    const inner = treeToExpr(node.child)
-    return inner ? `NOT (${inner})` : ''
-  }
-  const parts = (node.children || []).map(c => treeToExpr(c)).filter(Boolean).map(s => `(${s})`)
-  if (!parts.length) return ''
-  if (parts.length === 1) return parts[0].slice(1, -1)
-  return parts.join(` ${node.type} `)
-}
-
-function migrateFlat(conditions, logic) {
-  if (!conditions?.length) return null
-  return { type: logic || 'AND', children: conditions.map(c => ({ type: 'leaf', ...c })) }
-}
-
-function ConditionLeaf({ node, onChange, onRemove, itemOptions }) {
-  return (
-    <div className="condition-row">
-      <select
-        className="condition-select condition-select--item"
-        value={node.item_key || ''}
-        onChange={e => {
-          const opt = itemOptions.find(o => o.key === e.target.value)
-          onChange({ ...node, item_key: e.target.value, item_label: opt?.label || e.target.value })
-        }}
-        aria-label="Clinical measurement"
-      >
-        <option value="">Select measurement…</option>
-        {itemOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-      </select>
-      <select
-        className="condition-select condition-select--op"
-        value={node.operator || '≥'}
-        onChange={e => onChange({ ...node, operator: e.target.value })}
-        aria-label="Comparison operator"
-      >
-        {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
-      </select>
-      <input
-        className="condition-input"
-        type="number" step="any" placeholder="Value"
-        value={node.value || ''}
-        onChange={e => onChange({ ...node, value: e.target.value })}
-        aria-label="Threshold value"
-      />
-      <button className="condition-remove-btn" onClick={onRemove} type="button" aria-label="Remove condition">×</button>
-    </div>
-  )
-}
-
-function ConditionNode({ node, onChange, onRemove, itemOptions, depth }) {
-  if (node.type === 'leaf') {
-    return <ConditionLeaf node={node} onChange={onChange} onRemove={onRemove} itemOptions={itemOptions} />
-  }
-  return <ConditionGroup node={node} onChange={onChange} onRemove={onRemove} itemOptions={itemOptions} depth={depth} />
-}
-
-function ConditionGroup({ node, onChange, onRemove, itemOptions, depth = 0 }) {
-  const indent = depth > 0 ? { marginLeft: depth * 14 } : {}
-
-  if (node.type === 'NOT') {
-    return (
-      <div className="condition-group condition-group--not" style={indent}>
-        <div className="condition-group-header">
-          <span className="condition-group-not-badge">NOT</span>
-          {onRemove && (
-            <button className="condition-remove-btn" type="button" onClick={onRemove} aria-label="Remove NOT group">×</button>
-          )}
-        </div>
-        <ConditionNode
-          node={node.child || { type: 'AND', children: [] }}
-          onChange={child => onChange({ ...node, child })}
-          onRemove={null}
-          itemOptions={itemOptions}
-          depth={depth + 1}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="condition-group" style={indent}>
-      <div className="condition-group-header">
-        <div className="logic-toggle">
-          {['AND', 'OR'].map(l => (
-            <button key={l} type="button" className={`logic-btn ${node.type === l ? 'active' : ''}`}
-              onClick={() => onChange({ ...node, type: l })}>{l}</button>
-          ))}
-        </div>
-        {onRemove && (
-          <button className="condition-remove-btn" type="button" onClick={onRemove} aria-label="Remove group">×</button>
-        )}
-      </div>
-      {(node.children || []).map((child, i) => (
-        <ConditionNode
-          key={i} node={child}
-          onChange={updated => onChange({ ...node, children: node.children.map((c, j) => j === i ? updated : c) })}
-          onRemove={() => onChange({ ...node, children: node.children.filter((_, j) => j !== i) })}
-          itemOptions={itemOptions}
-          depth={depth + 1}
-        />
-      ))}
-      <div className="condition-add-row">
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'leaf', item_key: '', item_label: '', operator: '≥', value: '' }] })}>
-          + Condition
-        </button>
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'OR', children: [] }] })}>
-          + Group
-        </button>
-        <button type="button" className="add-condition-btn"
-          onClick={() => onChange({ ...node, children: [...(node.children || []), { type: 'NOT', child: { type: 'AND', children: [] } }] })}>
-          + NOT
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ConditionTree({ tree, onChange, itemOptions }) {
-  const root = tree || { type: 'AND', children: [] }
-  return (
-    <div className="condition-tree">
-      <ConditionGroup node={root} onChange={onChange} onRemove={null} itemOptions={itemOptions} depth={0} />
-    </div>
-  )
-}
-
-export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRule, customEventTypes = [], onSaveCustomEvent, onDeleteCustomEvent }) {
+export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRule, customEventTypes = [], onSaveCustomEvent, onDeleteCustomEvent, customDataConditions = [], onSaveCustomDataCondition, onDeleteCustomDataCondition }) {
   const [step, setStep] = useState('template')
   const [showEventModal, setShowEventModal] = useState(false)
+  const [showConditionModal, setShowConditionModal] = useState(false)
   const [editingRuleId, setEditingRuleId] = useState(null)
   const [rule, setRule] = useState({
     template: '',
@@ -256,10 +113,16 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
   const allActivities = activities.all || []
 
   // Build item options list from itemLabels (hide internal/derived ids)
-  const itemOptions = Object.entries(itemLabels)
+  const baseItemOptions = Object.entries(itemLabels)
     .filter(([key]) => !key.startsWith('derived_') && !['sbt_status', 'sbt_outcome'].includes(key))
     .map(([key, label]) => ({ key, label: label.split('#')[0].trim() }))
     .sort((a, b) => a.label.localeCompare(b.label))
+  const customItems = customDataConditions
+    .flatMap(c => c.data_items || [])
+    .filter((it, i, arr) => arr.findIndex(x => x.itemid === it.itemid) === i)
+    .filter(it => !itemLabels[String(it.itemid)])
+    .map(it => ({ key: String(it.itemid), label: it.label }))
+  const itemOptions = [...baseItemOptions, ...customItems]
 
   function updateRule(patch) {
     setRule(r => ({ ...r, ...patch }))
@@ -527,6 +390,24 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                 <div className="condition-section">
                   <div className="condition-section-header">
                     <h4>Conditions on activation event</h4>
+                    <div className="condition-section-actions">
+                      {customDataConditions.length > 0 && (
+                        <select
+                          className="studio-select studio-select--inline"
+                          value=""
+                          onChange={e => {
+                            const cond = customDataConditions.find(c => c.id === e.target.value)
+                            if (cond) updateRule({ activation_condition_tree: cond.tree })
+                          }}
+                        >
+                          <option value="">Load saved…</option>
+                          {customDataConditions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      )}
+                      <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
+                        Define new condition
+                      </button>
+                    </div>
                   </div>
                   <ConditionTree
                     tree={rule.activation_condition_tree}
@@ -539,6 +420,24 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                   <div className="condition-section">
                     <div className="condition-section-header">
                       <h4>Conditions on target event</h4>
+                      <div className="condition-section-actions">
+                        {customDataConditions.length > 0 && (
+                          <select
+                            className="studio-select studio-select--inline"
+                            value=""
+                            onChange={e => {
+                              const cond = customDataConditions.find(c => c.id === e.target.value)
+                              if (cond) updateRule({ correlation_condition_tree: cond.tree })
+                            }}
+                          >
+                            <option value="">Load saved…</option>
+                            {customDataConditions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        )}
+                        <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
+                          Define new condition
+                        </button>
+                      </div>
                     </div>
                     <ConditionTree
                       tree={rule.correlation_condition_tree}
@@ -742,6 +641,14 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
         savedEventTypes={customEventTypes}
         onSave={onSaveCustomEvent}
         onDelete={onDeleteCustomEvent}
+      />
+      <DataConditionModal
+        isOpen={showConditionModal}
+        onClose={() => setShowConditionModal(false)}
+        savedConditions={customDataConditions}
+        onSave={onSaveCustomDataCondition}
+        onDelete={onDeleteCustomDataCondition}
+        itemOptions={itemOptions}
       />
     </div>
   )
