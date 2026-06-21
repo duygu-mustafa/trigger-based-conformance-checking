@@ -237,28 +237,33 @@ const SummaryView = ({ summaryData, section = 'frequencies', onSelectStay }) => 
             <div className="forensics-master" style={{ width: forensicsSidebarWidth, flex: 'none' }}>
               <div className="master-header">
                 <h4>Most Frequent {analysisMode === 'violation' ? 'Violations' : 'Satisfactions'}</h4>
-                <span className="header-hint">Rate</span>
+              </div>
+              <div className="runner-freq-legend">
+                <span className="runner-freq-legend-item runner-freq-legend-item--fail">Failure violation rate</span>
+                <span className="runner-freq-legend-item runner-freq-legend-item--succ">Success violation rate</span>
               </div>
               <div className="forensics-list">
                 {topViolations.slice(0, 15).map(v => {
-                  const rate = analysisMode === 'violation'
-                    ? v.episode_share
-                    : (v.count_satisfied / (summaryData?.total_episodes || 1));
+                  const cls = v.rule_class || 'neutral'
+                  const pct = ((v.episode_share || 0) * 100).toFixed(1)
+                  const icon = getConstraintIcon(v.constraint_id)
                   return (
                     <div
                       key={v.constraint_id}
-                      className={`forensics-row ${selectedConstraint?.constraint_id === v.constraint_id ? 'active' : ''}`}
+                      className={`run-constraint-row ${selectedConstraint?.constraint_id === v.constraint_id ? 'run-constraint-row--selected' : ''}`}
                       onClick={() => setSelectedConstraintId(v.constraint_id)}
                     >
-                      <div className="row-bar-bg" style={{ width: `${rate * 100}%`, backgroundColor: '#94a3b8' }} />
-                      <div className="row-content">
-                        <div className="row-main">
-                          <img src={getConstraintIcon(v.constraint_id)} alt="" className="row-icon" />
-                          <span className="row-label" title={v.constraint_label}>{v.constraint_label}</span>
+                      <div className="run-constraint-row-top">
+                        {icon && <img className="run-constraint-icon" src={icon} alt="" />}
+                        <span className="run-constraint-label" title={v.constraint_label}>{v.constraint_label}</span>
+                        <span className={`run-constraint-class run-constraint-class--${cls}`}>{cls}</span>
+                      </div>
+                      <div className="run-constraint-bar-wrap">
+                        <div className="run-constraint-bar-track">
+                          <div className="run-constraint-bar-viol" style={{ width: `${((v.violation_rate_failure || 0) * 100).toFixed(1)}%` }} title={`Failure: ${((v.violation_rate_failure || 0) * 100).toFixed(1)}%`} />
+                          <div className="run-constraint-bar-succ" style={{ width: `${((v.violation_rate_success || 0) * 100).toFixed(1)}%` }} title={`Success: ${((v.violation_rate_success || 0) * 100).toFixed(1)}%`} />
                         </div>
-                        <div className="row-meta">
-                          <span className="row-percent">{formatPercent(rate)}</span>
-                        </div>
+                        <span className="run-constraint-pct">{pct}%</span>
                       </div>
                     </div>
                   );

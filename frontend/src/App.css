@@ -3958,6 +3958,11 @@
   gap: 1rem;
   font-size: 0.7rem;
   color: var(--color-text-dim, #7a8aa0);
+  padding-top: 0.5rem;
+  padding-left: 1rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border, #2a3447);
 }
 
 .runner-freq-legend-item {
