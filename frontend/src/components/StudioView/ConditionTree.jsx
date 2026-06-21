@@ -1,14 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 
-export const OPERATORS = ['≥', '≤', '=', '≠', '>', '<']
-export const REVERSE_OP_MAP = { '≥': '>=', '≤': '<=', '=': '==', '≠': '!=', '>': '>', '<': '<' }
+export const OPERATORS = ['≥', '≤', '=', '≠', '>', '<', 'is', 'contains', 'in']
+export const REVERSE_OP_MAP = { '≥': '>=', '≤': '<=', '=': '==', '≠': '!=', '>': '>', '<': '<', 'is': 'is', 'contains': 'contains', 'in': 'in' }
+const STRING_OPS = new Set(['is', 'contains', 'in'])
 
 export function treeToExpr(node) {
   if (!node) return ''
   if (node.type === 'leaf') {
     if (!node.item_key || node.value === '') return ''
     const op = REVERSE_OP_MAP[node.operator] || node.operator
-    const val = isNaN(parseFloat(node.value)) ? `'${node.value}'` : node.value
+    const val = STRING_OPS.has(node.operator) ? `'${node.value}'` : (isNaN(parseFloat(node.value)) ? `'${node.value}'` : node.value)
     return `items['${node.item_key}'] ${op} ${val}`
   }
   if (node.type === 'NOT') {
@@ -51,7 +52,9 @@ function ConditionLeaf({ node, onChange, onRemove, itemOptions }) {
       </select>
       <input
         className="condition-input"
-        type="number" step="any" placeholder="Value"
+        type={STRING_OPS.has(node.operator) ? 'text' : 'number'}
+        step={STRING_OPS.has(node.operator) ? undefined : 'any'}
+        placeholder={node.operator === 'in' ? 'val1, val2, …' : 'Value'}
         value={node.value || ''}
         onChange={e => onChange({ ...node, value: e.target.value })}
         aria-label="Threshold value"
@@ -170,7 +173,7 @@ export function tokensToExpr(tokens) {
     if (t.type === 'close') return [')']
     if (!t.item_key || t.value === '') return []
     const op = REVERSE_OP_MAP[t.operator] || t.operator
-    const val = isNaN(parseFloat(t.value)) ? `'${t.value}'` : t.value
+    const val = STRING_OPS.has(t.operator) ? `'${t.value}'` : (isNaN(parseFloat(t.value)) ? `'${t.value}'` : t.value)
     const leaf = `items['${t.item_key}'] ${op} ${val}`
     return [t.negated ? `NOT (${leaf})` : leaf]
   }).join(' ')
@@ -294,7 +297,9 @@ function FormulaCondCard({ token, onChange, onRemove, itemOptions }) {
       </select>
       <input
         className="condition-input"
-        type="number" step="any" placeholder="Value"
+        type={STRING_OPS.has(token.operator) ? 'text' : 'number'}
+        step={STRING_OPS.has(token.operator) ? undefined : 'any'}
+        placeholder={token.operator === 'in' ? 'val1, val2, …' : 'Value'}
         value={token.value || ''}
         onChange={e => onChange({ ...token, value: e.target.value })}
         aria-label="Value"
@@ -304,7 +309,7 @@ function FormulaCondCard({ token, onChange, onRemove, itemOptions }) {
   )
 }
 
-function FormulaInserter({ pos, onInsert, customDataConditions }) {
+function FormulaInserter({ pos, onInsert, customDataConditions, isFirst }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -321,7 +326,7 @@ function FormulaInserter({ pos, onInsert, customDataConditions }) {
     <div className="formula-inserter" ref={ref}>
       <button type="button" className="formula-inserter-btn" onClick={() => setOpen(o => !o)} aria-label="Insert here">+</button>
       {open && (
-        <div className="formula-inserter-popover">
+        <div className={`formula-inserter-popover${isFirst ? ' formula-inserter-popover--first' : ''}`}>
           <button type="button" className="formula-inserter-action" onClick={() => insert([emptyCondToken()])}>Condition</button>
           <button type="button" className="formula-inserter-action formula-inserter-action--bracket" onClick={() => insert([{ type: 'open', negated: false }])}>(</button>
           <button type="button" className="formula-inserter-action formula-inserter-action--bracket" onClick={() => insert([{ type: 'close' }])}>)</button>
@@ -380,7 +385,12 @@ export function FormulaBuilder({ tokens, onChange, itemOptions, customDataCondit
 
   function renderToken(t, i) {
     if (t.type === 'op') {
-      return <button key={i} type="button" className="formula-op" onClick={() => flipOp(i)} title="Click to switch AND/OR">{t.value}</button>
+      return (
+        <div key={i} className="formula-op-wrap">
+          <button type="button" className="formula-op" onClick={() => flipOp(i)} title="Click to switch AND/OR">{t.value}</button>
+          <button type="button" className="formula-op-remove" onClick={() => removeToken(i)} aria-label="Remove operator">×</button>
+        </div>
+      )
     }
     if (t.type === 'open') {
       return (
@@ -405,7 +415,7 @@ export function FormulaBuilder({ tokens, onChange, itemOptions, customDataCondit
   return (
     <div className="formula-builder">
       <div className="formula-strip">
-        <FormulaInserter pos={0} onInsert={insertTokens} customDataConditions={customDataConditions} />
+        <FormulaInserter pos={0} onInsert={insertTokens} customDataConditions={customDataConditions} isFirst />
         {toks.map((t, i) => (
           <div key={i} className="formula-token-slot">
             {renderToken(t, i)}

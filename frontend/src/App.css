@@ -3287,6 +3287,35 @@
   border-color: var(--color-primary, #5b8dee);
 }
 
+.formula-op-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.formula-op-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-danger, #e05252);
+  border: none;
+  color: #fff;
+  font-size: 0.65rem;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.formula-op-wrap:hover .formula-op-remove {
+  display: flex;
+}
+
 .formula-not-toggle {
   font-size: 0.65rem;
   font-weight: 700;
@@ -3424,6 +3453,11 @@
   min-width: 110px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.12);
   z-index: 100;
+}
+
+.formula-inserter-popover--first {
+  left: 0;
+  transform: none;
 }
 
 .formula-inserter-action {
