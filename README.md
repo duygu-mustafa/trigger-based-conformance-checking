@@ -132,7 +132,7 @@ tmux attach -t eventlog
 If the job is interrupted, resume where it left off:
 
 ```bash
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --resume
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --resume
 ```
 
 Alternative without tmux (`nohup`):

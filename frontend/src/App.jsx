@@ -169,45 +169,6 @@ export default function App() {
       return <RuleLibrary rules={rules} loading={rulesLoading} />
     }
 
-    if (activePage === 'builder') {
-      if (apiError) return <ApiErrorState error={apiError} />
-      return (
-        <RuleBuilder
-          activities={mergedActivities}
-          itemLabels={itemLabels}
-          onSaveRule={rule => setCustomRules(r => [...r, rule])}
-          customEventTypes={customEventTypes}
-          onSaveCustomEvent={et => {
-            const eventWithId = et.id ? et : { ...et, id: `CET-${Date.now()}` }
-            const updated = et.id
-              ? customEventTypes.map(e => e.id === et.id ? eventWithId : e)
-              : [...customEventTypes, eventWithId]
-            setCustomEventTypes(updated)
-            localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
-          }}
-          onDeleteCustomEvent={id => {
-            const updated = customEventTypes.filter(e => e.id !== id)
-            setCustomEventTypes(updated)
-            localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
-          }}
-          customDataConditions={customDataConditions}
-          onSaveCustomDataCondition={cond => {
-            const condWithId = cond.id ? cond : { ...cond, id: `CDC-${Date.now()}` }
-            const updated = cond.id
-              ? customDataConditions.map(c => c.id === cond.id ? condWithId : c)
-              : [...customDataConditions, condWithId]
-            setCustomDataConditions(updated)
-            localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
-          }}
-          onDeleteCustomDataCondition={id => {
-            const updated = customDataConditions.filter(c => c.id !== id)
-            setCustomDataConditions(updated)
-            localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
-          }}
-        />
-      )
-    }
-
     if (activePage === 'runner') {
       if (apiError) return <ApiErrorState error={apiError} />
       return (
@@ -264,7 +225,45 @@ export default function App() {
         </header>
 
         <main className="page-content">
-          {renderContent()}
+          {activePage === 'builder' && apiError
+            ? <ApiErrorState error={apiError} />
+            : <div style={activePage !== 'builder' ? { display: 'none' } : undefined}>
+                <RuleBuilder
+                  activities={mergedActivities}
+                  itemLabels={itemLabels}
+                  onSaveRule={rule => setCustomRules(r => [...r, rule])}
+                  customEventTypes={customEventTypes}
+                  onSaveCustomEvent={et => {
+                    const eventWithId = et.id ? et : { ...et, id: `CET-${Date.now()}` }
+                    const updated = et.id
+                      ? customEventTypes.map(e => e.id === et.id ? eventWithId : e)
+                      : [...customEventTypes, eventWithId]
+                    setCustomEventTypes(updated)
+                    localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
+                  }}
+                  onDeleteCustomEvent={id => {
+                    const updated = customEventTypes.filter(e => e.id !== id)
+                    setCustomEventTypes(updated)
+                    localStorage.setItem('studio_custom_event_types', JSON.stringify(updated))
+                  }}
+                  customDataConditions={customDataConditions}
+                  onSaveCustomDataCondition={cond => {
+                    const condWithId = cond.id ? cond : { ...cond, id: `CDC-${Date.now()}` }
+                    const updated = cond.id
+                      ? customDataConditions.map(c => c.id === cond.id ? condWithId : c)
+                      : [...customDataConditions, condWithId]
+                    setCustomDataConditions(updated)
+                    localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
+                  }}
+                  onDeleteCustomDataCondition={id => {
+                    const updated = customDataConditions.filter(c => c.id !== id)
+                    setCustomDataConditions(updated)
+                    localStorage.setItem('studio_custom_data_conditions', JSON.stringify(updated))
+                  }}
+                />
+              </div>
+          }
+          {activePage !== 'builder' && renderContent()}
         </main>
       </div>
     </div>
