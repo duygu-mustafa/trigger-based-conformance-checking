@@ -46,7 +46,7 @@ function RunConstraintRow({ item, selected, onSelect }) {
 
 function loadPersistedResult() {
   try {
-    const saved = localStorage.getItem('analysis_runner_result')
+    const saved = sessionStorage.getItem('analysis_runner_result')
     return saved ? JSON.parse(saved) : null
   } catch { return null }
 }
@@ -73,7 +73,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
 
   useEffect(() => {
     if (jobState?.status === 'done' && jobState?.result) {
-      localStorage.setItem('analysis_runner_result', JSON.stringify(jobState))
+      sessionStorage.setItem('analysis_runner_result', JSON.stringify(jobState))
     }
   }, [jobState?.status])
 
@@ -81,7 +81,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
     try { return JSON.parse(localStorage.getItem('studio_custom_rules') || '[]') }
     catch { return [] }
   })()
-  const allCustomRules = [...customRules, ...savedRules]
+  const allCustomRules = [...new Map([...customRules, ...savedRules].map(r => [r.id, r])).values()]
 
   const savedEventTypes = (() => {
     try { return JSON.parse(localStorage.getItem('studio_custom_event_types') || '[]') }
@@ -111,7 +111,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
 
   async function startRun() {
     localStorage.setItem('analysis_runner_sample_size', JSON.stringify(sampleSize))
-    localStorage.removeItem('analysis_runner_result')
+    sessionStorage.removeItem('analysis_runner_result')
     setJobState({ status: 'running', progress: 0, total: sampleSize, done: 0, result: null, error: null })
     setJobId(null)
     setSelectedConstraintId(null)

@@ -423,13 +423,24 @@ class ValueFilter(BaseModel):
     value: float | str
 
 
+class ValueChangeSpec(BaseModel):
+    value_type: str = "numeric"           # "numeric" | "categorical"
+    prev_min: Optional[float] = None
+    prev_max: Optional[float] = None
+    next_min: Optional[float] = None
+    next_max: Optional[float] = None
+    prev_values: list[str] = []
+    next_values: list[str] = []
+
+
 class CustomEventType(BaseModel):
     name: str
-    kind: str = "table"                        # "table" | "sql"
+    kind: str = "table"                        # "table" | "sql" | "value_change"
     source_table: Optional[str] = None
     itemids: Optional[list[int | str]] = None
     value_filter: Optional[ValueFilter] = None
     sql: Optional[str] = None                  # populated when kind="sql"
+    value_change: Optional[ValueChangeSpec] = None  # populated when kind="value_change"
 
 
 class QueryRequest(BaseModel):
@@ -586,8 +597,9 @@ def _fetch_custom_events(
     import pandas as pd
     from database.client import get_postgres_connection
 
-    table_types = [et for et in event_types if et.kind != "sql"]
+    table_types = [et for et in event_types if et.kind == "table"]
     sql_types = [et for et in event_types if et.kind == "sql" and et.sql]
+    vc_types = [et for et in event_types if et.kind == "value_change" and et.value_change]
 
     by_table: dict[str, list[CustomEventType]] = {}
     for et in table_types:
@@ -746,6 +758,57 @@ def _fetch_custom_events(
                     })
             except Exception:
                 pass  # caller adds warning; skip this event type silently
+
+        # Value-change event types: emit at transition timestamp
+        def _in_range(v, lo, hi):
+            if v is None:
+                return False
+            if lo is not None and v < lo:
+                return False
+            if hi is not None and v > hi:
+                return False
+            return True
+
+        for et in vc_types:
+            spec = et.value_change
+            sql = TABLE_QUERIES.get(et.source_table)
+            if not sql:
+                continue
+            all_itemids = list(et.itemids or [])
+            if not all_itemids:
+                continue
+            try:
+                ordered_sql = f"{sql} ORDER BY stay_id, event_time"
+                cur.execute(ordered_sql, {"stay_ids": stay_ids, "itemids": all_itemids})
+                cols = [d[0] for d in cur.description]
+                rows_by_stay: dict[int, list[dict]] = {}
+                for row in cur.fetchall():
+                    r = dict(zip(cols, row))
+                    rows_by_stay.setdefault(r["stay_id"], []).append(r)
+                for stay_id, stay_rows in rows_by_stay.items():
+                    for prev_r, next_r in zip(stay_rows, stay_rows[1:]):
+                        if spec.value_type == "numeric":
+                            prev_ok = _in_range(prev_r.get("value_num"), spec.prev_min, spec.prev_max)
+                            next_ok = _in_range(next_r.get("value_num"), spec.next_min, spec.next_max)
+                        else:
+                            prev_ok = str(prev_r.get("value_raw") or "") in spec.prev_values
+                            next_ok = str(next_r.get("value_raw") or "") in spec.next_values
+                        if prev_ok and next_ok:
+                            all_rows.append({
+                                "case_id": str(stay_id),
+                                "activity": et.name,
+                                "timestamp": pd.to_datetime(next_r["event_time"]),
+                                "source_table": et.source_table,
+                                "itemid": next_r["itemid"],
+                                "value_raw": next_r.get("value_raw"),
+                                "value_num": next_r.get("value_num"),
+                                "unit": next_r.get("unit"),
+                                "attrs": [{"kind": "value_change_event"}],
+                                "patient_id": None,
+                                "stay_id": stay_id,
+                            })
+            except Exception:
+                pass
 
         cur.close()
     finally:

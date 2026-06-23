@@ -134,15 +134,25 @@ function QueryPreviewTable({ columns, rows }) {
 
 function EventTypeCard({ et, onDelete, onEdit }) {
   const isSql = et.kind === 'sql'
+  const isVc = et.kind === 'value_change'
+  const tableLabel = SOURCE_TABLE_OPTIONS.find(o => o.value === et.source_table)?.label || et.source_table
+
+  function vcSummary(vc) {
+    if (!vc) return null
+    if (vc.value_type === 'numeric') {
+      const from = `[${vc.prev_min ?? '–'}, ${vc.prev_max ?? '–'}]`
+      const to = `[${vc.next_min ?? '–'}, ${vc.next_max ?? '–'}]`
+      return `${from} → ${to}`
+    }
+    return `{${vc.prev_values.join(', ')}} → {${vc.next_values.join(', ')}}`
+  }
+
   return (
     <div className="custom-event-card">
       <div className="custom-event-card-header">
         <span className="custom-event-card-name">{et.name}</span>
         <span className="custom-event-card-table">
-          {isSql
-            ? 'Custom SQL'
-            : (SOURCE_TABLE_OPTIONS.find(o => o.value === et.source_table)?.label || et.source_table)
-          }
+          {isSql ? 'Custom SQL' : isVc ? `Value change · ${tableLabel}` : tableLabel}
         </span>
         <div className="custom-event-card-actions">
           <button
@@ -170,6 +180,11 @@ function EventTypeCard({ et, onDelete, onEdit }) {
               {item.itemid}: {item.label}
             </span>
           ))}
+        </div>
+      )}
+      {isVc && et.value_change && (
+        <div className="custom-event-card-filter">
+          Transition: <code>{vcSummary(et.value_change)}</code>
         </div>
       )}
       {et.value_filter && (
@@ -200,6 +215,17 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
   const [previewResult, setPreviewResult] = useState(null)
   const [previewError, setPreviewError] = useState('')
 
+  // Value-change mode state
+  const [vcItem, setVcItem] = useState(null)
+  const [vcValueType, setVcValueType] = useState('numeric')
+  const [vcPrevMin, setVcPrevMin] = useState('')
+  const [vcPrevMax, setVcPrevMax] = useState('')
+  const [vcNextMin, setVcNextMin] = useState('')
+  const [vcNextMax, setVcNextMax] = useState('')
+  const [vcPrevValues, setVcPrevValues] = useState([])
+  const [vcNextValues, setVcNextValues] = useState([])
+  const [vcTagInput, setVcTagInput] = useState({ prev: '', next: '' })
+
   const [error, setError] = useState('')
   const [editingEventId, setEditingEventId] = useState(null)
 
@@ -210,6 +236,20 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
       setMode('sql')
       setSqlName(et.name)
       setSql(et.sql)
+    } else if (et.kind === 'value_change') {
+      setMode('value_change')
+      setName(et.name)
+      setSourceTable(et.source_table || 'chartevents')
+      setVcItem(et.selectedItems?.[0] || null)
+      const vc = et.value_change || {}
+      setVcValueType(vc.value_type || 'numeric')
+      setVcPrevMin(vc.prev_min != null ? String(vc.prev_min) : '')
+      setVcPrevMax(vc.prev_max != null ? String(vc.prev_max) : '')
+      setVcNextMin(vc.next_min != null ? String(vc.next_min) : '')
+      setVcNextMax(vc.next_max != null ? String(vc.next_max) : '')
+      setVcPrevValues(vc.prev_values || [])
+      setVcNextValues(vc.next_values || [])
+      setVcTagInput({ prev: '', next: '' })
     } else {
       setMode('table')
       setName(et.name)
@@ -243,6 +283,15 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
     setSql('')
     setPreviewResult(null)
     setPreviewError('')
+    setVcItem(null)
+    setVcValueType('numeric')
+    setVcPrevMin('')
+    setVcPrevMax('')
+    setVcNextMin('')
+    setVcNextMax('')
+    setVcPrevValues([])
+    setVcNextValues([])
+    setVcTagInput({ prev: '', next: '' })
     setError('')
     setEditingEventId(null)
   }
@@ -307,6 +356,39 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
       if (editingEventId) et.id = editingEventId
       onSave(et)
       resetForm()
+    } else if (mode === 'value_change') {
+      if (!name.trim()) { setError('Name is required.'); return }
+      if (!vcItem) { setError('Select an item.'); return }
+      if (vcValueType === 'numeric') {
+        const hasPrev = vcPrevMin !== '' || vcPrevMax !== ''
+        const hasNext = vcNextMin !== '' || vcNextMax !== ''
+        if (!hasPrev || !hasNext) { setError('Specify at least one bound for both "from" and "to" ranges.'); return }
+      } else {
+        if (vcPrevValues.length === 0 || vcNextValues.length === 0) {
+          setError('Add at least one value to both "from" and "to" lists.'); return
+        }
+      }
+      const et = {
+        kind: 'value_change',
+        name: name.trim(),
+        source_table: sourceTable,
+        itemids: [vcItem.itemid],
+        selectedItems: [vcItem],
+        value_filter: null,
+        sql: null,
+        value_change: {
+          value_type: vcValueType,
+          prev_min: vcPrevMin !== '' ? parseFloat(vcPrevMin) : null,
+          prev_max: vcPrevMax !== '' ? parseFloat(vcPrevMax) : null,
+          next_min: vcNextMin !== '' ? parseFloat(vcNextMin) : null,
+          next_max: vcNextMax !== '' ? parseFloat(vcNextMax) : null,
+          prev_values: vcPrevValues,
+          next_values: vcNextValues,
+        },
+      }
+      if (editingEventId) et.id = editingEventId
+      onSave(et)
+      resetForm()
     } else {
       if (!sqlName.trim()) { setError('Name is required.'); return }
       if (!sql.trim()) { setError('SQL query is required.'); return }
@@ -343,6 +425,13 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
           </button>
           <button
             type="button"
+            className={`mode-toggle-btn${mode === 'value_change' ? ' mode-toggle-btn--active' : ''}`}
+            onClick={() => handleModeSwitch('value_change')}
+          >
+            Value change
+          </button>
+          <button
+            type="button"
             className={`mode-toggle-btn${mode === 'sql' ? ' mode-toggle-btn--active' : ''}`}
             onClick={() => handleModeSwitch('sql')}
           >
@@ -350,7 +439,163 @@ export default function CustomEventBuilder({ savedEventTypes = [], onSave, onDel
           </button>
         </div>
 
-        {mode === 'table' ? (
+        {mode === 'value_change' ? (
+          <>
+            <div className="field-group">
+              <label className="field-label">Activity name</label>
+              <input
+                className="studio-input"
+                placeholder="e.g. SpO2Drop"
+                value={name}
+                onChange={e => setName(e.target.value)}
+              />
+              <span className="field-hint">Fires when the item transitions between the specified value ranges.</span>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">MIMIC table</label>
+              <select
+                className="studio-select"
+                value={sourceTable}
+                onChange={e => { handleSourceTableChange(e.target.value); setVcItem(null) }}
+              >
+                {SOURCE_TABLE_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">Item</label>
+              {vcItem ? (
+                <div className="selected-items-chips">
+                  <span className="item-chip item-chip--removable">
+                    {vcItem.itemid}: {vcItem.label}
+                    <button type="button" className="chip-remove" onClick={() => setVcItem(null)} aria-label="Remove item">×</button>
+                  </span>
+                </div>
+              ) : (
+                <ItemSearch
+                  sourceTable={sourceTable}
+                  selectedItems={vcItem ? [vcItem] : []}
+                  onAdd={item => setVcItem(item)}
+                />
+              )}
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">Value type</label>
+              <div className="vc-type-toggle">
+                <label className="vc-radio-label">
+                  <input type="radio" name="vcValueType" value="numeric" checked={vcValueType === 'numeric'} onChange={() => setVcValueType('numeric')} />
+                  Numeric
+                </label>
+                <label className="vc-radio-label">
+                  <input type="radio" name="vcValueType" value="categorical" checked={vcValueType === 'categorical'} onChange={() => setVcValueType('categorical')} />
+                  Categorical
+                </label>
+              </div>
+            </div>
+
+            {vcValueType === 'numeric' ? (
+              <div className="field-group">
+                <label className="field-label">Transition range</label>
+                <div className="vc-range-grid">
+                  <div className="vc-range-col">
+                    <span className="vc-range-header">From</span>
+                    <div className="vc-range-row">
+                      <input className="studio-input" type="number" step="any" placeholder="min" value={vcPrevMin} onChange={e => setVcPrevMin(e.target.value)} />
+                      <span className="vc-range-sep">–</span>
+                      <input className="studio-input" type="number" step="any" placeholder="max" value={vcPrevMax} onChange={e => setVcPrevMax(e.target.value)} />
+                    </div>
+                  </div>
+                  <span className="vc-arrow">→</span>
+                  <div className="vc-range-col">
+                    <span className="vc-range-header">To</span>
+                    <div className="vc-range-row">
+                      <input className="studio-input" type="number" step="any" placeholder="min" value={vcNextMin} onChange={e => setVcNextMin(e.target.value)} />
+                      <span className="vc-range-sep">–</span>
+                      <input className="studio-input" type="number" step="any" placeholder="max" value={vcNextMax} onChange={e => setVcNextMax(e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+                <span className="field-hint">Leave a bound empty to make it unbounded. At least one bound required in each side.</span>
+              </div>
+            ) : (
+              <div className="field-group">
+                <label className="field-label">Transition values</label>
+                <div className="vc-cat-grid">
+                  <div className="vc-cat-col">
+                    <span className="vc-range-header">From</span>
+                    <div className="vc-tag-input-row">
+                      <input
+                        className="studio-input"
+                        placeholder="Add value…"
+                        value={vcTagInput.prev}
+                        onChange={e => setVcTagInput(t => ({ ...t, prev: e.target.value }))}
+                        onKeyDown={e => {
+                          if ((e.key === 'Enter' || e.key === ',') && vcTagInput.prev.trim()) {
+                            e.preventDefault()
+                            const v = vcTagInput.prev.trim()
+                            if (!vcPrevValues.includes(v)) setVcPrevValues(prev => [...prev, v])
+                            setVcTagInput(t => ({ ...t, prev: '' }))
+                          }
+                        }}
+                      />
+                      <button type="button" className="btn-secondary" onClick={() => {
+                        const v = vcTagInput.prev.trim()
+                        if (v && !vcPrevValues.includes(v)) setVcPrevValues(prev => [...prev, v])
+                        setVcTagInput(t => ({ ...t, prev: '' }))
+                      }}>Add</button>
+                    </div>
+                    <div className="selected-items-chips" style={{ marginTop: 6 }}>
+                      {vcPrevValues.map(v => (
+                        <span key={v} className="item-chip item-chip--removable">
+                          {v}
+                          <button type="button" className="chip-remove" onClick={() => setVcPrevValues(prev => prev.filter(x => x !== v))}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="vc-arrow">→</span>
+                  <div className="vc-cat-col">
+                    <span className="vc-range-header">To</span>
+                    <div className="vc-tag-input-row">
+                      <input
+                        className="studio-input"
+                        placeholder="Add value…"
+                        value={vcTagInput.next}
+                        onChange={e => setVcTagInput(t => ({ ...t, next: e.target.value }))}
+                        onKeyDown={e => {
+                          if ((e.key === 'Enter' || e.key === ',') && vcTagInput.next.trim()) {
+                            e.preventDefault()
+                            const v = vcTagInput.next.trim()
+                            if (!vcNextValues.includes(v)) setVcNextValues(next => [...next, v])
+                            setVcTagInput(t => ({ ...t, next: '' }))
+                          }
+                        }}
+                      />
+                      <button type="button" className="btn-secondary" onClick={() => {
+                        const v = vcTagInput.next.trim()
+                        if (v && !vcNextValues.includes(v)) setVcNextValues(next => [...next, v])
+                        setVcTagInput(t => ({ ...t, next: '' }))
+                      }}>Add</button>
+                    </div>
+                    <div className="selected-items-chips" style={{ marginTop: 6 }}>
+                      {vcNextValues.map(v => (
+                        <span key={v} className="item-chip item-chip--removable">
+                          {v}
+                          <button type="button" className="chip-remove" onClick={() => setVcNextValues(next => next.filter(x => x !== v))}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <span className="field-hint">Press Enter or comma to add. Compares against value_raw column.</span>
+              </div>
+            )}
+          </>
+        ) : mode === 'table' ? (
           <>
             <div className="field-group">
               <label className="field-label">Activity name</label>
