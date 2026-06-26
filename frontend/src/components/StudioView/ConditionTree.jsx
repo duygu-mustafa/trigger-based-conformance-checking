@@ -174,7 +174,7 @@ export function tokensToExpr(tokens) {
     if (!t.item_key || t.value === '') return []
     const op = REVERSE_OP_MAP[t.operator] || t.operator
     const val = STRING_OPS.has(t.operator) ? `'${t.value}'` : (isNaN(parseFloat(t.value)) ? `'${t.value}'` : t.value)
-    const leaf = `items['${t.item_key}'] ${op} ${val}`
+    const leaf = `${t.item_label || t.item_key} ${op} ${val}`
     return [t.negated ? `NOT (${leaf})` : leaf]
   }).join(' ')
 }

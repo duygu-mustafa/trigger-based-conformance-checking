@@ -628,6 +628,8 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                 activation={rule.activation || 'Event A'}
                 target={rule.target || (UNARY_TEMPLATES.includes(rule.template) ? undefined : 'Event B')}
                 compact={false}
+                activationTitle={tokensToExpr(rule.activation_tokens) || undefined}
+                correlationConditionLabel={tokensToExpr(rule.correlation_tokens) || undefined}
               />
             ) : (
               <div className="preview-placeholder">Select a rule type to see a preview</div>
