@@ -8,6 +8,7 @@ was recorded.
 from __future__ import annotations
 
 import argparse
+import csv
 import subprocess
 from pathlib import Path
 
@@ -354,10 +355,22 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 
     print(f"Frontend export complete.")
 
+_OUTPUT_COLUMNS = [
+    "stay_id", "episode_index", "episode_start", "episode_end",
+    "ventilation_start", "ventilation_end", "sbt_attempt", "sbt_start", "sbt_end",
+    "sbt_outcome", "mandatory_violated_constraints", "mandatory_satisfied_constraints",
+    "mandatory_vacuous_constraints", "info_violated_constraints", "info_satisfied_constraints",
+    "info_vacuous_constraints", "composite_interventions", "composite_note",
+    "violation_forensics", "satisfaction_forensics",
+    "num_mandatory_violations", "num_mandatory_satisfactions",
+]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("data/icu_event_log_sample.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("data/results/trigger_results.csv"))
+    parser.add_argument("--input", type=Path, default=Path("icu_event_log_full.parquet"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/full_results/trigger_results_full.csv"))
+    parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -369,10 +382,25 @@ def main() -> None:
     constraint_id_lookup = _load_combined_constraint_id_lookup(model_paths)
     
     stay_ids = runner.get_stay_ids()
-    print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
 
-    output_rows = []
+    done_ids: set[str] = set()
+    if args.resume and args.output.exists():
+        existing = pd.read_csv(args.output, usecols=["stay_id"])
+        done_ids = set(existing["stay_id"].astype(str))
+        print(f"Resuming: {len(done_ids)} stays already done, {len(stay_ids) - len(done_ids)} remaining.")
+    else:
+        print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    open_mode = "a" if args.resume and args.output.exists() else "w"
+    csv_handle = args.output.open(open_mode, newline="", encoding="utf-8")
+    writer = csv.DictWriter(csv_handle, fieldnames=_OUTPUT_COLUMNS)
+    if open_mode == "w":
+        writer.writeheader()
+
     for stay_id in tqdm(stay_ids):
+        if str(stay_id) in done_ids:
+            continue
         # 1. Load full trace for this stay
         df_full = runner.con.execute(
             f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
@@ -525,7 +553,7 @@ def main() -> None:
                 # If ongoing, use the last timestamp in the stay
                 vent_end = df_full["timestamp"].max()
 
-            output_rows.append({
+            writer.writerow({
                 "stay_id": stay_id,
                 "episode_index": episode_idx,
                 "episode_start": str(episode_start),
@@ -549,10 +577,10 @@ def main() -> None:
                 "num_mandatory_violations": len(set(mandatory_violated)),
                 "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
             })
+            csv_handle.flush()
 
-    output_df = pd.DataFrame(output_rows)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    output_df.to_csv(args.output, index=False)
+    csv_handle.close()
+    output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
 
     # --- AUTOMATIC FRONTEND EXPORT ---
