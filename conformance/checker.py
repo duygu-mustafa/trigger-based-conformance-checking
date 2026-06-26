@@ -227,6 +227,12 @@ def _build_eval_context(
     invasive_vent_ts = intubation_ts
 
     # Calculate time elapsed since clinical events
+    # stay_start is the first event in the trace (trace_df is already sorted)
+    stay_start_ts = trace_df.iloc[0]["timestamp"] if not trace_df.empty else None
+    hours_since_stay_start = (
+        float((eval_ts - stay_start_ts).total_seconds()) / 3600.0 if stay_start_ts is not None else 0.0
+    )
+
     hours_since_intubation = (
         float((eval_ts - intubation_ts).total_seconds()) / 3600.0 if intubation_ts is not None else 0.0
     )
@@ -248,10 +254,6 @@ def _build_eval_context(
         sbt_failed_prior = (
             (prior["activity"] == "SBTFailed").any()
             or (prior["activity"] == "SBTStopped").any()
-            or (
-                (prior["activity"] == "SBTCompleted")
-                & prior.get("value_raw", pd.Series(index=prior.index, dtype=object)).astype(str).str.lower().eq("failure")
-            ).any()
         )
 
     # Check if patient is marked as chronic ventilation dependent
@@ -267,6 +269,7 @@ def _build_eval_context(
 
     return {
         "items": items,
+        "hours_since_stay_start": hours_since_stay_start,
         "hours_since_intubation": hours_since_intubation,
         "ventilation_duration_hours": ventilation_duration_hours,
         "previous_SBT_failed": bool(sbt_failed_prior),
@@ -308,6 +311,7 @@ def _evaluate_data_condition(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
+    target_ts: pd.Timestamp | None = None,
     observation_window_hours: float | None = None,
 ) -> tuple[bool, str | None, dict[str, float]]:
     value, _, error, values = _evaluate_data_condition_status(
@@ -315,6 +319,7 @@ def _evaluate_data_condition(
         row,
         expression,
         activation_ts=activation_ts,
+        target_ts=target_ts,
         observation_window_hours=observation_window_hours,
     )
     return value, error, values
@@ -325,19 +330,22 @@ def _evaluate_data_condition_status(
     row: pd.Series,
     expression: str,
     activation_ts: pd.Timestamp | None = None,
+    target_ts: pd.Timestamp | None = None,
     observation_window_hours: float | None = None,
 ) -> tuple[bool, bool, str | None, dict[str, float]]:
     """Evaluate a data condition expression against event log state at a point in time.
 
     Parses and executes a Declare data condition (e.g., "items[225792] > 10") in the
     context of a specific event. Variables available in conditions include medical
-    items, time durations, and SBT history flags.
+    items, time durations, SBT history flags, and temporal references.
 
     Args:
         trace_df: Full event log DataFrame for building evaluation context.
         row: The event row at which to evaluate the condition.
         expression: Declare data condition expression string (e.g., "items[12345] == 'value'").
         activation_ts: Optional explicit timestamp for SBT activation tracking.
+        target_ts: Optional explicit timestamp for target event (for correlation conditions).
+        observation_window_hours: Optional window in hours for observation-based conditions.
 
     Returns:
         Tuple of (evaluation_result, is_vacuous, error_message, values):
@@ -390,9 +398,27 @@ def _evaluate_data_condition_status(
         extracted_values[str(key)] = val
         return val
 
+    # Helper functions for date arithmetic
+    def __date(ts: object) -> object:
+        """Extract date from a Timestamp or datetime object."""
+        if isinstance(ts, pd.Timestamp):
+            return ts.date()
+        if hasattr(ts, 'date'):
+            return ts.date()
+        return None
+    
+    def __timedelta(**kwargs) -> object:
+        """Create a timedelta object for date arithmetic."""
+        return pd.Timedelta(**kwargs)
+
     # Set up local namespace with all available variables for eval()
     local_scope = {
         "__item": __item,
+        "__date": __date,
+        "__timedelta": __timedelta,
+        "date": __date,
+        "timedelta": __timedelta,
+        "hours_since_stay_start": ctx["hours_since_stay_start"],
         "hours_since_intubation": ctx["hours_since_intubation"],
         "ventilation_duration_hours": ctx["ventilation_duration_hours"],
         "previous_SBT_failed": ctx["previous_SBT_failed"],
@@ -400,12 +426,14 @@ def _evaluate_data_condition_status(
         "high_risk_flag": ctx["high_risk_flag"],
         "vent_mode": ctx["vent_mode"],
         "sbt_duration_min": ctx["sbt_duration_min"],
+        "activation_ts": activation_ts,
+        "target_ts": target_ts,
         "True": True,
         "False": False,
     }
     
     # Also add non-item variables to extracted values
-    for k in ["hours_since_intubation", "ventilation_duration_hours", "sbt_duration_min"]:
+    for k in ["hours_since_stay_start", "hours_since_intubation", "ventilation_duration_hours", "sbt_duration_min"]:
         extracted_values[k] = local_scope[k]
 
     # Convert to Python syntax and evaluate
@@ -480,7 +508,7 @@ def _evaluate_constraint_impl(
     Supports multiple constraint templates:
         - EXISTENCE: Required activity must occur (optionally satisfying a condition)
         - RESPONSE: When activation occurs, target must follow (within time window)
-        - PRECEDENCE: Activation must occur before target
+        - PRECEDENCE: When activation occurs, target must have occurred before it
         - NOT_CO_EXISTENCE: Activation and target cannot both occur
 
     Args:
@@ -552,6 +580,7 @@ def _evaluate_constraint_impl(
 
         delta_seconds = float((target_ts - activation_ts).total_seconds())
         time_delta = delta_seconds if directional_time else abs(delta_seconds)
+
         if not _within_time_window(time_delta, constraint):
             return False, None, time_delta, {}
 
@@ -561,15 +590,17 @@ def _evaluate_constraint_impl(
                 target_row,
                 constraint.correlation_cond.expression,
                 activation_ts=activation_ts,
+                target_ts=target_ts,
             )
             if corr_err is not None:
                 return False, corr_err, time_delta, corr_values
             if not corr_ok:
                 return False, None, time_delta, corr_values
+            return True, None, time_delta, corr_values
 
         return True, None, time_delta, {}
 
-    # ============ EXISTENCE / ABSENCE / EXACTLY / INIT (unary) ============
+    # ============ EXISTENCE / ABSENCE / EXACTLY / INIT / END (unary) ============
     if constraint.template == DeclareTemplate.EXISTENCE:
         act_rows = _rows_for(constraint.activation)
         if act_rows.empty:
@@ -664,20 +695,19 @@ def _evaluate_constraint_impl(
             else activation_eval_error,
         )
 
-    if constraint.template == DeclareTemplate.EXACTLY:
-        # This lightweight checker models EXACTLY as exactly one activation.
+    if constraint.template == DeclareTemplate.AT_MOST_ONE:
         act_rows, activation_eval_error = _candidate_activations()
         count = int(len(act_rows))
-        ok = count == 1
+        ok = count <= 1
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
             outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
             num_activations=count,
             num_fulfilled=1 if ok else 0,
-            num_violated=0 if ok else abs(count - 1),
+            num_violated=0 if ok else count - 1,
             activation_ts=str(act_rows.iloc[0]["timestamp"]) if not act_rows.empty else None,
-            violation_reason=(None if ok else "Activity must occur exactly once")
+            violation_reason=(None if ok else "Activity must occur at most once")
             if activation_eval_error is None
             else activation_eval_error,
         )
@@ -713,6 +743,37 @@ def _evaluate_constraint_impl(
             else eval_error,
         )
 
+    if constraint.template == DeclareTemplate.END:
+        if trace_df.empty:
+            return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
+
+        last_row = trace_df.sort_values("timestamp").iloc[-1]
+        ok = bool(last_row["activity"] == constraint.activation)
+        eval_error = None
+        violation_deltas = {}
+        if ok and constraint.activation_cond is not None:
+            ok, eval_error, violation_deltas = _evaluate_data_condition(
+                trace_df,
+                last_row,
+                constraint.activation_cond.expression,
+                observation_window_hours=observation_window_hours,
+            )
+
+        return ConstraintResult(
+            case_id=case_id,
+            constraint_id=cid,
+            outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
+            num_activations=1,
+            num_fulfilled=1 if ok else 0,
+            num_violated=0 if ok else 1,
+            activation_ts=str(last_row["timestamp"]),
+            violation_deltas=violation_deltas if not ok else {},
+            satisfaction_deltas=violation_deltas if ok else {},
+            violation_reason=(None if ok else "Last event does not satisfy END")
+            if eval_error is None
+            else eval_error,
+        )
+
     # ============ RESPONSE FAMILY ============
     if constraint.template in {
         DeclareTemplate.RESPONSE,
@@ -734,6 +795,7 @@ def _evaluate_constraint_impl(
         first_match_target_ts = None
         first_corr_error = None
         violation_deltas = {}
+        satisfaction_deltas = {}
         delay_seconds = None
 
         for i, (_, act_row) in enumerate(act_rows.iterrows()):
@@ -765,7 +827,10 @@ def _evaluate_constraint_impl(
                     require_after=True,
                     require_before=False,
                     require_adjacent=constraint.template
-                    in {DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.NOT_CHAIN_RESPONSE},
+                    in {
+                        DeclareTemplate.CHAIN_RESPONSE,
+                        DeclareTemplate.NOT_CHAIN_RESPONSE,
+                    },
                     directional_time=True,
                 )
                 
@@ -918,6 +983,9 @@ def _evaluate_constraint_impl(
         )
 
     # ============ PRECEDENCE FAMILY ============
+    # Semantics: for each activation (the trigger, e.g. SBTStarted), check that
+    # target (the precondition, e.g. InvasiveVentilationStarted) occurred before it.
+    # Activation iterates; candidates are drawn from target rows before activation_ts.
     if constraint.template in {
         DeclareTemplate.PRECEDENCE,
         DeclareTemplate.ALTERNATE_PRECEDENCE,
@@ -925,51 +993,56 @@ def _evaluate_constraint_impl(
         DeclareTemplate.NOT_PRECEDENCE,
         DeclareTemplate.NOT_CHAIN_PRECEDENCE,
     }:
-        target_rows = _rows_for(constraint.target)
-        if target_rows.empty:
+        act_rows = _rows_for(constraint.activation)
+        if act_rows.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
         if constraint.activation_cond is not None:
-            target_rows, activation_eval_error = _filter_activation_rows(trace_df, target_rows, constraint)
+            act_rows, activation_eval_error = _filter_activation_rows(trace_df, act_rows, constraint)
         else:
             activation_eval_error = None
 
-        if target_rows.empty:
+        if act_rows.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
-        act_rows = _rows_for(constraint.activation)
+        target_rows = _rows_for(constraint.target)
         fulfilled = 0
         violated = 0
         first_violation_ts = None
         first_match_activation_ts = None
+        first_match_target_ts = None
         first_corr_error = None
         violation_deltas = {}
+        satisfaction_deltas = {}
         delay_seconds = None
 
-        for _, target_row in target_rows.iterrows():
-            target_ts = target_row["timestamp"]
+        for _, act_row in act_rows.iterrows():
+            act_ts = act_row["timestamp"]
 
             if constraint.template in {
                 DeclareTemplate.CHAIN_PRECEDENCE,
                 DeclareTemplate.NOT_CHAIN_PRECEDENCE,
             }:
-                prev = trace_df[trace_df["timestamp"] < target_ts].tail(1)
-                candidates = prev[prev["activity"] == constraint.activation] if not prev.empty else prev
+                prev = trace_df[trace_df["timestamp"] < act_ts].tail(1)
+                candidates = prev[prev["activity"] == constraint.target] if not prev.empty else prev
             else:
-                candidates = act_rows[act_rows["timestamp"] < target_ts]
+                candidates = target_rows[target_rows["timestamp"] < act_ts]
                 if constraint.template == DeclareTemplate.ALTERNATE_PRECEDENCE:
-                    prev_target = target_rows[target_rows["timestamp"] < target_ts].tail(1)
-                    if not prev_target.empty:
-                        prev_target_ts = prev_target.iloc[0]["timestamp"]
-                        candidates = candidates[candidates["timestamp"] > prev_target_ts]
+                    prev_act = act_rows[act_rows["timestamp"] < act_ts].tail(1)
+                    if not prev_act.empty:
+                        prev_act_ts = prev_act.iloc[0]["timestamp"]
+                        candidates = candidates[candidates["timestamp"] > prev_act_ts]
+
+            if getattr(constraint, 'target_selection', None) == 'last' and not candidates.empty:
+                candidates = candidates.sort_values('timestamp').tail(1)
 
             matched = False
-            for _, act_row in candidates.iterrows():
+            for _, cand_row in candidates.iterrows():
                 ok_match, corr_error, delta, vals = _target_matches(
-                    target_row,
-                    act_row["timestamp"],
-                    require_after=True,
-                    require_before=False,
+                    cand_row,
+                    act_ts,
+                    require_after=False,
+                    require_before=True,
                     require_adjacent=constraint.template
                     in {DeclareTemplate.CHAIN_PRECEDENCE, DeclareTemplate.NOT_CHAIN_PRECEDENCE},
                     directional_time=True,
@@ -979,7 +1052,9 @@ def _evaluate_constraint_impl(
                 if ok_match:
                     matched = True
                     if first_match_activation_ts is None:
-                        first_match_activation_ts = str(act_row["timestamp"])
+                        first_match_activation_ts = str(act_ts)
+                    if first_match_target_ts is None:
+                        first_match_target_ts = str(cand_row["timestamp"])
                     break
 
             is_negative = constraint.template in {
@@ -993,25 +1068,25 @@ def _evaluate_constraint_impl(
             else:
                 violated += 1
                 if first_violation_ts is None:
-                    first_violation_ts = str(target_ts)
+                    first_violation_ts = str(act_ts)
                     if not matched and not is_negative:
                         _, _, _, violation_deltas = _evaluate_data_condition_status(
-                            trace_df, target_row, "True"
+                            trace_df, act_row, "True"
                         )
                     elif matched and is_negative:
                         violation_deltas = vals
-                        delay_seconds = delta
+                        delay_seconds = abs(delta) if delta is not None else None
 
         ok = violated == 0
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
             outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
-            num_activations=int(len(target_rows)),
+            num_activations=int(len(act_rows)),
             num_fulfilled=int(fulfilled),
             num_violated=int(violated),
             activation_ts=first_match_activation_ts,
-            target_ts=str(target_rows.iloc[0]["timestamp"]) if not target_rows.empty else first_violation_ts,
+            target_ts=first_match_target_ts if first_match_target_ts is not None else first_violation_ts,
             violation_deltas=violation_deltas if not ok else {},
             satisfaction_deltas=satisfaction_deltas if ok else {},
             delay_seconds=delay_seconds,
@@ -1093,6 +1168,7 @@ def _evaluate_constraint_impl(
         DeclareTemplate.SUCCESSION,
         DeclareTemplate.ALTERNATE_SUCCESSION,
         DeclareTemplate.CHAIN_SUCCESSION,
+        DeclareTemplate.NOT_CHAIN_SUCCESSION,
     }:
         mapped = {
             DeclareTemplate.SUCCESSION: (DeclareTemplate.RESPONSE, DeclareTemplate.PRECEDENCE),
@@ -1101,6 +1177,10 @@ def _evaluate_constraint_impl(
                 DeclareTemplate.ALTERNATE_PRECEDENCE,
             ),
             DeclareTemplate.CHAIN_SUCCESSION: (DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.CHAIN_PRECEDENCE),
+            DeclareTemplate.NOT_CHAIN_SUCCESSION: (
+                DeclareTemplate.NOT_CHAIN_RESPONSE,
+                DeclareTemplate.NOT_CHAIN_PRECEDENCE,
+            ),
         }
         response_t, precedence_t = mapped[constraint.template]
 
@@ -1197,12 +1277,12 @@ def evaluate_absence_rule(
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
-def evaluate_exactly_rule(
+def evaluate_at_most_one_rule(
     case_id: str,
     trace_df: pd.DataFrame,
     constraint: DeclareConstraint,
 ) -> ConstraintResult:
-    """Evaluate `EXACTLY` constraints."""
+    """Evaluate `AT_MOST_ONE` constraints."""
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
@@ -1212,6 +1292,15 @@ def evaluate_init_rule(
     constraint: DeclareConstraint,
 ) -> ConstraintResult:
     """Evaluate `INIT` constraints."""
+    return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
+
+
+def evaluate_end_rule(
+    case_id: str,
+    trace_df: pd.DataFrame,
+    constraint: DeclareConstraint,
+) -> ConstraintResult:
+    """Evaluate `END` constraints."""
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
@@ -1377,14 +1466,24 @@ def evaluate_not_succession_rule(
     return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
 
 
+def evaluate_not_chain_succession_rule(
+    case_id: str,
+    trace_df: pd.DataFrame,
+    constraint: DeclareConstraint,
+) -> ConstraintResult:
+    """Evaluate `NOT_CHAIN_SUCCESSION` constraints."""
+    return _evaluate_constraint_impl(case_id=case_id, trace_df=trace_df, constraint=constraint)
+
+
 _TEMPLATE_EVALUATORS: dict[
     DeclareTemplate,
     callable,
 ] = {
     DeclareTemplate.EXISTENCE: evaluate_existence_rule,
     DeclareTemplate.ABSENCE: evaluate_absence_rule,
-    DeclareTemplate.EXACTLY: evaluate_exactly_rule,
+    DeclareTemplate.AT_MOST_ONE: evaluate_at_most_one_rule,
     DeclareTemplate.INIT: evaluate_init_rule,
+    DeclareTemplate.END: evaluate_end_rule,
     DeclareTemplate.RESPONDED_EXISTENCE: evaluate_responded_existence_rule,
     DeclareTemplate.RESPONSE: evaluate_response_rule,
     DeclareTemplate.ALTERNATE_RESPONSE: evaluate_alternate_response_rule,
@@ -1403,6 +1502,7 @@ _TEMPLATE_EVALUATORS: dict[
     DeclareTemplate.NOT_CHAIN_PRECEDENCE: evaluate_not_chain_precedence_rule,
     DeclareTemplate.NOT_CO_EXISTENCE: evaluate_not_co_existence_rule,
     DeclareTemplate.NOT_SUCCESSION: evaluate_not_succession_rule,
+    DeclareTemplate.NOT_CHAIN_SUCCESSION: evaluate_not_chain_succession_rule,
 }
 
 

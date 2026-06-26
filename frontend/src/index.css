@@ -40,6 +40,12 @@
   --color-border-light: #cfd8dc;
   --color-accent: #0d3c6e;
   /* deep navy — headers, badges, focus rings */
+  --color-bg: #eef2f7;
+  /* matching page bg for studio component surfaces */
+  --color-text-dim: #4a6278;
+  /* muted text on cards */
+  --color-primary: #1976d2;
+  /* action / primary blue */
   --color-satisfied-text: #1b5e20;
   /* deep clinical green for satisfied labels */
 
@@ -58,27 +64,37 @@
     sans-serif;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f3f7fc 0%, #e9f0f9 100%);
+  background:
+    radial-gradient(circle at top left, rgba(13, 60, 110, 0.08), transparent 32%),
+    radial-gradient(circle at top right, rgba(214, 36, 110, 0.06), transparent 28%),
+    linear-gradient(180deg, #f5f8fc 0%, #e9eff7 100%);
+  color: var(--color-text-main);
 }
 
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
   width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+  max-width: none;
 }
 
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: var(--color-text-muted);
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }

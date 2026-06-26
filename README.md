@@ -44,21 +44,34 @@ Transform raw ICU events into a canonical event log with automatic SBT derivatio
 ```bash
 python prepare_event_log.py \
   --input icu_event_level_sbt.parquet \
-  --output icu_event_log.parquet \
-  --sample-source sbt_started_yes_stay_ids.parquet \
-  --sample-size 1000 \
-  --sample-seed 42
+   --output icu_event_log_full.parquet \
+   --use-all-data
 ```
 
 ### Arguments
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--input` | `icu_event_level_sbt.parquet` | Raw ICU events (Parquet or CSV) |
-| `--output` | `icu_event_log.parquet` | Output canonical event log (Parquet or CSV) |
+| `--output` | `icu_event_log_full.parquet` | Output canonical event log (Parquet or CSV) |
 | `--sample-source` | `sbt_started_yes_stay_ids.parquet` | Parquet file with candidate stay_ids |
 | `--sample-size` | 1000 | Number of random stays to process |
 | `--sample-seed` | 42 | Random seed for reproducibility |
+| `--source-table-filter` | _none_ | Restrict stays to those that contain a given raw `source_table`, such as `ventilator_setting` |
 | `--memory-limit` | `4GB` | DuckDB memory limit |
+| `--resume` | off | Resume an interrupted run from checkpoint state and temp DB |
+| `--state-file` | `<output>.state.json` | Path to checkpoint state JSON |
+| `--backup-every` | 200 | Write periodic checkpoint exports every N processed stays (0 disables) |
+| `--backup-dir` | `<output_parent>/<output_stem>_checkpoints` | Directory for checkpoint export files |
+| `--seed-checkpoint` | _none_ | Seed the output table from an existing parquet checkpoint before continuing |
+| `--seed-skip-count` | _none_ | Skip the first N candidate stays when starting from a seeded checkpoint |
+
+To process the full dataset produced by the preparation script, add:
+
+```bash
+python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data
+```
+
+If you want to restrict the run to a specific raw source table, pass `--source-table-filter ventilator_setting` instead.
 
 ### Processing Pipeline
 
@@ -97,8 +110,52 @@ The pipeline (`derive/pipeline.py`) performs these steps for each stay:
    - Sorted by timestamp within each case
 
 ### Output
-- `icu_event_log.parquet` — Canonical event log ready for conformance checking
+- `icu_event_log_full.parquet` — Canonical event log ready for conformance checking
 - Temporary DuckDB files created and cleaned up automatically
+
+### Safe Long-Run Execution on Linux
+
+For long runs, use `tmux` so the process survives terminal disconnects.
+
+```bash
+tmux new -s eventlog
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200
+# detach with Ctrl+b then d
+```
+
+Reattach later:
+
+```bash
+tmux attach -t eventlog
+```
+
+If the job is interrupted, resume where it left off:
+
+```bash
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --resume
+```
+
+Alternative without tmux (`nohup`):
+
+```bash
+nohup python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200 > prepare_event_log.out 2>&1 &
+```
+
+Convenience launcher script (tmux first, nohup fallback):
+
+```bash
+./run_event_log_safe.sh
+./run_event_log_safe.sh --resume
+./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+```
+
+The script writes timestamped logs under `logs/`, starts in a detached `tmux` session when available, and supports pass-through options like `--input`, `--output`, `--backup-every`, `--state-file`, `--backup-dir`, `--memory-limit`, `--source-table-filter`, `--seed-checkpoint`, and `--seed-skip-count`.
+
+To restart from the 10,000-stay checkpoint and continue the full build, use:
+
+```bash
+./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+```
 
 ### Configuration Files
 - `configs/activity_mapping.yaml` — Maps raw source/itemid/value combinations to semantic activities
@@ -112,19 +169,28 @@ Execute declarative process-compliance rules against the event log and compute c
 
 ### Command
 ```bash
-python main.py
+source .venv/bin/activate
+python main_per_sbt.py
+```
+
+To evaluate a checkpoint folder incrementally and write each checkpoint's results immediately, use:
+
+```bash
+python main_per_sbt_checkpoints.py \
+   --checkpoint-dir data/icu_event_log_checkpoints \
+   --results-dir data/results/checkpoint_trigger_results
 ```
 
 ### What This Does
 
-The conformance checker (`main.py` and `conformance/checker.py`) performs these steps:
+The conformance checker (`main_per_sbt.py` and `conformance/checker.py`) performs these steps:
 
 1. **Load Configuration**
    - Reads declarative rules from `configs/declare/` (YAML format)
    - Rules include: `readiness_assessment.yaml`, `failure_correction.yaml`, `sbt_execution.yaml`, `weights.yaml`
 
 2. **Load Event Log**
-   - Reads canonical event log from `icu_event_log.parquet`
+   - Reads canonical event log from `icu_event_log_full.parquet`
    - Extracts trace data: activities per case, with timestamps
 
 3. **Process Each Stay**
@@ -175,33 +241,95 @@ rules:
 ## Quick Start
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - PostgreSQL connection to MIMIC-IV (for raw data extraction)
-- Candidate stay_ids file (from prior domain analysis)
+- Node.js 18+ (for the frontend)
 
 ### Full Pipeline Example
 
 ```bash
-# Step 1: Extract raw ICU events
+# Activate the virtual environment first
+source .venv/bin/activate
+
+# Step 1: Extract raw ICU events (requires MIMIC-IV database access)
 python database/materialize_all_icu_events.py --output icu_event_level_sbt.parquet
 
-# Step 2: Build event log (with SBT derivation and conformance gates)
+# Step 2: Build canonical event log
 python prepare_event_log.py \
   --input icu_event_level_sbt.parquet \
-  --output icu_event_log.parquet \
-  --sample-size 1000
+  --output icu_event_log_full.parquet \
+  --use-all-data
 
-# Step 3: Run conformance checking
-python main.py
+# Step 3: Run conformance checking — writes results + frontend JSON
+python main_per_sbt.py
+
+# Step 4: Launch the dashboard (see section 4 below)
 ```
 
-### Expected Output
+---
+
+## 4. Clinician Studio & Dashboard
+
+The React frontend provides three views for exploring conformance results, plus a **Clinician Studio** for interactive rule management and on-demand analysis.
+
+### Starting the dashboard
+
+The frontend requires the pre-computed JSON files written by `main_per_sbt.py` (in `frontend/public/data/`). The Clinician Studio additionally requires the FastAPI backend server.
+
+**Start both servers** (two terminals):
+
+```bash
+# Terminal 1 — Python API backend (required for Clinician Studio)
+source .venv/bin/activate
+uvicorn api:app --reload --port 8000
 ```
-Batch Processing: 100%|████████████| 1000/1000 [00:45<00:00,  1.20s/it]
-Successfully processed 1000 stays.
-Population KPI (Sugeno): 0.91
-Results saved to conformance_results.csv
+
+```bash
+# Terminal 2 — React frontend dev server
+cd frontend
+npm install        # first time only
+npm run dev
 ```
+
+Then open **http://localhost:5173** in your browser.
+
+### Frontend views
+
+| View | Description |
+|------|-------------|
+| **Global Summary** | Population-level conformance: violation frequencies, outcome correlations, stay explorer |
+| **Patient Timeline** | Per-case event timeline with episode outcomes and constraint detail |
+| **Rules Reference** | Developer-facing catalog of all Declare rules with raw definitions |
+| **Clinician Studio** | Three-tab workspace for clinicians (see below) |
+
+### Clinician Studio tabs
+
+| Tab | Description |
+|-----|-------------|
+| **Rule Library** | Visual browser of all 28 clinical rules. Each rule is shown as an SVG diagram (Declare template notation), with data conditions displayed as human-readable chips (`PaO₂/FiO₂ ≥ 150`), time windows, and severity bars. No code exposed. |
+| **Rule Builder** | 5-step wizard: choose a rule type → pick clinical events → set time window → define data conditions → add metadata. Live preview updates as you build. Rules are saved to `localStorage` and persist across sessions. |
+| **Run Analysis** | Choose a sample size and rule set (predefined rules, custom rules, or both), run conformance on a random sample, and compare the results side-by-side with the global baseline. |
+
+### Building for production
+
+```bash
+cd frontend
+npm run build      # outputs to frontend/dist/
+npm run preview    # preview the production build locally
+```
+
+### API endpoints (backend)
+
+The FastAPI server runs at `http://localhost:8000` and is proxied through Vite at `/api/*`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/rules` | All 28 Declare rules as structured JSON (no raw expressions) |
+| `GET /api/activities` | Available semantic activity names, grouped by category |
+| `GET /api/item_labels` | MIMIC-IV item-id → human-readable label lookup |
+| `POST /api/run` | Submit an async conformance job (sample size + optional custom rules) |
+| `GET /api/jobs/{id}` | Poll job status and retrieve results |
+| `DELETE /api/jobs/{id}` | Cancel a running job |
 
 ---
 
@@ -215,6 +343,8 @@ Results saved to conformance_results.csv
 | `derive/` | Event log construction, SBT derivation, invasive-vent gating |
 | `conformance/` | Declarative rule checking and metrics computation |
 | `configs/` | YAML configuration for activity mapping, rules, weights |
+| `api.py` | FastAPI backend — serves structured rule data and runs on-demand conformance jobs |
+| `frontend/` | React + Vite dashboard (Summary, Timeline, Rules, Clinician Studio) |
 
 ### Data Flow
 
@@ -229,18 +359,24 @@ Raw ICU Events (icu_event_level_sbt.parquet)
   - Derive weaning frame
   - Extract invasive-vent start times
   - Build SBT episodes
-  - Apply invasive-vent gate ← **Conformance Guard**
+  - Apply invasive-vent gate ← Conformance Guard
   - Map activities
        ↓
-Canonical Event Log (icu_event_log.parquet)
+Canonical Event Log (icu_event_log_full.parquet)
        ↓
-[main.py → conformance/checker.py]
-  - Load declarative rules
-  - Check LTL constraints
-  - Compute violations
-  - Aggregate metrics
+[main_per_sbt.py → conformance/checker.py]
+  - Load declarative rules (configs/declare/*.yaml)
+  - Segment stays into trigger episodes
+  - Check Declare constraints per episode
+  - Compute fuzzy weighted scores (Sugeno KPI)
+  - Write frontend/public/data/*.json
        ↓
 Conformance Results (conformance_results.csv)
+  + frontend/public/data/  ← static JSON for dashboard
+       ↓
+[React frontend  +  api.py]
+  - Global Summary / Timeline / Rules reference
+  - Clinician Studio: visual rules, rule builder, on-demand analysis
 ```
 
 ---

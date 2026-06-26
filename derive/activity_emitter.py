@@ -146,41 +146,177 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     """Generate derived activities from mapped activities.
 
     Currently implements:
-    - SBTFailed: Fired when SBTCompleted.value == "No" OR when SBTStopped
-      occurs within an active SBT window.
+    - SBTFailed: Fired when InvasiveVentilationStarted occurs within 48h after SBTStarted.
+    - SBTSucceeded: Fired when no re-ventilation occurs within 48h after SBTStarted.
     """
     derived_frames: list[pd.DataFrame] = []
 
-    # ── SBTFailed ────────────────────────────────────────────────────────────
-    # Case 1: SBTCompleted with value_raw == "Failure"
-    sbt_completed = activity_df[activity_df["activity"] == "SBTCompleted"].copy()
-    if not sbt_completed.empty:
-        failed_mask = (
-            sbt_completed.get("value_raw", pd.Series(index=sbt_completed.index, dtype=object))
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .eq("failure")
-        )
-        sbt_failed_completed = sbt_completed[failed_mask].copy()
-        if not sbt_failed_completed.empty:
-            sbt_failed_from_completed = pd.DataFrame(
-                {
-                    "case_id": sbt_failed_completed["case_id"],
-                    "activity": "SBTFailed",
-                    "timestamp": sbt_failed_completed["timestamp"],
-                    "source_table": sbt_failed_completed["source_table"],
-                    "itemid": sbt_failed_completed["itemid"],
-                    "value_raw": sbt_failed_completed.get("value_raw"),
-                    "value_num": sbt_failed_completed.get("value_num"),
-                    "unit": sbt_failed_completed.get("unit"),
-                    "attrs": [{"kind": "derived_activity", "trigger": "SBTCompleted=Failure"}] * len(sbt_failed_completed),
-                    "patient_id": sbt_failed_completed.get("patient_id"),
-                    "stay_id": sbt_failed_completed.get("stay_id"),
-                }
-            )
-            derived_frames.append(sbt_failed_from_completed)
+    # ── SBT Outcomes (48h window / re-ventilation rule) ──────────────────────
+    # For each SBTStarted: if InvasiveVentilationStarted occurs within the
+    # episode window (bounded by next SBTStarted and 48h), emit SBTFailed at
+    # that timestamp. Otherwise emit SBTSucceeded at min(start+48h, stay_end).
+    # One outcome per start, mutual exclusivity guaranteed by the if/else.
+    failure_window = pd.Timedelta(hours=48)
+    sbt_started = activity_df[activity_df["activity"] == "SBTStarted"].copy()
+    vent_starts = activity_df[activity_df["activity"] == "InvasiveVentilationStarted"].copy()
 
+    outcome_rows: list[dict[str, object]] = []
+    for case_id, case_starts in sbt_started.groupby("case_id", sort=False):
+        case_starts = case_starts.sort_values("timestamp").reset_index(drop=True)
+        stay_end_ts = activity_df[activity_df["case_id"] == case_id]["timestamp"].max()
+        case_vents = vent_starts[vent_starts["case_id"] == case_id]
+
+        for _, srow in case_starts.iterrows():
+            start_ts = srow["timestamp"]
+
+            later_starts = case_starts[case_starts["timestamp"] > start_ts]["timestamp"]
+            next_start_ts = later_starts.min() if not later_starts.empty else pd.NaT
+
+            window_end = start_ts + failure_window
+            if pd.notna(next_start_ts):
+                window_end = min(window_end, next_start_ts)
+
+            near_vents = case_vents[
+                (case_vents["timestamp"] > start_ts) & (case_vents["timestamp"] <= window_end)
+            ]
+
+            if not near_vents.empty:
+                outcome_rows.append({
+                    "case_id": case_id,
+                    "activity": "SBTFailed",
+                    "timestamp": near_vents["timestamp"].min(),
+                    "source_table": "derived_revent",
+                    "itemid": None,
+                    "value_raw": None,
+                    "value_num": None,
+                    "unit": None,
+                    "attrs": [{"kind": "derived_activity", "trigger": "reventilation"}],
+                    "patient_id": srow.get("patient_id"),
+                    "stay_id": srow.get("stay_id"),
+                })
+            else:
+                success_ts = min(start_ts + failure_window, stay_end_ts)
+                outcome_rows.append({
+                    "case_id": case_id,
+                    "activity": "SBTSucceeded",
+                    "timestamp": success_ts,
+                    "source_table": "derived_implicit",
+                    "itemid": None,
+                    "value_raw": "Success",
+                    "value_num": 1.0,
+                    "unit": None,
+                    "attrs": [{"kind": "derived_activity", "trigger": "no_revent_48h"}],
+                    "patient_id": srow.get("patient_id"),
+                    "stay_id": srow.get("stay_id"),
+                })
+
+    if outcome_rows:
+        derived_frames.append(pd.DataFrame(outcome_rows))
+
+    # ── Readiness Criterion Activities ────────────────────────────────────────
+    # Emit a named event only when the criterion IS satisfied so PRECEDENCE rules
+    # can check "SBTStarted must be preceded by [CriterionMeasured] within 24h"
+    # without needing a correlation_condition.
+
+    def _criterion_row(src: pd.Series, activity_name: str, trigger: str) -> dict:
+        return {
+            "case_id": src.get("case_id"),
+            "activity": activity_name,
+            "timestamp": src["timestamp"],
+            "source_table": "derived_criterion",
+            "itemid": None,
+            "value_raw": trigger,
+            "value_num": src.get("value_num"),
+            "unit": None,
+            "attrs": [{"kind": "derived_activity", "trigger": trigger}],
+            "patient_id": src.get("patient_id"),
+            "stay_id": src.get("stay_id"),
+        }
+
+    def _by_itemid(itemid_str: str) -> pd.DataFrame:
+        return activity_df[activity_df["itemid"].astype(str) == itemid_str].copy()
+
+    # ── OxygenationMeasured ───────────────────────────────────────────────────
+    oxy_rows: list[dict] = []
+    for _, row in _by_itemid("pao2fio2ratio").iterrows():
+        if pd.notna(row.get("value_num")) and float(row["value_num"]) >= 150:
+            oxy_rows.append(_criterion_row(row, "OxygenationMeasured", "pao2fio2ratio>=150"))
+
+    fio2_df = _by_itemid("fio2_bg")
+    peep_df_ = _by_itemid("peep_vent")
+    _2h = pd.Timedelta(hours=2)
+    for _, row in _by_itemid("220277").iterrows():
+        if pd.isna(row.get("value_num")) or float(row["value_num"]) < 90:
+            continue
+        ts, case = row["timestamp"], row["case_id"]
+        near_fio2 = fio2_df[(fio2_df["case_id"] == case) & ((fio2_df["timestamp"] - ts).abs() <= _2h)]
+        near_peep = peep_df_[(peep_df_["case_id"] == case) & ((peep_df_["timestamp"] - ts).abs() <= _2h)]
+        if near_fio2.empty or near_peep.empty:
+            continue
+        best_fio2 = near_fio2.loc[(near_fio2["timestamp"] - ts).abs().idxmin()]
+        best_peep = near_peep.loc[(near_peep["timestamp"] - ts).abs().idxmin()]
+        if (pd.notna(best_fio2.get("value_num")) and float(best_fio2["value_num"]) <= 40
+                and pd.notna(best_peep.get("value_num")) and float(best_peep["value_num"]) <= 5):
+            oxy_rows.append(_criterion_row(row, "OxygenationMeasured", "SpO2>=90_FiO2<=40_PEEP<=5"))
+    if oxy_rows:
+        derived_frames.append(pd.DataFrame(oxy_rows))
+
+    # ── pHMeasured ────────────────────────────────────────────────────────────
+    ph_rows = [
+        _criterion_row(r, "pHMeasured", "ph_bg")
+        for _, r in _by_itemid("ph_bg").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    if ph_rows:
+        derived_frames.append(pd.DataFrame(ph_rows))
+
+    # ── HemoglobinMeasured ────────────────────────────────────────────────────
+    hgb_rows = [
+        _criterion_row(r, "HemoglobinMeasured", "hemoglobin_bg")
+        for _, r in _by_itemid("hemoglobin_bg").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    if hgb_rows:
+        derived_frames.append(pd.DataFrame(hgb_rows))
+
+    # ── TemperatureMeasured ───────────────────────────────────────────────────
+    temp_rows = [
+        _criterion_row(r, "TemperatureMeasured", "223762")
+        for _, r in _by_itemid("223762").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    if temp_rows:
+        derived_frames.append(pd.DataFrame(temp_rows))
+
+    # ── VasopressorMeasured ───────────────────────────────────────────────────
+    vp_rows = [
+        _criterion_row(r, "VasopressorMeasured", "norepinephrine_equiv")
+        for _, r in _by_itemid("norepinephrine_equiv").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    if vp_rows:
+        derived_frames.append(pd.DataFrame(vp_rows))
+
+    # ── MentalStatusMeasured ──────────────────────────────────────────────────
+    mental_rows: list[dict] = []
+    for _, row in _by_itemid("228302").iterrows():  # RASS LOC
+        if str(row.get("value_raw") or "").strip().lower() == "yes":
+            mental_rows.append(_criterion_row(row, "MentalStatusMeasured", "RASS_LOC=Yes"))
+    for _, row in _by_itemid("223753").iterrows():  # SAS
+        val = row.get("value_num")
+        if pd.notna(val) and float(val) in {3.0, 4.0}:
+            mental_rows.append(_criterion_row(row, "MentalStatusMeasured", "SAS_in_3_4"))
+    if mental_rows:
+        derived_frames.append(pd.DataFrame(mental_rows))
+
+    # ── InspiratoryEffortMeasured ─────────────────────────────────────────────
+    ie_rows = [
+        _criterion_row(r, "InspiratoryEffortMeasured", "224686")
+        for _, r in _by_itemid("224686").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    if ie_rows:
+        derived_frames.append(pd.DataFrame(ie_rows))
 
     return derived_frames
 

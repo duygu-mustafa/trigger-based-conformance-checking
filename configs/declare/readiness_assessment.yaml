@@ -5,9 +5,23 @@ model:
   description: >
     Readiness assessment is NOT a discrete activity in MIMIC-IV. It is a set of
     physiological conditions that must ALL be satisfied in the observation window
-    immediately preceding SBTStarted. Constraints here are encoded as MP-Declare
-    guards on SBTStarted: the activation event is SBTStarted itself, and each
-    data condition is an activation condition that, if violated, constitutes a protocol deviation.
+    immediately preceding SBTStarted.
+
+    Primary encoding (RC-DP-XX, no suffix): MP-Declare PRECEDENCE rules.
+    Each criterion is represented by a named derived activity (e.g. OxygenationMeasured)
+    that fires only when the criterion IS satisfied. PRECEDENCE then requires SBTStarted
+    to be preceded by a qualifying event within 24h.
+    Per Burattin et al. (2016) Table 2, precedence MFOTL semantics:
+      G(∀x.((B ∧ ϕ_a(x)) → O_I(A ∧ ∃y.ϕ_c(x,y))))
+    where B = SBTStarted (activation), A = CriterionMeasured (must precede).
+    Violation: SBTStarted occurs with no qualifying criterion event in the prior 24h.
+
+    Alternative A (RC-DP-XXa): NOT_RESPONDED_EXISTENCE. Fires when SBTStarted has
+    an unmet criterion AND SBTCompleted subsequently occurs in the episode.
+    MFOTL: G(∀x.((A ∧ ϕ_a(x)) → ¬(O_I(B ∧ ∃y.ϕ_c(x,y)) ∨ F_I(B ∧ ∃y.ϕ_c(x,y)))))
+
+    Alternative B (RC-DP-XXb): MP_EXISTENCE + ACTIVATION_VIOLATION. Fires on
+    activation alone when criterion is unmet, regardless of trial completion.
 
     Ventilation onset is sourced from derived weaning state transitions.
     The 48-72 h eligibility window is computed relative to Intubation.starttime
@@ -45,12 +59,16 @@ model:
       derived: true
 
   # ── Readiness Data Conditions ─────────────────────────────────────────────
+  # Used by the -a and -b alternative constraint variants.
   # All conditions are evaluated in the chartevents observation window
   # immediately before (within 24 h of) the SBTStarted timestamp.
+  # Each condition is written in the NEGATIVE form (the violation state)
+  # so that it serves directly as the activation condition ϕ_a.
 
   data_conditions:
 
     oxygenation_ok:
+      title: "Oxygenation criterion met"
       description: "PaO2/FiO2 >= 150 OR (SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O)"
       logic: OR
       expressions:
@@ -58,39 +76,44 @@ model:
         - "(items[220277] >= 90) AND (items['fio2_bg'] <= 40) AND (items['peep_vent'] <= 5)"
 
     ph_ok:
+      title: "pH criterion met"
       description: "Arterial pH > 7.25"
       expression: "items['ph_bg'] > 7.25"
 
     hemoglobin_ok:
+      title: "Hemoglobin criterion met"
       description: "Hemoglobin >= 7 g/dL"
       expression: "items['hemoglobin_bg'] >= 7.0"
 
     temperature_ok:
+      title: "Temperature criterion met"
       description: "Core temperature <= 38 degrees C"
       expression: "items[223762] <= 38.0"
 
     vasopressor_ok:
+      title: "Vasopressor criterion met"
       description: >
         Norepinephrine-equivalent <= 0.1 mcg/kg/min (hemodynamically stable).
         Source: mimiciv_derived.norepinephrine_equivalent_dose
       expression: "items['norepinephrine_equiv'] <= 0.1"
 
     mental_status_ok:
+      title: "Mental status criterion met"
       description: >
         Patient is awake and easily arousable.
-        Satisfied if CAM-ICU RASS LOC (228302) = 'Yes' 
-        OR Riker-SAS (223753) is in {3, 4} (Sedated/Calm).
+        Satisfied if CAM-ICU RASS LOC (228302) = 'Yes'
       logic: OR
       expressions:
         - "items[228302] == 'Yes'"
-        - "items[223753] in [3, 4]"
-    
+
     inspiratory_effort_ok:
+      title: "Inspiratory effort criterion met"
       description: >
         Tidal Volume (spontaneous) (itemid 224686) > 0 mL -- patient is
         initiating at least some spontaneous inspiratory effort.
         Proxy for Table 2 criterion 5: "initiate inspiratory effort".
       expression: "items[224686] > 0"
+
   # ── Constraints ───────────────────────────────────────────────────────────
 
   constraints:
@@ -100,115 +123,332 @@ model:
     - id: RC-CF-01
       label: "Invasive ventilation must precede SBT start"
       template: PRECEDENCE
-      activation: InvasiveVentilationStarted
-      target: SBTStarted
+      # Burattin et al. Table 2 — precedence:
+      #   G(∀x.((B ∧ ϕ_a(x)) → O_I(A ∧ ∃y.ϕ_c(x,y))))
+      # B (activation) = SBTStarted — the event whose occurrence fires the check.
+      # A (target)     = InvasiveVentilationStarted — must have occurred before B.
+      activation: SBTStarted
+      target: InvasiveVentilationStarted
       rationale: >
         An SBT can only be initiated on a patient who is currently on invasive
         mechanical ventilation. Enforces that InvasiveVentilationStarted
-        has occurred without an intervening end event.
+        has occurred prior to SBTStarted.
 
-    # ── Data-Perspective (MP-Declare activation conditions on SBTStarted) ─────
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-01 — Oxygenation
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-01
       label: "Oxygenation criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT oxygenation_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
+      target: OxygenationMeasured
+      target_selection: last
+      correlation_condition: oxygenation_ok
+      correlation_condition_display: "PaO2/FiO2 >= 150 OR (SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O)"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
       rationale: >
-        PaO2/FiO2 >= 150 OR SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O
-        must be satisfied within 24 h before SBT initiation.
+        SBTStarted must be preceded within 24h by an OxygenationMeasured event.
+        Only the most recent OxygenationMeasured before SBTStarted is evaluated
+        (target_selection: last). OxygenationMeasured is emitted only when the
+        criterion IS satisfied (threshold enforced in emitter due to ±2h concurrent
+        FiO2/PEEP window for SpO2 arm): PaO2/FiO2 >= 150 OR (SpO2 >= 90% on
+        FiO2 <= 40% and PEEP <= 5 cmH2O). Akella Table 2, criterion 2.
+
+    # - id: RC-DP-01a
+    #   label: "Oxygenation criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT oxygenation_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     PaO2/FiO2 >= 150 OR SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O
+    #     must be satisfied within 24 h before SBT initiation (Akella Table 2,
+    #     criterion 2). If violated, the SBT must not proceed to completion.
+
+    # - id: RC-DP-01b
+    #   label: "Oxygenation criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT oxygenation_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     PaO2/FiO2 >= 150 OR SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O
+    #     must be satisfied within 24 h before SBT initiation.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-02 — pH
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-02
       label: "pH criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT ph_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
-      rationale: "Arterial pH must exceed 7.25 at SBT initiation."
+      target: pHMeasured
+      target_selection: last
+      correlation_condition: ph_ok
+      correlation_condition_display: "pH > 7.25"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
+      rationale: >
+        SBTStarted must be preceded within 24h by a pHMeasured event whose
+        most recent ph_bg value exceeds 7.25. pHMeasured is emitted for every
+        ph_bg measurement; the threshold is enforced via correlation_condition
+        evaluated on the most recent preceding event (target_selection: last).
+        Akella Table 2, criterion 3.
+
+    # - id: RC-DP-02a
+    #   label: "pH criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT ph_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Arterial pH must exceed 7.25 at SBT initiation (Akella Table 2,
+    #     criterion 3). If violated, the SBT must not proceed to completion.
+
+    # - id: RC-DP-02b
+    #   label: "pH criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT ph_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     Arterial pH must exceed 7.25 at SBT initiation (Akella Table 2,
+    #     criterion 3). If violated, the SBT must not proceed to completion.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-03 — Hemoglobin
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-03
       label: "Hemoglobin criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT hemoglobin_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
-      rationale: "Hemoglobin must be >= 7 g/dL at SBT initiation."
+      target: HemoglobinMeasured
+      target_selection: last
+      correlation_condition: hemoglobin_ok
+      correlation_condition_display: "Hgb ≥ 7 g/dL"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
+      rationale: >
+        SBTStarted must be preceded within 24h by a HemoglobinMeasured event
+        whose most recent hemoglobin_bg value is >= 7 g/dL. HemoglobinMeasured
+        is emitted for every hemoglobin_bg measurement; the threshold is enforced
+        via correlation_condition on the most recent preceding event
+        (target_selection: last). Akella Table 2, criterion 6.
+
+    # - id: RC-DP-03a
+    #   label: "Hemoglobin criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT hemoglobin_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Hemoglobin must be >= 7 g/dL at SBT initiation (Akella Table 2,
+    #     criterion 6). If violated, the SBT must not proceed to completion.
+
+    # - id: RC-DP-03b
+    #   label: "Hemoglobin criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT hemoglobin_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     Hemoglobin must be >= 7 g/dL at SBT initiation (Akella Table 2,
+    #     criterion 6). If violated, the SBT must not proceed to completion.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-04 — Temperature
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-04
       label: "Temperature criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT temperature_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
-      rationale: "Core temperature must not exceed 38 degrees C at SBT initiation."
+      target: TemperatureMeasured
+      target_selection: last
+      correlation_condition: temperature_ok
+      correlation_condition_display: "Temp ≤ 38 °C"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
+      rationale: >
+        SBTStarted must be preceded within 24h by a TemperatureMeasured event
+        whose most recent temperature (itemid 223762) is <= 38 degrees C.
+        TemperatureMeasured is emitted for every temperature measurement; the
+        threshold is enforced via correlation_condition on the most recent
+        preceding event (target_selection: last). Akella Table 2, criterion 7.
+
+    # - id: RC-DP-04a
+    #   label: "Temperature criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT temperature_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Core temperature must not exceed 38 degrees C at SBT initiation
+    #     (Akella Table 2, criterion 7). If violated, the SBT must not
+    #     proceed to completion.
+
+    # - id: RC-DP-04b
+    #   label: "Temperature criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT temperature_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     Core temperature must not exceed 38 degrees C at SBT initiation
+    #     (Akella Table 2, criterion 7). If violated, the SBT must not
+    #     proceed to completion.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-05 — Vasopressor
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-05
       label: "Vasopressor criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT vasopressor_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
+      target: VasopressorMeasured
+      target_selection: last
+      correlation_condition: vasopressor_ok
+      correlation_condition_display: "NE-equiv ≤ 0.1"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
       rationale: >
-        Patient must be hemodynamically stable (NE-equivalent <= 0.1 mcg/kg/min)
-        at SBT initiation.
+        SBTStarted must be preceded within 24h by a VasopressorMeasured event
+        whose most recent NE-equivalent dose is <= 0.1 mcg/kg/min. VasopressorMeasured
+        is emitted for every norepinephrine_equiv measurement; the threshold is
+        enforced via correlation_condition on the most recent preceding event
+        (target_selection: last). Akella Table 2, criterion 4.
+
+    # - id: RC-DP-05a
+    #   label: "Vasopressor criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT vasopressor_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Patient must be haemodynamically stable (NE-equivalent <= 0.1 mcg/kg/min)
+    #     at SBT initiation (Akella Table 2, criterion 4). If violated, the SBT
+    #     must not proceed to completion.
+
+    # - id: RC-DP-05b
+    #   label: "Vasopressor criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT vasopressor_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     Patient must be haemodynamically stable (NE-equivalent <= 0.1 mcg/kg/min)
+    #     at SBT initiation (Akella Table 2, criterion 4). If violated, the SBT
+    #     must not proceed to completion.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-06 — Mental Status
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-06
       label: "Mental status criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT mental_status_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
+      target: MentalStatusMeasured
+      correlation_condition: mental_status_ok
+      correlation_condition_display: "RASS LOC 'Yes'"
+      target_selection: last
+      time_condition:
+        min_hours: -24
+        max_hours: 0
       rationale: >
-        Patient must be awake and easily arousable (RASS LOC 'Yes' OR SAS 3-4) 
-        within 24 h of SBT start.
+        SBTStarted must be preceded within 24h by a MentalStatusMeasured event.
+        Only the most recent MentalStatusMeasured before SBTStarted is evaluated
+        (target_selection: last). MentalStatusMeasured is emitted only when the
+        criterion IS satisfied (threshold enforced in emitter due to OR across two
+        instruments): RASS LOC = 'Yes' (itemid 228302) OR SAS in {3, 4} (itemid 223753).
+        Akella Table 2, criterion 8.
+
+    # - id: RC-DP-06a
+    #   label: "Mental status criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT mental_status_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Patient must be awake and easily arousable (RASS LOC 'Yes' OR SAS 3-4)
+    #     within 24 h of SBT start (Akella Table 2, criterion 8). If violated,
+    #     the SBT must not proceed to completion.
+
+    # - id: RC-DP-06b
+    #   label: "Mental status criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT mental_status_ok"
+    #   observation_window_hours: 24
+    #   semantics: ACTIVATION_VIOLATION
+    #   rationale: >
+    #     Patient must be awake and easily arousable (RASS LOC 'Yes' OR SAS 3-4)
+    #     within 24 h of SBT start (Akella Table 2, criterion 8). If violated,
+    #     the SBT must not proceed to completion.
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RC-DP-07 — Inspiratory Effort
+    # ════════════════════════════════════════════════════════════════════════
 
     - id: RC-DP-07
       label: "Inspiratory effort criterion must be met at SBT start"
-      template: MP_EXISTENCE
+      template: PRECEDENCE
       activation: SBTStarted
-      activation_condition: "NOT inspiratory_effort_ok"
-      observation_window_hours: 24
-      semantics: ACTIVATION_VIOLATION
-
-    # ── Temporal ──────────────────────────────────────────────────────────────
-
-    - id: RC-TM-01
-      label: "Readiness observations must be recorded within 24 h before SBT"
-      template: TIMED_PRECEDENCE
-      activation: SBTStarted
-      observation_window_hours: 24
-      items_required: [220224, 223835, 220277, 220339, 223830, 220228, 223762, 228302, 223753, 'norepinephrine_equiv', 'pao2fio2ratio', 'fio2_bg', 'peep_vent', 'ph_bg', 'hemoglobin_bg']
+      target: InspiratoryEffortMeasured
+      target_selection: last
+      correlation_condition: inspiratory_effort_ok
+      correlation_condition_display: "Spont. Tidal Vol > 0 mL"
+      time_condition:
+        min_hours: -24
+        max_hours: 0
       rationale: >
-        All readiness condition items must have at least one chartevents record
-        within 24 h before SBTStarted. Stale observations are not valid for
-        readiness determination.
+        SBTStarted must be preceded within 24h by an InspiratoryEffortMeasured
+        event whose most recent spontaneous tidal volume (itemid 224686) is > 0 mL.
+        InspiratoryEffortMeasured is emitted for every SpTV measurement; the
+        threshold is enforced via correlation_condition on the most recent
+        preceding event (target_selection: last). Akella Table 2, criterion 5.
 
-    - id: RC-TM-02
-      label: "Repeated SBT attempts at least 24 h apart after failure"
-      template: TIMED_RESPONSE
-      activation: SBTStarted
-      target: SBTStarted
-      min_gap_hours: 24
-      condition_on_activation: "previous_SBT_failed == True"
-      rationale: >
-        After SBT failure, the next attempt must be separated by at least 24 h,
-        matched with spontaneous awakening trials (sedation vacations).
+    # - id: RC-DP-07a
+    #   label: "Inspiratory effort criterion must be met at SBT start (not_responded_existence)"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT inspiratory_effort_ok"
+    #   target: SBTCompleted
+    #   observation_window_hours: 24
+    #   rationale: >
+    #     Patient must initiate spontaneous inspiratory effort (SpTV > 0 mL)
+    #     within 24 h of SBT start (Akella Table 2, criterion 5). If violated,
+    #     the SBT must not proceed to completion.
 
-    - id: RC-TM-03
-      label: "SBT should be attempted 48-72 h after invasive ventilation start"
-      template: TIMED_RESPONSE
-      activation: InvasiveVentilationStarted
-      target: SBTStarted
-      min_gap_hours: 48
-      max_gap_hours: 72
-      rationale: >
-        Trigger-based episodes require a weaning attempt to be documented after
-        an initial stabilization period and no later than 72 h from invasive
-        ventilation start.
+    # - id: RC-DP-07b
+    #   label: "Inspiratory effort criterion must be met at SBT start (mp_existence)"
+    #   template: MP_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "NOT inspiratory_effort_ok"
+    #   observation_window_hours: 24
+      # semantics: ACTIVATION_VIOLATION
+      # rationale: >
+      #   Patient must initiate spontaneous inspiratory effort (SpTV > 0 mL)
+      #   within 24 h of SBT start (Akella Table 2, criterion 5). If violated,
+      #   the SBT must not proceed to completion.

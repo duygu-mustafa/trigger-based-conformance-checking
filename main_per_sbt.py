@@ -8,6 +8,8 @@ was recorded.
 from __future__ import annotations
 
 import argparse
+import csv
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +27,7 @@ from conformance.types import DeclareModel
 from conformance.checker import (
     evaluate_constraint
 )
+from derive.pipeline import raw_to_event_log
 import json
 import math
 
@@ -69,20 +72,7 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     if prior.empty:
         return None
 
-    completed_failed = prior[
-        (prior["activity"] == "SBTCompleted")
-        & prior.get("value_raw", pd.Series(index=prior.index, dtype=object))
-        .astype(str)
-        .str.lower()
-        .isin(["no", "failure", "failed"])
-    ]
-    failures = pd.concat(
-        [
-            prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])],
-            completed_failed,
-        ],
-        axis=0,
-    ).sort_values("timestamp")
+    failures = prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])].sort_values("timestamp")
     if failures.empty:
         return None
     return failures.iloc[-1]["timestamp"]
@@ -92,19 +82,34 @@ def _sbt_failed_by_reventilation(
     vent_starts: pd.DataFrame,
     sbt_start: pd.Timestamp,
     failure_window_hours: float = 48.0,
-) -> bool:
+) -> pd.Timestamp | None:
+    """Return the timestamp of a re-ventilation event occurring after an SBT start.
+
+    Returns the first `InvasiveVentilationStarted` timestamp that occurs after
+    `sbt_start` and within `failure_window_hours`. Returns ``None`` if no such
+    event exists.
+    """
     outcome_end = sbt_start + pd.Timedelta(hours=failure_window_hours)
     matching_vent = vent_starts[
         (vent_starts["timestamp"] > sbt_start)
         & (vent_starts["timestamp"] <= outcome_end)
-    ]
-    return not matching_vent.empty
+    ].sort_values("timestamp")
+    if matching_vent.empty:
+        return None
+    return matching_vent.iloc[0]["timestamp"]
 
 
 def _find_latest_failed_sbt_start_before(
     df_full: pd.DataFrame,
     current_sbt_start: pd.Timestamp,
 ) -> pd.Timestamp | None:
+    """Find the most recent failure timestamp (re-ventilation) prior to ``current_sbt_start``.
+
+    Scans prior SBT starts and returns the timestamp of the matching
+    re-ventilation event for the latest prior attempt that resulted in
+    re-ventilation within the failure window. Returns ``None`` if no prior
+    failed attempts are found.
+    """
     sbt_starts = (
         df_full[df_full["activity"] == "SBTStarted"]
         .drop_duplicates(subset=["timestamp"])
@@ -118,33 +123,23 @@ def _find_latest_failed_sbt_start_before(
         return None
 
     vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
-    latest_failed: pd.Timestamp | None = None
+    latest_failed_ts: pd.Timestamp | None = None
     for _, row in prior_attempts.iterrows():
         prior_start = row["timestamp"]
-        if _sbt_failed_by_reventilation(vent_starts, prior_start):
-            latest_failed = prior_start
+        failure_ts = _sbt_failed_by_reventilation(vent_starts, prior_start)
+        if failure_ts is not None:
+            # Keep the most recent failure timestamp (in case multiple prior
+            # attempts failed); this ensures the gap is measured from the
+            # actual failure event rather than the SBT start time.
+            if latest_failed_ts is None or failure_ts > latest_failed_ts:
+                latest_failed_ts = failure_ts
 
-    return latest_failed
+    return latest_failed_ts
 
 
-def _evaluate_rc_tm_02_outcome(
-    df_full: pd.DataFrame,
-    current_sbt_start: pd.Timestamp | None,
-    min_gap_hours: float = 24.0,
-) -> tuple[ConformanceOutcome, float | None]:
-    if current_sbt_start is None:
-        return ConformanceOutcome.VACUOUS, None
-
-    prior_failed_start = _find_latest_failed_sbt_start_before(df_full, current_sbt_start)
-    if prior_failed_start is None:
-        # Activation condition is false: no prior failed SBT before this start.
-        return ConformanceOutcome.VACUOUS, None
-
-    gap_hours = float((current_sbt_start - prior_failed_start).total_seconds()) / 3600.0
-    outcome = ConformanceOutcome.SATISFIED if gap_hours >= min_gap_hours else ConformanceOutcome.VIOLATED
-    
-    # Return both outcome and the delay forensic
-    return outcome, gap_hours
+# NOTE: manual `_evaluate_sbt_tm_01_outcome` special-case was removed in favor
+# of emitting derived `SBTFailed` events and using the generic Declare checker.
+# The old helper was intentionally removed to eliminate ad-hoc runtime branches.
 
 
 def _evaluate_composite_for_attempt(
@@ -219,8 +214,8 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         whitelist_ids.update(str(k) for k in source.keys())
     
     # Also whitelist derived ventilation/sbt IDs
-    whitelist_ids.update(["sbt_status", "sbt_outcome", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
-    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTCompleted", "SBTFailed"]
+    whitelist_ids.update(["sbt_status", "derived_invasive_ventilation_start", "derived_invasive_ventilation_end"])
+    core_activities = ["InvasiveVentilationStarted", "InvasiveVentilationEnded", "SBTStarted", "SBTFailed", "SBTSucceeded"]
 
     # 2. Extract constraint definitions keyed by canonical IDs for frontend lookup.
     constraint_defs = {}
@@ -228,17 +223,40 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
         cid = getattr(c, "id", None) or c.label
         if not cid:
             continue
+        def _subst_activity_names(expr, activation, target):
+            if not expr:
+                return expr
+            result = str(expr)
+            if activation:
+                result = result.replace("activation_ts", activation)
+            if target:
+                result = result.replace("target_ts", target)
+            return result
+
+        activation_name = c.activation if hasattr(c, "activation") else None
+        target_name = c.target if hasattr(c, "target") else None
+
         constraint_defs[str(cid)] = {
             "id": str(cid),
             "label": c.label or str(cid),
             "description": getattr(c, "description", "") or "",
             "rationale": getattr(c, "rationale", "") or "",
             "template": c.template.name if hasattr(c, "template") else None,
-            "activation": c.activation if hasattr(c, "activation") else None,
-            "target": c.target if hasattr(c, "target") else None,
+            "activation": activation_name,
+            "target": target_name,
             "semantics": getattr(c, "semantics", None),
-            "activation_condition": getattr(c, "activation_condition_raw", None),
-            "target_condition": getattr(c, "target_condition_raw", None),
+            "activation_condition": _subst_activity_names(
+                getattr(c, "activation_condition_raw", None),
+                activation_name,
+                target_name,
+            ),
+            "activation_condition_title": getattr(c, "activation_condition_title", None),
+            "target_condition": _subst_activity_names(
+                getattr(c, "target_condition_raw", None),
+                activation_name,
+                target_name,
+            ),
+            "target_condition_title": getattr(c, "target_condition_title", None),
             "observation_window_hours": getattr(c, "observation_window_hours", None),
             "min_gap_hours": (c.time_condition.min_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.min_seconds is not None) else None,
             "max_gap_hours": (c.time_condition.max_seconds / 3600.0) if (getattr(c, "time_condition", None) and c.time_condition.max_seconds is not None) else None,
@@ -296,13 +314,34 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 
         stay_conformance_df = stay_conformance_df.astype(object).where(pd.notnull(stay_conformance_df), None)
         stay_conformance = stay_conformance_df.to_dict(orient="records")
-        
+
+        # Build aggregated violated/satisfied rule lists for this case
+        def _parse_semicolon_list(val):
+            if not val:
+                return []
+            if isinstance(val, list):
+                return [str(v) for v in val]
+            try:
+                return [token.strip() for token in str(val).split(";") if token.strip()]
+            except Exception:
+                return []
+
+        violated_set: set[str] = set()
+        satisfied_set: set[str] = set()
+        for ep in stay_conformance:
+            violated_set.update(_parse_semicolon_list(ep.get("mandatory_violated_constraints")))
+            violated_set.update(_parse_semicolon_list(ep.get("info_violated_constraints")))
+            satisfied_set.update(_parse_semicolon_list(ep.get("mandatory_satisfied_constraints")))
+            satisfied_set.update(_parse_semicolon_list(ep.get("info_satisfied_constraints")))
+
         # Final JSON structure
         case_json = {
             "case_id": str(stay_id),
             "events": df_stay.to_dict(orient="records"),
             "conformance": stay_conformance,
-            "constraint_definitions": constraint_defs
+            "constraint_definitions": constraint_defs,
+            "violated_rules": sorted(list(violated_set)),
+            "satisfied_rules": sorted(list(satisfied_set)),
         }
         
         output_file = output_dir / f"case_{stay_id}.json"
@@ -316,10 +355,22 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 
     print(f"Frontend export complete.")
 
+_OUTPUT_COLUMNS = [
+    "stay_id", "episode_index", "episode_start", "episode_end",
+    "ventilation_start", "ventilation_end", "sbt_attempt", "sbt_start", "sbt_end",
+    "sbt_outcome", "mandatory_violated_constraints", "mandatory_satisfied_constraints",
+    "mandatory_vacuous_constraints", "info_violated_constraints", "info_satisfied_constraints",
+    "info_vacuous_constraints", "composite_interventions", "composite_note",
+    "violation_forensics", "satisfaction_forensics",
+    "num_mandatory_violations", "num_mandatory_satisfactions",
+]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("data/icu_event_log.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("data/results/trigger_results.csv"))
+    parser.add_argument("--input", type=Path, default=Path("icu_event_log_full.parquet"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/full_results/trigger_results_full.csv"))
+    parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -331,10 +382,24 @@ def main() -> None:
     constraint_id_lookup = _load_combined_constraint_id_lookup(model_paths)
     
     stay_ids = runner.get_stay_ids()
-    print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
 
-    output_rows = []
-    for stay_id in tqdm(stay_ids):
+    done_ids: set[str] = set()
+    if args.resume and args.output.exists():
+        existing = pd.read_csv(args.output, usecols=["stay_id"])
+        done_ids = set(existing["stay_id"].astype(str))
+        print(f"Resuming: {len(done_ids)} stays already done, {len(stay_ids) - len(done_ids)} remaining.")
+    else:
+        print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    open_mode = "a" if args.resume and args.output.exists() else "w"
+    csv_handle = args.output.open(open_mode, newline="", encoding="utf-8")
+    writer = csv.DictWriter(csv_handle, fieldnames=_OUTPUT_COLUMNS)
+    if open_mode == "w":
+        writer.writeheader()
+
+    remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
+    for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
         # 1. Load full trace for this stay
         df_full = runner.con.execute(
             f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
@@ -349,22 +414,28 @@ def main() -> None:
         if df_full.empty:
             continue
 
-        episodes = _build_trigger_episodes(df_full)
+        # Convert raw stay rows to canonical event log with derived activities
+        if not runner._is_event_log_input:
+            event_log = raw_to_event_log(df_full)
+        else:
+            event_log = df_full.copy()
+
+        episodes = _build_trigger_episodes(event_log)
         if not episodes:
             continue
 
         sbt_starts = (
-            df_full[df_full["activity"] == "SBTStarted"]
+            event_log[event_log["activity"] == "SBTStarted"]
             .drop_duplicates(subset=["timestamp"])
             .sort_values("timestamp")
         )
-        vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
+        vent_starts = event_log[event_log["activity"] == "InvasiveVentilationStarted"]
 
         attempt_index = 0
         for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
-            episode_df = df_full[
-                (df_full["timestamp"] >= episode_start)
-                & (df_full["timestamp"] < episode_end)
+            episode_df = event_log[
+                (event_log["timestamp"] >= episode_start)
+                & (event_log["timestamp"] < episode_end)
             ].copy()
             if episode_df.empty:
                 continue
@@ -393,7 +464,7 @@ def main() -> None:
                     sbt_end = matching_vent.iloc[0]["timestamp"]
                 else:
                     # Right-censored case: Check the very last activity in the stay
-                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted", "SBTCompleted"])].sort_values("timestamp").iloc[-1:]
+                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted"])].sort_values("timestamp").iloc[-1:]
                     if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":
                          outcome_val = "Failure (Last State: Invasive Vent)"
                     else:
@@ -425,19 +496,16 @@ def main() -> None:
                     continue
 
                 is_failure_rule = canon_id.startswith("INT-")
-                if canon_id == "RC-TM-02":
-                    outcome, gap_hours = _evaluate_rc_tm_02_outcome(df_full=df_full, current_sbt_start=sbt_start)
-                    res = None
-                    # Create a dummy result-like object for manual rules
-                    manual_forensics = {"deltas": {"gap_hours": gap_hours}, "delay_seconds": gap_hours * 3600} if gap_hours is not None else None
-                else:
-                    res = evaluate_constraint(
-                        case_id=str(stay_id),
-                        trace_df=episode_df,
-                        constraint=constraint,
-                    )
-                    outcome = res.outcome
-                    manual_forensics = None
+                # Use the general checker for all constraints; derived activities
+                # (e.g., an SBTFailed emitted at re-ventilation time) are available
+                # in `event_log` so no special-case manual evaluation is required.
+                res = evaluate_constraint(
+                    case_id=str(stay_id),
+                    trace_df=episode_df,
+                    constraint=constraint,
+                )
+                outcome = res.outcome
+                manual_forensics = None
 
                 if outcome == ConformanceOutcome.VACUOUS:
                     target_vacuous = mandatory_vacuous
@@ -467,7 +535,7 @@ def main() -> None:
             composite_reason = None
             if sbt_start is not None and attempt_index > 1:
                 composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
-                    df_full=df_full,
+                    df_full=event_log,
                     sbt_start=sbt_start,
                 )
                 if composite_ok:
@@ -484,7 +552,7 @@ def main() -> None:
                 # If ongoing, use the last timestamp in the stay
                 vent_end = df_full["timestamp"].max()
 
-            output_rows.append({
+            writer.writerow({
                 "stay_id": stay_id,
                 "episode_index": episode_idx,
                 "episode_start": str(episode_start),
@@ -508,24 +576,45 @@ def main() -> None:
                 "num_mandatory_violations": len(set(mandatory_violated)),
                 "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
             })
+            csv_handle.flush()
 
-    output_df = pd.DataFrame(output_rows)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    output_df.to_csv(args.output, index=False)
+    csv_handle.close()
+    output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
 
     # --- AUTOMATIC FRONTEND EXPORT ---
     # Calculate path relative to this script's location to be robust
     base_path = Path(__file__).resolve().parent
     frontend_data_dir = base_path / "frontend" / "public" / "data"
-    
-    export_to_frontend(runner, stay_ids, output_df, frontend_data_dir)
-    
+    results_dir = (base_path / args.output).resolve().parent if not args.output.is_absolute() else args.output.parent
+    stats_table_path = results_dir / "statistical_analysis_table.csv"
+    stats_summary_path = results_dir / "rule_statistics_R2.csv"
+
+    r_script = base_path / "statistics_R.r"
+    if not r_script.exists():
+        raise FileNotFoundError(f"Missing R statistics script: {r_script}")
+
+    subprocess.run(
+        [
+            "Rscript",
+            str(r_script),
+            str(args.output),
+            str(stats_table_path),
+            str(stats_summary_path),
+        ],
+        check=True,
+        cwd=base_path,
+    )
+
+    # Filter to only stays with actual conformance results
+    stays_with_results = sorted(set(output_df["stay_id"].unique()))
+    export_to_frontend(runner, stays_with_results, output_df, frontend_data_dir)
+
     # --- AUTOMATIC SUMMARY GENERATION ---
     from derive.generate_summary import build_summary
     case_files = sorted(frontend_data_dir.glob("case_*.json"))
     if case_files:
-        summary = build_summary(case_files, frontend_data_dir)
+        summary = build_summary(case_files, frontend_data_dir, stats_summary_path if stats_summary_path.exists() else None)
         summary_file = frontend_data_dir / "summary.json"
         with summary_file.open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)

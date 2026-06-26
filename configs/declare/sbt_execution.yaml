@@ -10,47 +10,79 @@ model:
     itemids defined in item_dictionary.yaml.
     Activity definitions are in activity_mapping.yaml.
 
+    All templates conform to Burattin et al. (2016) Table 2 MP-Declare semantics.
+    The custom `semantics` field has been removed; violation attribution is
+    determined by the template algorithm rather than a bespoke annotation:
+      - not_responded_existence: violation attributed to the activation instance
+        when the forbidden target is subsequently observed.
+      - response / not_response: violation attributed to the activation instance
+        at closing() when no valid target is found within the time window.
+
   # ── Data Conditions ───────────────────────────────────────────────────────
 
   data_conditions:
 
     rr_failure:
-      description: "Respiratory Rate > 35 breaths/min"
+      title: "RR Failure"
+      description: "Respiratory Rate > 35 breaths/min (Akella Table 4)"
       expression: "items[220210] > 35"
 
     accessory_muscle_failure:
+      title: "Accessory Muscle Failure"
       description: >
         Accessory muscle use detected. Ordinal mapping: 0=Normal, 1=Mild,
         2=Moderate Distress (Fail), 3=Critical Fail.
         ItemID 229322 (Breathing pattern/effort) or 223990 (Respiratory Effort).
-      expression: "items[229322] in [2, 3] OR items[223990] in [2, 3]" 
+        Akella Table 4, criterion 2.
+      expression: "items[229322] in [2, 3] OR items[223990] in [2, 3]"
 
     spo2_failure:
+      title: "SpO₂ Failure"
       description: >
         SpO2 persistently < 92% (or < 88% in chronic lung disease patients)
-        on FiO2 >= 0.4 or at least 6 L/min oxygen.
+        on FiO2 >= 0.4 or at least 6 L/min oxygen. Akella Table 4, criterion 3.
       logic: OR
       expressions:
         - "items[220277] < 92"
         - "(is_chronic == True) AND (items[220277] < 88)"
 
     hemodynamic_failure:
+      title: "Hemodynamic Failure"
       description: >
-        HR > 140 bpm OR SBP > 180 mmHg OR SBP < 90 mmHg (signs of
-        hypoperfusion).
+        HR > 140 bpm OR SBP > 180 mmHg with signs of hypoperfusion
+        (Akella Table 4, criterion 4). Note: SBP < 90 mmHg is included as
+        an extension beyond Akella Table 4 to capture hypotensive shock;
+        annotated for traceability.
       logic: OR
       expressions:
         - "items[220045] > 140"
         - "items[220179] > 180"
-        - "items[220179] < 90"
+        - "items[220179] < 90"   # extension beyond Akella Table 4
 
     mental_status_failure:
+      title: "SAS Failure"
       description: >
         Depressed mental status or agitation. SAS >= 6 (Very Agitated /
         Danger Agitation) or SAS <= 2 (Very Sedated / Unarousable) or
-        RASS LOC = No.
+        RASS LOC = No. Akella Table 4, criterion 5.
       logic: OR
       expressions:
+        - "items[223753] >= 6"
+        - "items[223753] <= 2"
+        - "items[228302] == 'No'"
+
+    any_failure_criterion:
+      title: "Any SBT failure criterion met"
+      description: "Composite of all five Akella Table 4 failure criteria."
+      logic: OR
+      expressions:
+        - "items[220210] > 35"
+        - "items[229322] in [2, 3] OR items[223990] in [2, 3]"
+        - "items[220277] < 92"
+        - "(is_chronic == True) AND (items[220277] < 88)"
+        - "items[220045] > 140"
+        - "items[220179] > 180"
+        - "items[220179] < 90"
         - "items[223753] >= 6"
         - "items[223753] <= 2"
         - "items[228302] == 'No'"
@@ -65,138 +97,144 @@ model:
         > 24 h. Triggers direct extubation to preventative NIV.
       expression: "high_risk_flag == True AND ventilation_duration_hours > 24"
 
-    # sbt_success_window:
-    #   description: "SBT duration falls within the valid 30-120 min success window."
-    #   expression: "sbt_duration_min >= 30 AND sbt_duration_min <= 120"
 
   # ── Constraints ───────────────────────────────────────────────────────────
 
   constraints:
 
-    # ── Control-Flow ─────────────────────────────────────────────────────────
+    # ── Outcome integrity (not_responded_existence) ───────────────────────
+    # Template: not_responded_existence (Burattin et al. Table 2)
+    # MFOTL: G(∀x.((A ∧ ϕ_a(x)) → ¬(O_I(B ∧ ∃y.ϕ_c(x,y)) ∨ F_I(B ∧ ∃y.ϕ_c(x,y)))))
+    # A (activation) = SBTStarted, guarded by ϕ_a = the failure criterion.
+    # B (target)     = SBTSucceeded — must never be observed once activation fires.
+    # Semantics: if the trial was started while a failure criterion was already
+    # present, a success outcome must never be recorded for that trial.
+    # Violation: SBTStarted instance moves to violations at closing() when
+    # SBTSucceeded is subsequently observed in the same episode.
 
-    # - id: SBT-CF-01
-    #   label: "SBT must eventually be completed"
-    #   template: RESPONSE
+    # - id: SBT-DP-02
+    #   label: "No SBT success when respiratory rate failure criterion met"
+    #   template: NOT_RESPONDED_EXISTENCE
     #   activation: SBTStarted
-    #   target: SBTCompleted
+    #   activation_condition: "rr_failure"
+    #   target: SBTSucceeded
     #   rationale: >
-    #     Every initiated SBT must produce an outcome record (itemid sbt_outcome).
-    #     Prevents unclosed SBT windows in the event log.
+    #     RR > 35 breaths/min during the trial is an SBT failure criterion
+    #     (Akella Table 4). A Success outcome following this violation is a
+    #     documentation inconsistency.
 
-    # - id: SBT-CF-02
-    #   label: "SBT completion must follow SBT start"
-    #   template: PRECEDENCE
+    # - id: SBT-DP-03
+    #   label: "No SBT success when SpO2 failure criterion met"
+    #   template: NOT_RESPONDED_EXISTENCE
     #   activation: SBTStarted
-    #   target: SBTCompleted
+    #   activation_condition: "spo2_failure"
+    #   target: SBTSucceeded
     #   rationale: >
-    #     Control-flow ordering: an SBT completion event cannot be recorded
-    #     without a preceding SBT initiation.
+    #     Persistent SpO2 < 92% (or < 88% in chronic lung disease) is a
+    #     failure criterion (Akella Table 4). A Success outcome following
+    #     this violation is a documentation inconsistency.
 
-    # - id: SBT-CF-05
-    #   label: "After SBT failure, ventilatory support must resume"
-    #   template: RESPONSE
-    #   activation: SBTFailed
-    #   target: VentilatorySupportResumed # CHECK activity definition
-    #   rationale: >
-    #     If the SBT fails, the patient must receive non-fatiguing ventilatory
-    #     support. Absence of this event after failure is a protocol deviation.
-
-    # ── Data-Perspective (MP-Declare) ─────────────────────────────────────────
-
-    # - id: SBT-DP-01
-    #   label: "SBT duration must be 30-120 min for a valid success"
-    #   template: MP_RESPONSE
+    # - id: SBT-DP-04
+    #   label: "No SBT success when haemodynamic failure criterion met"
+    #   template: NOT_RESPONDED_EXISTENCE
     #   activation: SBTStarted
-    #   target: SBTCompleted
-    #   target_condition: "sbt_success_window"
-    #   semantics: TARGET_VIOLATION
+    #   activation_condition: "hemodynamic_failure"
+    #   target: SBTSucceeded
     #   rationale: >
-    #     Tolerance of 30-120 min is required for SBT success per guideline.
-    #     Completions outside this window are flagged for review.
+    #     HR > 140 bpm or SBP > 180 mmHg during the trial is a failure
+    #     criterion (Akella Table 4). A Success outcome following this
+    #     violation is a documentation inconsistency.
 
-    - id: SBT-DP-02
-      label: "No SBT success when respiratory rate failure criterion met"
-      template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "rr_failure AND items['sbt_outcome'] == 'Success'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        RR > 35 breaths/min during the trial is an SBT failure criterion.
-        A Success outcome co-occurring with this violation is a
-        documentation inconsistency.
-
-    - id: SBT-DP-03
-      label: "No SBT success when SpO2 failure criterion met"
-      template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "spo2_failure AND items['sbt_outcome'] == 'Success'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        Persistent SpO2 < 92% (or < 88% in chronic lung disease) is a
-        failure criterion; a positive outcome is contradictory.
-
-    - id: SBT-DP-04
-      label: "No SBT success when haemodynamic failure criterion met"
-      template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "hemodynamic_failure AND items['sbt_outcome'] == 'Success'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        HR > 140 bpm or SBP > 180 mmHg during the trial contradicts
-        a successful SBT outcome.
-
-    - id: SBT-DP-05
-      label: "No SBT success when mental status failure criterion met"
-      template: NOT_CO_EXISTENCE
-      activation: SBTCompleted
-      activation_condition: "mental_status_failure AND items['sbt_outcome'] == 'Success'"
-      semantics: ACTIVATION_VIOLATION
-      rationale: >
-        Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
-        during the trial is a failure criterion.
+    # - id: SBT-DP-05
+    #   label: "No SBT success when mental status failure criterion met"
+    #   template: NOT_RESPONDED_EXISTENCE
+    #   activation: SBTStarted
+    #   activation_condition: "mental_status_failure"
+    #   target: SBTSucceeded
+    #   rationale: >
+    #     Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
+    #     during the trial is a failure criterion (Akella Table 4). A Success
+    #     outcome following this violation is a documentation inconsistency.
 
     # - id: SBT-DP-06
-    #   label: "PSV mode used when ventilation duration > 24 h"
-    #   template: MP_EXISTENCE
+    #   label: "No SBT success when accessory muscle failure criterion met"
+    #   template: NOT_RESPONDED_EXISTENCE
     #   activation: SBTStarted
-    #   activation_condition: "psv_indicated AND ('PSV' not in vent_mode)"
-    #   semantics: ACTIVATION_VIOLATION
+    #   activation_condition: "accessory_muscle_failure"
+    #   target: SBTSucceeded
     #   rationale: >
-    #     For patients ventilated > 24 h, SBT mode should be PSV (5-8 cmH2O)
-    #     rather than T-piece.
+    #     Increased accessory muscle use is a failure criterion (Akella Table 4,
+    #     criterion 2). A Success outcome following this violation is a
+    #     documentation inconsistency.
 
-    # - id: SBT-DP-07
-    #   label: "High-risk patients extubated to preventative NIV"
-    #   template: MP_RESPONSE
-    #   activation: SBTCompleted
-    #   activation_condition: "high_risk_extubation AND items[224717] == 'Yes'"
-    #   target: NIVInitiated
-    #   semantics: TARGET_VIOLATION
-    #   rationale: >
-    #     Patients at high risk of extubation failure who pass the SBT should
-    #     be extubated directly to preventative non-invasive ventilation (NIV).
-
-    # ── Temporal ──────────────────────────────────────────────────────────────
-
-    # - id: SBT-TM-01
-    #   label: "SBT completion recorded within 3 h of SBT start"
-    #   template: TIMED_RESPONSE
+    # - id: SBT-DP-COMPOSITE-01
+    #   label: "No SBT success when any failure criterion is met"
+    #   template: NOT_RESPONDED_EXISTENCE
     #   activation: SBTStarted
-    #   target: SBTCompleted
-    #   max_gap_hours: 3
+    #   activation_condition: "any_failure_criterion"
+    #   target: SBTSucceeded
     #   rationale: >
-    #     Maximum SBT duration is 120 min; completion should be charted within
-    #     3 h (allowing brief documentation delay). Longer gaps indicate
-    #     missing outcome records.
+    #     Composite rule: any one of the five Akella Table 4 failure criteria
+    #     renders a concurrent Success outcome a documentation inconsistency.
 
-    # - id: SBT-TM-02
-    #   label: "Failure criterion triggers SBT stop within 30 min"
-    #   template: TIMED_RESPONSE
-    #   activation: FailureCriterionMet
-    #   target: SBTStopped
-    #   max_gap_hours: 0.5
-    #   rationale: >
-    #     On detection of any SBT failure criterion, the trial must be stopped
-    #     promptly. A delay > 30 min after a failure criterion is a clinical
-    #     safety violation.
+    # ── Temporal re-attempt (response / not_response) ────────────────────
+    # Template: response (Burattin et al. Table 2)
+    # MFOTL: G(∀x.((A ∧ ϕ_a(x)) → F_I(B ∧ ∃y.ϕ_c(x,y))))
+    # A (activation) = SBTFailed.
+    # B (target)     = SBTStarted, with correlation_condition ϕ_c on timestamps.
+    # Violation: SBTFailed instance moved to violations at closing() when no
+    # SBTStarted satisfying ϕ_c is found.
+
+    - id: SBT-TM-01
+      label: "After SBT failure, the next SBT attempt must occur on the following calendar day"
+      template: RESPONSE
+      activation: SBTFailed
+      target: SBTStarted
+      correlation_condition: "date(target_ts) == date(activation_ts) + timedelta(days=1)"
+      correlation_condition_display: "Next calendar day"
+      rationale: >
+        A failed SBT creates an obligation for a repeated trial on the following
+        calendar day (Akella et al., 2022). Same-day retries and delays beyond
+        the next day are both treated as deviations.
+
+    - id: SBT-TM-01-early
+      label: "After SBT failure, the next SBT attempt must not occur on the same calendar day"
+      template: NOT_RESPONSE
+      # MFOTL: G(∀x.((A ∧ ϕ_a(x)) → ¬F_I(B ∧ ∃y.ϕ_c(x,y))))
+      # Violation: SBTFailed instance moved to violations at closing() when a
+      # SBTStarted satisfying ϕ_c (same calendar day) IS found.
+      activation: SBTFailed
+      target: SBTStarted
+      correlation_condition: "date(target_ts) == date(activation_ts)"
+      correlation_condition_display: "Same calendar day"
+      rationale: >
+        Same-day retries are too early; they risk patient fatigue and deviate
+        from the 24-hour re-attempt protocol (Akella et al., 2022).
+
+    - id: SBT-TM-01-late
+      label: "After SBT failure, the next SBT attempt must occur no later than the following calendar day"
+      template: RESPONSE
+      activation: SBTFailed
+      target: SBTStarted
+      correlation_condition: "date(target_ts) <= date(activation_ts) + timedelta(days=1)"
+      correlation_condition_display: "≤ next calendar day"
+      rationale: >
+        Delaying the repeated trial beyond the next calendar day deviates from
+        the 24-hour re-attempt protocol (Akella et al., 2022).
+
+    - id: SBT-TM-02
+      label: "SBT should be attempted within 72 h of stay start"
+      template: NOT_RESPONDED_EXISTENCE
+      # Encoding: if SBTStarted occurs and hours_since_stay_start > 72, then
+      # SBTSucceeded must never be observed — the late trial is flagged as a
+      # deviation at the point the episode closes successfully.
+      # Note: this is an operational interpretation of the Akella 48-72 h
+      # readiness assessment window, not a literal deadline stated in the paper.
+      activation: SBTStarted
+      activation_condition: "hours_since_stay_start > 72"
+      activation_condition_display: "Stay > 72 h"
+      target: SBTSucceeded
+      rationale: >
+        Readiness criteria should be assessed as early as 48-72 h after ICU
+        admission (Akella et al., 2022). An SBT initiated beyond 72 h of stay
+        start without documented justification is treated as a late deviation.

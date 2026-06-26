@@ -75,6 +75,12 @@ const Timeline = ({ data }) => {
       color: 'var(--color-meas)',
       activities: ['Respiratory Rate'],
     },
+    {
+      id: 'heart-rate',
+      label: 'Heart Rate',
+      color: '#1d4ed8',
+      activities: ['Heart Rate'],
+    },
   ];
 
   const respiratoryRateThresholdBands = [
@@ -83,6 +89,14 @@ const Timeline = ({ data }) => {
     { min: 12, max: 22, color: 'rgba(34, 197, 94, 0.18)', label: 'Sweet Spot' },
     { min: 22, max: 30, color: 'rgba(245, 158, 11, 0.18)', label: 'Transition' },
     { min: 30, max: Number.POSITIVE_INFINITY, color: 'rgba(239, 68, 68, 0.18)', label: 'Danger' },
+  ];
+
+  const heartRateThresholdBands = [
+    { min: 0, max: 50, color: 'rgba(239, 68, 68, 0.18)', label: 'Danger' },
+    { min: 50, max: 60, color: 'rgba(245, 158, 11, 0.18)', label: 'Transition' },
+    { min: 60, max: 100, color: 'rgba(34, 197, 94, 0.18)', label: 'Sweet Spot' },
+    { min: 100, max: 120, color: 'rgba(245, 158, 11, 0.18)', label: 'Transition' },
+    { min: 120, max: Number.POSITIVE_INFINITY, color: 'rgba(239, 68, 68, 0.18)', label: 'Danger' },
   ];
 
   const highlightedMeasurementRows = highlightedMeasurementSeries.map((series) => {
@@ -101,10 +115,14 @@ const Timeline = ({ data }) => {
     const domainMin = 0;
     const domainMax = series.id === 'respiratory-rate'
       ? Math.max(45, observedMaxValue)
+      : series.id === 'heart-rate'
+        ? Math.max(180, observedMaxValue)
       : (values.length > 0 ? observedMaxValue : 1);
 
     const thresholdBands = series.id === 'respiratory-rate'
       ? respiratoryRateThresholdBands
+      : series.id === 'heart-rate'
+        ? heartRateThresholdBands
       : [];
 
     return { ...series, points, domainMin, domainMax, thresholdBands };
@@ -130,6 +148,17 @@ const Timeline = ({ data }) => {
     const matches = events.filter(e => e.activity === activity && new Date(e.timestamp).getTime() <= targetTime);
     if (matches.length === 0) return null;
     return matches.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  };
+
+  const getMeasurementSeriesColor = (series) => {
+    if (series.id === 'respiratory-rate') return '#000000';
+    return series.color;
+  };
+
+  const getMeasurementSeriesLabelLines = (series) => {
+    if (series.id === 'respiratory-rate') return ['Respiratory', 'Rate'];
+    if (series.id === 'heart-rate') return ['Heart', 'Rate'];
+    return [series.label];
   };
 
   const parseViolationIds = (value) => {
@@ -311,7 +340,7 @@ const Timeline = ({ data }) => {
       const latest = latestItemBefore([224686], episode.sbt_start, 24);
       return { actual: formatMeasurement(latest), expected: 'Spontaneous tidal volume > 0 mL', observedAt: latest?.timestamp || null };
     }
-    if (cid === 'RC-TM-02') {
+    if (cid === 'SBT-TM-01') {
       const sortedStarts = conformance
         .filter(ep => ep.sbt_start)
         .sort((a, b) => new Date(a.sbt_start).getTime() - new Date(b.sbt_start).getTime());
@@ -454,14 +483,15 @@ const Timeline = ({ data }) => {
 
                     <line x1={paddingLeft} y1={y + rowHeight - 10} x2={width} y2={y + rowHeight - 10} stroke="var(--color-border)" strokeDasharray="4 4" />
                     <text x={paddingLeft - 15} y={y + 38} textAnchor="end" fill="var(--color-text-main)" fontSize="12" fontWeight="bold">
-                      <tspan x={paddingLeft - 15} dy="0">Respiratory</tspan>
-                      <tspan x={paddingLeft - 15} dy="14">Rate</tspan>
+                      {getMeasurementSeriesLabelLines(series).map((line, lineIndex) => (
+                        <tspan key={`${series.id}-label-${lineIndex}`} x={paddingLeft - 15} dy={lineIndex === 0 ? '0' : '14'}>{line}</tspan>
+                      ))}
                     </text>
 
                     {series.points.length > 0 ? (
                       <>
                         {series.points.length > 1 && (
-                          <path d={path} fill="none" stroke={series.id === 'respiratory-rate' ? '#000000' : series.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                          <path d={path} fill="none" stroke={getMeasurementSeriesColor(series)} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
                         )}
                         {series.points.map((point, pointIndex) => {
                           const x = getX(point.timestamp);
@@ -472,7 +502,7 @@ const Timeline = ({ data }) => {
                               cx={x}
                               cy={pointY}
                               r={2}
-                              fill={series.id === 'respiratory-rate' ? '#000000' : series.color}
+                              fill={getMeasurementSeriesColor(series)}
                               stroke="var(--color-bg-card)"
                               strokeWidth="1"
                               className="event-marker"
@@ -488,7 +518,7 @@ const Timeline = ({ data }) => {
                       </>
                     ) : (
                       <text x={(paddingLeft + width - paddingRight) / 2} y={y + 54} textAnchor="middle" fill="var(--color-text-muted)" fontSize="11">
-                        No respiratory rate measurements
+                        {`No ${series.label.toLowerCase()} measurements`}
                       </text>
                     )}
                   </g>
@@ -501,13 +531,13 @@ const Timeline = ({ data }) => {
                 const xEnd = getX(episode.episode_end);
                 return (
                   <g key={`guide-pinned-${i}`} style={{ pointerEvents: 'none' }}>
-                    <line 
-                      x1={xStart} y1={paddingTop - 10} x2={xStart} y2={paddingTop + rowHeight * measurementRowCount + 20} 
-                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                    <line
+                      x1={xStart} y1={paddingTop - 10} x2={xStart} y2={paddingTop + rowHeight * measurementRowCount + 20}
+                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15}
                     />
-                    <line 
-                      x1={xEnd} y1={paddingTop - 10} x2={xEnd} y2={paddingTop + rowHeight * measurementRowCount + 20} 
-                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                    <line
+                      x1={xEnd} y1={paddingTop - 10} x2={xEnd} y2={paddingTop + rowHeight * measurementRowCount + 20}
+                      stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15}
                     />
                   </g>
                 );
@@ -613,13 +643,13 @@ const Timeline = ({ data }) => {
               const xEnd = getX(episode.episode_end);
               return (
                 <g key={`guide-${i}`} style={{ pointerEvents: 'none' }}>
-                  <line 
-                    x1={xStart} y1={0} x2={xStart} y2={paddingTop + rowHeight * conformance.length} 
-                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                  <line
+                    x1={xStart} y1={0} x2={xStart} y2={paddingTop + rowHeight * conformance.length}
+                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15}
                   />
-                  <line 
-                    x1={xEnd} y1={0} x2={xEnd} y2={paddingTop + rowHeight * conformance.length} 
-                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15} 
+                  <line
+                    x1={xEnd} y1={0} x2={xEnd} y2={paddingTop + rowHeight * conformance.length}
+                    stroke="var(--color-text-muted)" strokeDasharray="4 4" opacity={0.15}
                   />
                 </g>
               );
@@ -794,7 +824,7 @@ const Timeline = ({ data }) => {
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-success)' }}></div><span>Expected SBT Start Window</span></div>
         <div className="legend-item"><div className="legend-color" style={{ background: 'var(--color-violation)' }}></div><span>Violation</span></div>
         {highlightedMeasurementRows.map(series => (
-          <div key={series.id} className="legend-item"><div className="legend-color" style={{ background: series.id === 'respiratory-rate' ? '#000000' : series.color }}></div><span>{series.label}</span></div>
+          <div key={series.id} className="legend-item"><div className="legend-color" style={{ background: getMeasurementSeriesColor(series) }}></div><span>{series.label}</span></div>
         ))}
       </div>
     </div>

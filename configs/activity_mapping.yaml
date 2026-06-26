@@ -23,16 +23,143 @@ mappings:
       value_equals: "Started"
     description: "SBT start event, derived from weaning state transitions."
 
-  SBTCompleted:
-    source: sbt_derived
-    itemid: sbt_outcome
-    description: >
-      SBT outcome. Value=Success means liberation achieved;
-      Value=Failure means returned to full support.
-
   # ── Derived / Synthetic Activities ───────────────────────────────────────
 
   SBTFailed:
     derived: true
     logic: >
-      Fired when SBTCompleted.value == "Failure"
+      Fired when InvasiveVentilationStarted occurs within 48h after SBTStarted
+      (window bounded by next SBTStarted if present). Timestamp = re-vent time.
+
+  SBTSucceeded:
+    derived: true
+    logic: >
+      Fired when no InvasiveVentilationStarted occurs within 48h after SBTStarted.
+      Timestamp = min(start + 48h, stay_end).
+  
+  AnyFailureIntervention:
+    derived: true
+    description: >
+      Synthetic activity fired when at least one post-SBT-failure intervention
+      is recorded across any of the three MIMIC-IV source tables within the
+      evaluation window. Used as the target of INT-COMPOSITE-01 to enforce that
+      at least one intervention pathway was addressed after a failed SBT.
+      Resolved in preprocessing before the conformance checking engine runs;
+      the resolved event inherits the timestamp of the earliest qualifying record.
+    logic:
+      operator: OR
+      sources:
+ 
+        - label: "Airway: bronchodilator"
+          source: inputevents
+          itemids: [224170]                          # Albuterol / ipratropium MDI
+ 
+        - label: "Fluid/compliance: diuretics"
+          source: inputevents
+          itemids: [221794, 229639]                  # Furosemide, Bumetanide
+ 
+        - label: "Cardiac: afterload reduction"
+          source: inputevents
+          itemids: [222056, 222051, 225974, 221429]  # Nitroglycerin, Nitroprusside,
+                                                     # Metoprolol, Esmolol
+ 
+        - label: "Metabolic: electrolyte correction"
+          source: inputevents
+          itemids: [222011, 227536, 222151, 220995, 227523]
+                                                     # KCl (x2), K-Phos/Na-Phos,
+                                                     # MgSO4 (x2)
+ 
+        - label: "Metabolic: electrolyte and blood gas labs"
+          source: labevents
+          itemids: [50971, 50960, 50970, 50882, 50818, 50820]
+                                                     # K, Mg, Phos, HCO3, pCO2, pH
+ 
+        - label: "Endocrine: cortisol and thyroid labs"
+          source: labevents
+          itemids: [227463, 50993, 50995]            # Cortisol, TSH, Free T4
+ 
+        - label: "Endocrine: hormonal replacement"
+          source: prescriptions
+          drugnames:
+            - "HYDROCORTISONE"
+            - "METHYLPREDNISOLONE"
+            - "DEXAMETHASONE"
+            - "LEVOTHYROXINE SODIUM"
+
+  # ── Discrete Clinical Action Activities ─────────────────────────────────
+  # These represent deliberate one-off clinical decisions, not continuous monitoring.
+  # Appropriate as Declare activities: the question is whether/when the action was taken.
+
+  NIF_Measured:
+    source: chartevents
+    itemid: 224419
+    description: "Negative Inspiratory Force measured (cmH2O) — respiratory muscle strength assessment."
+
+  CuffLeakTest_Performed:
+    source: chartevents
+    itemids: [224417, 224418]
+    description: "Cuff leak test performed via cuff pressure (224417) or cuff volume (224418) measurement."
+
+  ABG_Taken:
+    source: labevents
+    itemids: [50820, 50818]
+    description: "Arterial blood gas drawn; captures pH (50820) and pCO2 (50818) lab results."
+
+  ElectrolytesLab_Drawn:
+    source: labevents
+    itemids: [50971, 50960, 50970]
+    description: "Electrolyte panel drawn; captures potassium (50971), magnesium (50960), and phosphate (50970)."
+
+  # ── Readiness Criterion Satisfaction Activities ───────────────────────────
+  # Derived in activity_emitter._derive_activities. Each fires only when the
+  # corresponding SBT readiness criterion IS satisfied, enabling PRECEDENCE
+  # constraints to enforce "SBTStarted must be preceded by [X] within 24h."
+
+  OxygenationMeasured:
+    derived: true
+    description: >
+      Fires when oxygenation criterion is satisfied: PaO2/FiO2 >= 150 (itemid pao2fio2ratio)
+      OR SpO2 >= 90% (itemid 220277) with concurrent FiO2 <= 40% (fio2_bg) and
+      PEEP <= 5 cmH2O (peep_vent) within ±2h.
+
+  pHMeasured:
+    derived: true
+    description: >
+      Fires for every arterial pH measurement (itemid ph_bg). Threshold (> 7.25)
+      is enforced via correlation_condition on the PRECEDENCE rule (RC-DP-02),
+      which evaluates only the most recent preceding event (target_selection: last).
+
+  HemoglobinMeasured:
+    derived: true
+    description: >
+      Fires for every hemoglobin measurement (itemid hemoglobin_bg). Threshold
+      (>= 7.0 g/dL) is enforced via correlation_condition on the PRECEDENCE rule
+      (RC-DP-03), evaluated on the most recent preceding event (target_selection: last).
+
+  TemperatureMeasured:
+    derived: true
+    description: >
+      Fires for every core temperature measurement (itemid 223762). Threshold
+      (<= 38.0 °C) is enforced via correlation_condition on the PRECEDENCE rule
+      (RC-DP-04), evaluated on the most recent preceding event (target_selection: last).
+
+  VasopressorMeasured:
+    derived: true
+    description: >
+      Fires for every norepinephrine-equivalent measurement (itemid norepinephrine_equiv).
+      Threshold (<= 0.1 mcg/kg/min) is enforced via correlation_condition on the
+      PRECEDENCE rule (RC-DP-05), evaluated on the most recent preceding event
+      (target_selection: last).
+
+  MentalStatusMeasured:
+    derived: true
+    description: >
+      Fires when mental status criterion is satisfied: RASS LOC = 'Yes' (itemid 228302)
+      OR SAS ∈ {3, 4} (itemid 223753).
+
+  InspiratoryEffortMeasured:
+    derived: true
+    description: >
+      Fires for every spontaneous tidal volume measurement (itemid 224686). Threshold
+      (> 0 mL) is enforced via correlation_condition on the PRECEDENCE rule (RC-DP-07),
+      evaluated on the most recent preceding event (target_selection: last).
