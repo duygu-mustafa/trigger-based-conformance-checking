@@ -398,9 +398,8 @@ def main() -> None:
     if open_mode == "w":
         writer.writeheader()
 
-    for stay_id in tqdm(stay_ids):
-        if str(stay_id) in done_ids:
-            continue
+    remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
+    for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
         # 1. Load full trace for this stay
         df_full = runner.con.execute(
             f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
