@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from derive.activity_emitter import emit_activities
-from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes
+from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes, map_weaning_state
 from conformance.event_log_builder import build_event_log
 
 
@@ -107,12 +107,6 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
     if working.empty:
         return pd.DataFrame()
 
-    working["ventilation_status"] = working.apply(
-        lambda row: row.get("value_text")
-        if str(row.get("source_table")) == "ventilation" and str(row.get("itemid")) == "ventilation_status"
-        else None,
-        axis=1,
-    )
     working["ventilator_mode"] = working.apply(
         lambda row: row.get("value_text")
         if str(row.get("source_table")) == "ventilator_setting" and str(row.get("itemid")) == "ventilator_mode"
@@ -147,7 +141,6 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
         .groupby(["stay_id", "event_time"], as_index=False)
         .agg(
             {
-                "ventilation_status": _last_valid,
                 "ventilator_mode": _last_valid,
                 "ventilator_mode_hamilton": _last_valid,
                 "plateau_pressure": _last_valid,
@@ -159,8 +152,7 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
     if grouped.empty:
         return grouped
 
-    # Keep only rows with at least one non-null setting value. Rows with just
-    # ventilation_status can create artificial state transitions.
+    # Keep only rows with at least one non-null setting value.
     mode_non_empty = grouped[["ventilator_mode", "ventilator_mode_hamilton"]].apply(
         _non_missing_text_mask,
     )
@@ -178,7 +170,6 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
         "charttime",
         "starttime",
         "endtime",
-        "ventilation_status",
         "ventilator_mode",
         "ventilator_mode_hamilton",
         "plateau_pressure",
@@ -295,27 +286,6 @@ def _keep_directly_preceded_sbt_episodes(
     return pd.concat(kept_rows, ignore_index=True).drop(columns=["stay_id_text"], errors="ignore")
 
 
-def _is_sbt_candidate_state(mode: object, mode_hamilton: object, plateau_pressure: object, peep: object) -> bool:
-    mode_text = "" if _is_missing_text_value(mode) else str(mode).strip()
-    mode_h_text = "" if _is_missing_text_value(mode_hamilton) else str(mode_hamilton).strip()
-
-    if mode_h_text in {"Ambient", "SPONT", "CPAP"}:
-        return True
-
-    if mode_h_text == "ASV":
-        try:
-            if pd.notna(plateau_pressure) and pd.notna(peep):
-                if float(plateau_pressure) - float(peep) <= 8.0:
-                    return True
-        except (TypeError, ValueError):
-            pass
-
-    if mode_text in {"CPAP", "CPAP/PSV", "Pressure Support", "Standby", "Spontaneous"}:
-        return True
-
-    return False
-
-
 def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, list[pd.Timestamp]]:
     """Infer all invasive ventilation trigger timestamps from ventilator settings.
 
@@ -335,13 +305,8 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, l
         return {}
 
     working = working.sort_values(["stay_id", "charttime"]).copy()
-    working["is_full_support"] = ~working.apply(
-        lambda row: _is_sbt_candidate_state(
-            row.get("ventilator_mode"),
-            row.get("ventilator_mode_hamilton"),
-            row.get("plateau_pressure"),
-            row.get("peep"),
-        ),
+    working["is_full_support"] = working.apply(
+        lambda row: map_weaning_state(row) in ("Full Support", "Other"),
         axis=1,
     )
 
@@ -457,6 +422,8 @@ def raw_to_event_log(
         # the run_* switches for future staged execution.
         _load_yaml(pipeline_config_path)
 
+    if "source_table" in raw_df.columns:
+        raw_df = raw_df[raw_df["source_table"].ne("sbt_derived")].copy()
     raw_df = _remove_explicit_invasive_vent_rows(raw_df)
 
     synthetic_invasive_events = _synthesize_invasive_vent_events_from_settings(raw_df)

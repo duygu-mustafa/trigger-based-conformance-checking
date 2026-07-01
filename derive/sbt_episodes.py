@@ -130,18 +130,6 @@ def map_weaning_state(row: pd.Series) -> str:
         if state != "Other":
             return state
 
-    # 2. Fallback to ventilation_status only if settings are completely missing
-    status = row.get('ventilation_status')
-    if status == 'None':
-        return 'Liberated'
-        
-    # Only use status for mode classification if modes weren't found above
-    if not hamilton_mode and not general_mode:
-        if status == 'InvasiveVent':
-            return 'Full Support'
-        if status in ['SupplementalOxygen', 'HFNC', 'NonInvasiveVent']:
-            return 'SBT Candidate'
-            
     return 'Other'
 
 def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) -> pd.DataFrame:
