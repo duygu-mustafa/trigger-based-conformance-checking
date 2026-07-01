@@ -403,6 +403,22 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
         }))
         violation_frequency.append(entry)
 
+    # Multiple testing corrections
+    try:
+        from statsmodels.stats.multitest import multipletests as _multipletests
+        _idxs = [i for i, v in enumerate(violation_frequency) if v.get("p_value_raw") is not None]
+        if _idxs:
+            _pvals = [violation_frequency[i]["p_value_raw"] for i in _idxs]
+            _, _p_bonf, _, _ = _multipletests(_pvals, method="bonferroni")
+            _, _p_fdr, _, _ = _multipletests(_pvals, method="fdr_bh")
+            for j, i in enumerate(_idxs):
+                violation_frequency[i]["p_value_bonferroni"] = float(_p_bonf[j])
+                violation_frequency[i]["p_value_fdr"] = float(_p_fdr[j])
+                violation_frequency[i]["is_significant_bonferroni"] = bool(_p_bonf[j] < 0.05)
+                violation_frequency[i]["is_significant_fdr"] = bool(_p_fdr[j] < 0.05)
+    except Exception:
+        pass
+
     readiness_bottlenecks: list[dict[str, Any]] = []
     for cid, count in readiness_counter.most_common():
         readiness_bottlenecks.append(
