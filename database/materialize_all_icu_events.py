@@ -34,13 +34,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'chartevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime AS icu_intime,
-            s.outtime AS icu_outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.charttime, e.storetime) AS event_time,
             e.charttime,
             NULL::timestamp AS starttime,
@@ -48,13 +41,11 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             COALESCE(e.value::text, e.valuenum::text) AS value_text,
             e.valuenum::double precision AS value_num,
             e.valueuom AS value_uom
         FROM {{icu_schema}}.chartevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
 
         UNION ALL
@@ -63,13 +54,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'datetimeevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime,
-            s.outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.charttime, e.storetime) AS event_time,
             e.charttime,
             NULL::timestamp AS starttime,
@@ -77,13 +61,11 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             e.value::text AS value_text,
             NULL::double precision AS value_num,
             NULL::text AS value_uom
         FROM {{icu_schema}}.datetimeevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
 
         UNION ALL
@@ -92,13 +74,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'inputevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime,
-            s.outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.starttime, e.endtime, e.storetime) AS event_time,
             NULL::timestamp AS charttime,
             e.starttime,
@@ -106,13 +81,11 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             COALESCE(e.amount::text, e.rate::text) AS value_text,
             COALESCE(e.amount::double precision, e.rate::double precision) AS value_num,
             e.amountuom AS value_uom
         FROM {{icu_schema}}.inputevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
 
         UNION ALL
@@ -121,13 +94,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'outputevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime,
-            s.outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.charttime, e.storetime) AS event_time,
             e.charttime,
             NULL::timestamp AS starttime,
@@ -135,13 +101,11 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             e.value::text AS value_text,
             e.value::double precision AS value_num,
             e.valueuom AS value_uom
         FROM {{icu_schema}}.outputevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
 
         UNION ALL
@@ -150,13 +114,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'procedureevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime,
-            s.outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.starttime, e.endtime, e.storetime) AS event_time,
             NULL::timestamp AS charttime,
             e.starttime,
@@ -164,13 +121,11 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             e.value::text AS value_text,
             NULL::double precision AS value_num,
             e.valueuom AS value_uom
         FROM {{icu_schema}}.procedureevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
 
         UNION ALL
@@ -179,13 +134,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'ingredientevents'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime,
-            s.outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             COALESCE(e.starttime, e.endtime, e.storetime) AS event_time,
             NULL::timestamp AS charttime,
             e.starttime,
@@ -193,14 +141,54 @@ CREATE_TABLE_SQL_TEMPLATE = """
             e.storetime,
             e.itemid::text AS itemid,
             d.label,
-            d.category,
             COALESCE(e.amount::text, e.rate::text) AS value_text,
             COALESCE(e.amount::double precision, e.rate::double precision) AS value_num,
             e.amountuom AS value_uom
         FROM {{icu_schema}}.ingredientevents e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         LEFT JOIN {{icu_schema}}.d_items d ON e.itemid = d.itemid
+
+        UNION ALL
+
+        SELECT
+            'labevents'::text AS source_table,
+            s.stay_id,
+            e.subject_id,
+            COALESCE(e.charttime, e.storetime) AS event_time,
+            e.charttime,
+            NULL::timestamp AS starttime,
+            NULL::timestamp AS endtime,
+            e.storetime,
+            e.itemid::text AS itemid,
+            NULL::text AS label,
+            COALESCE(e.value::text, e.valuenum::text) AS value_text,
+            e.valuenum::double precision AS value_num,
+            e.valueuom AS value_uom
+        FROM {{hosp_schema}}.labevents e
+        INNER JOIN {{icu_schema}}.icustays s ON e.hadm_id = s.hadm_id
+        WHERE e.itemid IN (50971, 50960, 50970, 50882, 50818, 50820, 227463, 50993, 50995)
+          AND e.charttime BETWEEN s.intime AND s.outtime
+
+        UNION ALL
+
+        SELECT
+            'prescriptions'::text AS source_table,
+            s.stay_id,
+            e.subject_id,
+            e.starttime AS event_time,
+            NULL::timestamp AS charttime,
+            e.starttime,
+            e.stoptime AS endtime,
+            NULL::timestamp AS storetime,
+            UPPER(e.drug)::text AS itemid,
+            e.drug AS label,
+            e.drug AS value_text,
+            NULL::double precision AS value_num,
+            NULL::text AS value_uom
+        FROM {{hosp_schema}}.prescriptions e
+        INNER JOIN {{icu_schema}}.icustays s ON e.hadm_id = s.hadm_id
+        WHERE UPPER(e.drug) IN ('HYDROCORTISONE', 'METHYLPREDNISOLONE', 'DEXAMETHASONE', 'LEVOTHYROXINE SODIUM')
+          AND e.starttime BETWEEN s.intime AND s.outtime
 
         UNION ALL
 
@@ -208,13 +196,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'norepinephrine_equivalent_dose'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime AS icu_intime,
-            s.outtime AS icu_outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             e.starttime AS event_time,
             NULL::timestamp AS charttime,
             e.starttime,
@@ -222,27 +203,17 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS storetime,
             'norepinephrine_equiv'::text AS itemid,
             'Norepinephrine-equivalent dose'::text AS label,
-            'Vasopressor'::text AS category,
             e.norepinephrine_equivalent_dose::text AS value_text,
             e.norepinephrine_equivalent_dose::double precision AS value_num,
             'mcg/kg/min'::text AS value_uom
         FROM mimiciv_derived.norepinephrine_equivalent_dose e
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
-
         UNION ALL
 
         SELECT
             'bg'::text AS source_table,
             s.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime AS icu_intime,
-            s.outtime AS icu_outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             e.charttime AS event_time,
             e.charttime AS charttime,
             NULL::timestamp AS starttime,
@@ -250,7 +221,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS storetime,
             cols.itemid::text AS itemid,
             cols.label::text AS label,
-            'Blood Gas'::text AS category,
             cols.val::text AS value_text,
             cols.val::double precision AS value_num,
             cols.uom::text AS value_uom
@@ -263,7 +233,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
                 ('hemoglobin_bg', 'Hemoglobin (Blood Gas)', e.hemoglobin, 'g/dL')
         ) AS cols(itemid, label, val, uom)
         INNER JOIN {{icu_schema}}.icustays s ON e.hadm_id = s.hadm_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         WHERE cols.val IS NOT NULL
 
         UNION ALL
@@ -272,13 +241,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             'ventilator_setting'::text AS source_table,
             e.stay_id,
             s.subject_id,
-            s.hadm_id,
-            s.intime AS icu_intime,
-            s.outtime AS icu_outtime,
-            a.admittime,
-            a.dischtime,
-            a.deathtime,
-            (a.deathtime IS NOT NULL) AS died_in_hospital,
             e.charttime AS event_time,
             e.charttime AS charttime,
             NULL::timestamp AS starttime,
@@ -286,7 +248,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
             NULL::timestamp AS storetime,
             cols.itemid::text AS itemid,
             cols.label::text AS label,
-            'Ventilation'::text AS category,
             cols.val::text AS value_text,
             cols.val_num::double precision AS value_num,
             cols.uom::text AS value_uom
@@ -301,7 +262,6 @@ CREATE_TABLE_SQL_TEMPLATE = """
                 ('tidal_volume_observed', 'Tidal Volume Observed', e.tidal_volume_observed::text, e.tidal_volume_observed, 'mL')
         ) AS cols(itemid, label, val, val_num, uom)
         LEFT JOIN {{icu_schema}}.icustays s ON e.stay_id = s.stay_id
-        LEFT JOIN {{hosp_schema}}.admissions a ON s.hadm_id = a.hadm_id
         WHERE cols.val IS NOT NULL
           AND (
               CASE
@@ -383,13 +343,6 @@ def _export_parquet(cursor, derived_schema: str, table_name: str, output_path: P
             pa.field("source_table", pa.string()),
             pa.field("stay_id", pa.int64()),
             pa.field("subject_id", pa.int64()),
-            pa.field("hadm_id", pa.int64()),
-            pa.field("icu_intime", pa.timestamp("us")),
-            pa.field("icu_outtime", pa.timestamp("us")),
-            pa.field("admittime", pa.timestamp("us")),
-            pa.field("dischtime", pa.timestamp("us")),
-            pa.field("deathtime", pa.timestamp("us")),
-            pa.field("died_in_hospital", pa.bool_()),
             pa.field("event_time", pa.timestamp("us")),
             pa.field("charttime", pa.timestamp("us")),
             pa.field("starttime", pa.timestamp("us")),
@@ -397,7 +350,6 @@ def _export_parquet(cursor, derived_schema: str, table_name: str, output_path: P
             pa.field("storetime", pa.timestamp("us")),
             pa.field("itemid", pa.string()),
             pa.field("label", pa.string()),
-            pa.field("category", pa.string()),
             pa.field("value_text", pa.string()),
             pa.field("value_num", pa.float64()),
             pa.field("value_uom", pa.string()),
@@ -470,7 +422,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/icu_event_level_sbt.parquet"),
+        default=Path("data/final/mimic_raw_data.parquet"),
         help="Local output file (.csv, .csv.gz, .parquet, or .pq).",
     )
     parser.add_argument(

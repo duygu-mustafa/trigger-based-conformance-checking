@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -44,6 +45,24 @@ FAILURE_INTERVENTION_ACTIVITIES = {
 }
 
 
+def _assert_intervention_activities_match_mapping() -> None:
+    from pathlib import Path as _Path
+
+    mapping = yaml.safe_load(
+        (_Path(__file__).resolve().parent / "configs" / "activity_mapping.yaml").read_text()
+    )
+    mapped_names = set(mapping.get("mappings", {}).keys())
+    missing = FAILURE_INTERVENTION_ACTIVITIES - mapped_names
+    if missing:
+        raise AssertionError(
+            f"FAILURE_INTERVENTION_ACTIVITIES names not found in activity_mapping.yaml: {missing}. "
+            "Keep main_per_sbt.FAILURE_INTERVENTION_ACTIVITIES in sync with configs/activity_mapping.yaml."
+        )
+
+
+_assert_intervention_activities_match_mapping()
+
+
 def _build_trigger_episodes(df_full: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     triggers = (
         df_full[df_full["activity"] == "InvasiveVentilationStarted"]
@@ -76,65 +95,6 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     if failures.empty:
         return None
     return failures.iloc[-1]["timestamp"]
-
-
-def _sbt_failed_by_reventilation(
-    vent_starts: pd.DataFrame,
-    sbt_start: pd.Timestamp,
-    failure_window_hours: float = 48.0,
-) -> pd.Timestamp | None:
-    """Return the timestamp of a re-ventilation event occurring after an SBT start.
-
-    Returns the first `InvasiveVentilationStarted` timestamp that occurs after
-    `sbt_start` and within `failure_window_hours`. Returns ``None`` if no such
-    event exists.
-    """
-    outcome_end = sbt_start + pd.Timedelta(hours=failure_window_hours)
-    matching_vent = vent_starts[
-        (vent_starts["timestamp"] > sbt_start)
-        & (vent_starts["timestamp"] <= outcome_end)
-    ].sort_values("timestamp")
-    if matching_vent.empty:
-        return None
-    return matching_vent.iloc[0]["timestamp"]
-
-
-def _find_latest_failed_sbt_start_before(
-    df_full: pd.DataFrame,
-    current_sbt_start: pd.Timestamp,
-) -> pd.Timestamp | None:
-    """Find the most recent failure timestamp (re-ventilation) prior to ``current_sbt_start``.
-
-    Scans prior SBT starts and returns the timestamp of the matching
-    re-ventilation event for the latest prior attempt that resulted in
-    re-ventilation within the failure window. Returns ``None`` if no prior
-    failed attempts are found.
-    """
-    sbt_starts = (
-        df_full[df_full["activity"] == "SBTStarted"]
-        .drop_duplicates(subset=["timestamp"])
-        .sort_values("timestamp")
-    )
-    if sbt_starts.empty:
-        return None
-
-    prior_attempts = sbt_starts[sbt_starts["timestamp"] < current_sbt_start]
-    if prior_attempts.empty:
-        return None
-
-    vent_starts = df_full[df_full["activity"] == "InvasiveVentilationStarted"]
-    latest_failed_ts: pd.Timestamp | None = None
-    for _, row in prior_attempts.iterrows():
-        prior_start = row["timestamp"]
-        failure_ts = _sbt_failed_by_reventilation(vent_starts, prior_start)
-        if failure_ts is not None:
-            # Keep the most recent failure timestamp (in case multiple prior
-            # attempts failed); this ensures the gap is measured from the
-            # actual failure event rather than the SBT start time.
-            if latest_failed_ts is None or failure_ts > latest_failed_ts:
-                latest_failed_ts = failure_ts
-
-    return latest_failed_ts
 
 
 # NOTE: manual `_evaluate_sbt_tm_01_outcome` special-case was removed in favor
@@ -368,8 +328,8 @@ _OUTPUT_COLUMNS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("icu_event_log_full.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("data/results/full_results/trigger_results_full.csv"))
+    parser.add_argument("--input", type=Path, default=Path("data/final/icu_event_log_full.parquet"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/full_results020726/trigger_results_full.csv"))
     parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
     args = parser.parse_args()
 
@@ -429,8 +389,6 @@ def main() -> None:
             .drop_duplicates(subset=["timestamp"])
             .sort_values("timestamp")
         )
-        vent_starts = event_log[event_log["activity"] == "InvasiveVentilationStarted"]
-
         attempt_index = 0
         for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
             episode_df = event_log[
@@ -439,6 +397,13 @@ def main() -> None:
             ].copy()
             if episode_df.empty:
                 continue
+
+            # ponytail: fixed 24h pre-window matches the RC-DP time_condition;
+            # derive from constraint.time_condition if windows ever diverge.
+            context_df = event_log[
+                (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=24))
+                & (event_log["timestamp"] < episode_end)
+            ].copy()
 
             sbt_in_episode = sbt_starts[
                 (sbt_starts["timestamp"] >= episode_start)
@@ -449,27 +414,31 @@ def main() -> None:
                 sbt_start = sbt_in_episode.iloc[0]["timestamp"]
                 attempt_index += 1
 
+            # Read the outcome from the derived SBTFailed/SBTSucceeded event
+            # (Phase 3 guarantees it falls inside this episode's window) instead
+            # of recomputing it here — the emitter is the single source of truth
+            # (Phase 8).
             sbt_end: pd.Timestamp | None = None
             if sbt_start is not None:
-                outcome_end = sbt_start + pd.Timedelta(hours=48)
-                # Failure if a NEW invasive ventilation episode starts within 48h
-                matching_vent = vent_starts[
-                    (vent_starts["timestamp"] > sbt_start)
-                    & (vent_starts["timestamp"] <= outcome_end)
-                ]
-                
-                if not matching_vent.empty:
-                    outcome_val = "Failure (Reventilated <48h)"
-                    # SBT ended when ventilation was restarted
-                    sbt_end = matching_vent.iloc[0]["timestamp"]
+                outcome_rows = episode_df[
+                    episode_df["activity"].isin(["SBTFailed", "SBTSucceeded"])
+                    & (episode_df["timestamp"] >= sbt_start)
+                ].sort_values("timestamp")
+                if not outcome_rows.empty:
+                    outcome_row = outcome_rows.iloc[0]
+                    outcome_val = str(outcome_row["value_raw"])
+                    attrs = outcome_row.get("attrs")
+                    attrs = json.loads(attrs) if isinstance(attrs, str) else attrs
+                    if not isinstance(attrs, dict):  # emitter writes attrs as [dict]
+                        attrs = attrs[0] if attrs is not None and len(attrs) else {}
+                    revent_ts = attrs.get("revent_ts")
+                    sbt_end = pd.Timestamp(revent_ts) if revent_ts else outcome_row["timestamp"]
+                    if outcome_row["activity"] == "SBTSucceeded" and attrs.get("right_censored"):
+                        outcome_val = "Success (Right-Censored: Stay Ended)"
                 else:
-                    # Right-censored case: Check the very last activity in the stay
-                    last_relevant = df_full[df_full["activity"].isin(["InvasiveVentilationStarted", "SBTStarted"])].sort_values("timestamp").iloc[-1:]
-                    if not last_relevant.empty and last_relevant.iloc[0]["activity"] == "InvasiveVentilationStarted":
-                         outcome_val = "Failure (Last State: Invasive Vent)"
-                    else:
-                         outcome_val = "Success (No Revent <48h / Last State: SBT)"
-                    # SBT ended at episode end (either successful or right-censored)
+                    # No outcome event emitted (e.g. synthetic/partial trace) —
+                    # treat as right-censored at episode end.
+                    outcome_val = "Success (Right-Censored: Stay Ended)"
                     sbt_end = episode_end
             else:
                 outcome_val = "No SBT Attempt"
@@ -499,9 +468,29 @@ def main() -> None:
                 # Use the general checker for all constraints; derived activities
                 # (e.g., an SBTFailed emitted at re-ventilation time) are available
                 # in `event_log` so no special-case manual evaluation is required.
+                # RC-DP-* rules get a 24h pre-episode look-back so criteria measured
+                # before InvasiveVentilationStarted are still visible (Phase 5).
+                # INT-* response rules get a post-episode look-ahead: SBTFailed sits
+                # at the episode's last second (revent_ts - 1s), so correcting
+                # interventions charted after reintubation land in the next episode.
+                # Only the rule's own target activity is appended, so activations
+                # from the next episode (e.g. its SBTFailed) cannot leak in; each
+                # rule's max_hours still bounds the actual match.
+                if canon_id.startswith("RC-DP-"):
+                    constraint_trace_df = context_df
+                elif is_failure_rule and constraint.target:
+                    # ponytail: flat 48h = max max_hours in failure_correction.yaml
+                    lookahead = event_log[
+                        (event_log["timestamp"] >= episode_end)
+                        & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=48))
+                        & (event_log["activity"] == constraint.target)
+                    ]
+                    constraint_trace_df = pd.concat([episode_df, lookahead]).sort_values("timestamp")
+                else:
+                    constraint_trace_df = episode_df
                 res = evaluate_constraint(
                     case_id=str(stay_id),
-                    trace_df=episode_df,
+                    trace_df=constraint_trace_df,
                     constraint=constraint,
                 )
                 outcome = res.outcome
@@ -620,6 +609,14 @@ def main() -> None:
             json.dump(summary, f, indent=2)
             f.write("\n")
         print(f"Global summary generated at {summary_file}")
+
+    # --- COPY TO data/final/results ---
+    final_dir = base_path / "data" / "final" / "results"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    for src in [args.output, stats_table_path, stats_summary_path, frontend_data_dir / "summary.json"]:
+        if src.exists():
+            shutil.copy2(src, final_dir / src.name)
+    print(f"Results copied to {final_dir}")
 
 if __name__ == "__main__":
     main()

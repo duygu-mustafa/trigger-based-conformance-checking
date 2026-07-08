@@ -7,6 +7,7 @@ This module reads:
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ DEFAULT_ITEM_DICTIONARY_PATH = PROJECT_ROOT / "configs" / "item_dictionary.yaml"
 DEFAULT_ACTIVITY_MAPPING_PATH = PROJECT_ROOT / "configs" / "activity_mapping.yaml"
 
 
+@functools.lru_cache(maxsize=None)
 def _load_yaml(path: str | Path) -> dict[str, Any]:
     try:
         import yaml
@@ -63,12 +65,18 @@ def _activity_rules(activity_mapping: dict[str, Any]) -> list[dict[str, Any]]:
         if cfg.get("derived"):
             continue
         source = cfg.get("source")
-        itemid_raw = cfg.get("itemid")
         if not isinstance(source, str):
             continue
-        
+
+        itemid_raw = cfg.get("itemid")
+        itemids_raw = cfg.get("itemids")
+        if itemid_raw is None and itemids_raw is None:
+            raise ValueError(
+                f"Activity mapping '{activity}' has neither 'itemid' nor 'itemids' "
+                "and is not marked 'derived'."
+            )
         # itemid_raw may be int or str (sbt_status)
-        itemid = itemid_raw
+        itemid_list = [itemid_raw] if itemid_raw is not None else list(itemids_raw)
 
         value_equals = None
         conditions = cfg.get("conditions")
@@ -79,15 +87,16 @@ def _activity_rules(activity_mapping: dict[str, Any]) -> list[dict[str, Any]]:
         if timestamp_field is not None:
             timestamp_field = str(timestamp_field)
 
-        out.append(
-            {
-                "activity": activity,
-                "source": source,
-                "itemid": itemid,
-                "value_equals": value_equals,
-                "timestamp_field": timestamp_field,
-            }
-        )
+        for itemid in itemid_list:
+            out.append(
+                {
+                    "activity": activity,
+                    "source": source,
+                    "itemid": itemid,
+                    "value_equals": value_equals,
+                    "timestamp_field": timestamp_field,
+                }
+            )
     return out
 
 
@@ -151,6 +160,23 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     """
     derived_frames: list[pd.DataFrame] = []
 
+    # ── AnyFailureIntervention (Phase 1) ──────────────────────────────────────
+    # One event per occurrence of any of the seven post-SBT-failure intervention
+    # activities, so INT-COMPOSITE-01 has a real target instead of a phantom one.
+    FAILURE_INTERVENTION_ACTIVITIES = {
+        "Bronchodilator_Admin",
+        "Diuretic_Admin",
+        "AfterloadReduction_Admin",
+        "ElectrolyteBG_Test",
+        "ElectrolyteCorrection_Admin",
+        "HormonalLab_Test",
+        "HormonalReplacement_Admin",
+    }
+    intervention_rows = activity_df[activity_df["activity"].isin(FAILURE_INTERVENTION_ACTIVITIES)].copy()
+    if not intervention_rows.empty:
+        intervention_rows["activity"] = "AnyFailureIntervention"
+        derived_frames.append(intervention_rows)
+
     # ── SBT Outcomes (48h window / re-ventilation rule) ──────────────────────
     # For each SBTStarted: if InvasiveVentilationStarted occurs within the
     # episode window (bounded by next SBTStarted and 48h), emit SBTFailed at
@@ -181,21 +207,35 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
             ]
 
             if not near_vents.empty:
+                revent_ts = near_vents["timestamp"].min()
                 outcome_rows.append({
                     "case_id": case_id,
                     "activity": "SBTFailed",
-                    "timestamp": near_vents["timestamp"].min(),
+                    # Attribute failure to the SBT's own episode: the re-vent
+                    # timestamp equals the next episode's start, and episode
+                    # slicing is [start, end) — landing on it would push
+                    # SBTFailed into the wrong episode. True time kept in attrs.
+                    "timestamp": revent_ts - pd.Timedelta(seconds=1),
                     "source_table": "derived_revent",
                     "itemid": None,
-                    "value_raw": None,
-                    "value_num": None,
+                    "value_raw": "Failure (Reventilated <48h)",
+                    "value_num": 0.0,
                     "unit": None,
-                    "attrs": [{"kind": "derived_activity", "trigger": "reventilation"}],
+                    "attrs": [{
+                        "kind": "derived_activity",
+                        "trigger": "reventilation",
+                        "revent_ts": revent_ts.isoformat(),
+                    }],
                     "patient_id": srow.get("patient_id"),
                     "stay_id": srow.get("stay_id"),
                 })
             else:
+                # Bound success by the next SBT's start too, so outcomes of
+                # consecutive attempts can never interleave.
                 success_ts = min(start_ts + failure_window, stay_end_ts)
+                if pd.notna(next_start_ts):
+                    success_ts = min(success_ts, next_start_ts - pd.Timedelta(seconds=1))
+                right_censored = stay_end_ts < start_ts + failure_window
                 outcome_rows.append({
                     "case_id": case_id,
                     "activity": "SBTSucceeded",
@@ -205,7 +245,11 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
                     "value_raw": "Success",
                     "value_num": 1.0,
                     "unit": None,
-                    "attrs": [{"kind": "derived_activity", "trigger": "no_revent_48h"}],
+                    "attrs": [{
+                        "kind": "derived_activity",
+                        "trigger": "no_revent_48h",
+                        "right_censored": bool(right_censored),
+                    }],
                     "patient_id": srow.get("patient_id"),
                     "stay_id": srow.get("stay_id"),
                 })
@@ -233,31 +277,27 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
             "stay_id": src.get("stay_id"),
         }
 
+    # ponytail: one pass instead of 8+ full-column filter scans
+    _itemid_groups = {str(k): v for k, v in activity_df.groupby(activity_df["itemid"].astype(str), sort=False)}
+    _empty_frame = activity_df.iloc[0:0]
+
     def _by_itemid(itemid_str: str) -> pd.DataFrame:
-        return activity_df[activity_df["itemid"].astype(str) == itemid_str].copy()
+        return _itemid_groups.get(itemid_str, _empty_frame)
 
     # ── OxygenationMeasured ───────────────────────────────────────────────────
-    oxy_rows: list[dict] = []
-    for _, row in _by_itemid("pao2fio2ratio").iterrows():
-        if pd.notna(row.get("value_num")) and float(row["value_num"]) >= 150:
-            oxy_rows.append(_criterion_row(row, "OxygenationMeasured", "pao2fio2ratio>=150"))
-
-    fio2_df = _by_itemid("fio2_bg")
-    peep_df_ = _by_itemid("peep_vent")
-    _2h = pd.Timedelta(hours=2)
-    for _, row in _by_itemid("220277").iterrows():
-        if pd.isna(row.get("value_num")) or float(row["value_num"]) < 90:
-            continue
-        ts, case = row["timestamp"], row["case_id"]
-        near_fio2 = fio2_df[(fio2_df["case_id"] == case) & ((fio2_df["timestamp"] - ts).abs() <= _2h)]
-        near_peep = peep_df_[(peep_df_["case_id"] == case) & ((peep_df_["timestamp"] - ts).abs() <= _2h)]
-        if near_fio2.empty or near_peep.empty:
-            continue
-        best_fio2 = near_fio2.loc[(near_fio2["timestamp"] - ts).abs().idxmin()]
-        best_peep = near_peep.loc[(near_peep["timestamp"] - ts).abs().idxmin()]
-        if (pd.notna(best_fio2.get("value_num")) and float(best_fio2["value_num"]) <= 40
-                and pd.notna(best_peep.get("value_num")) and float(best_peep["value_num"]) <= 5):
-            oxy_rows.append(_criterion_row(row, "OxygenationMeasured", "SpO2>=90_FiO2<=40_PEEP<=5"))
+    # ponytail: unconditional emission, oxygenation_ok correlation_condition is
+    # sole authority (matches pH/Hgb/Temp/Vasopressor pattern below); no
+    # cross-item time-proximity check between SpO2/FiO2/PEEP, accepted tradeoff.
+    oxy_rows = [
+        _criterion_row(r, "OxygenationMeasured", "pao2fio2ratio")
+        for _, r in _by_itemid("pao2fio2ratio").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
+    oxy_rows += [
+        _criterion_row(r, "OxygenationMeasured", "220277")
+        for _, r in _by_itemid("220277").iterrows()
+        if pd.notna(r.get("value_num"))
+    ]
     if oxy_rows:
         derived_frames.append(pd.DataFrame(oxy_rows))
 
@@ -321,6 +361,25 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     return derived_frames
 
 
+def _vectorized_activity_labels(raw: pd.DataFrame, labels: dict[tuple[str, Any], str]) -> pd.Series:
+    """Vectorized replacement for apply(_measurement_activity_label, axis=1)."""
+    sources = raw["source_table"].astype(str)
+    itemids = raw["itemid"]
+    primary = pd.Series(
+        [labels.get((s, i)) for s, i in zip(sources, itemids)],
+        index=raw.index,
+        dtype=object,
+    )
+    fallback_label = (
+        raw.get("label", pd.Series(dtype=object))
+        .where(lambda s: s.notna())
+        .astype("string")
+        .str.strip()
+        .replace("", pd.NA)
+    )
+    return primary.fillna(fallback_label).fillna("item_" + itemids.astype(str))
+
+
 def emit_activities(
     raw_df: pd.DataFrame,
     *,
@@ -352,7 +411,7 @@ def emit_activities(
     measurement_df = pd.DataFrame(
         {
             "case_id": case_series.astype(str),
-            "activity": raw.apply(lambda r: _measurement_activity_label(r, labels), axis=1),
+            "activity": _vectorized_activity_labels(raw, labels),
             "timestamp": raw["event_time"],
             "source_table": raw["source_table"],
             "itemid": raw["itemid"],

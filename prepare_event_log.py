@@ -7,9 +7,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
+import multiprocessing
 import random
 import re
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +42,40 @@ def _normalize_event_log_for_duckdb(df: pd.DataFrame) -> pd.DataFrame:
         out["case_id"] = out["case_id"].astype(str)
 
     return out
+
+
+def _parallel_worker(
+    input_path_str: str,
+    stay_id: int,
+    selected_columns: list[str],
+) -> tuple[int, pd.DataFrame] | None:
+    """Per-stay worker: opens its own DuckDB, queries, runs pipeline, returns normalized df."""
+    import duckdb as _duckdb
+    from derive import raw_to_event_log as _raw_to_event_log
+
+    con = _duckdb.connect()
+    file_path = input_path_str.replace("'", "''")
+    if input_path_str.lower().endswith((".parquet", ".pq")):
+        con.execute(f"CREATE VIEW raw_events AS SELECT * FROM read_parquet('{file_path}')")
+    else:
+        con.execute(f"CREATE VIEW raw_events AS SELECT * FROM read_csv_auto('{file_path}')")
+
+    col_sql = ", ".join(selected_columns)
+    try:
+        raw_df = con.execute(
+            f"SELECT {col_sql} FROM raw_events WHERE stay_id = ?", [stay_id]
+        ).df()
+    finally:
+        con.close()
+
+    if raw_df.empty:
+        return None
+
+    event_log_df = _raw_to_event_log(raw_df)
+    if event_log_df.empty:
+        return None
+
+    return (stay_id, _normalize_event_log_for_duckdb(event_log_df))
 
 
 def _create_view(con: duckdb.DuckDBPyConnection, input_file: Path, view_name: str = "raw_events") -> None:
@@ -379,6 +416,12 @@ def main() -> None:
         default=None,
         help="Number of candidate stays to skip when resuming from a seeded checkpoint.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel worker processes for stay processing (default: 1 = sequential).",
+    )
     args = parser.parse_args()
 
     if args.backup_every < 0:
@@ -616,39 +659,26 @@ def main() -> None:
                 },
             )
 
-        for idx, stay_id in enumerate(tqdm(pending_stay_ids, desc="Preparing event log"), start=1):
-            created_table = _process_batch_recursive(
-                source_con=source_con,
-                output_con=output_con,
-                batch=[stay_id],
-                selected_columns=selected_columns,
-                created_table=created_table,
-                source_relation="raw_events",
-            )
+        def _write_state(idx: int, stay_id: int) -> None:
+            if idx % 10 == 0 or idx == len(pending_stay_ids):
+                _write_json_atomic(
+                    state_path,
+                    {
+                        "version": 1,
+                        "created_at": (resume_state or {}).get("created_at", _utc_now_iso()),
+                        "updated_at": _utc_now_iso(),
+                        "signature": signature,
+                        "total_stays": len(stay_ids),
+                        "processed_stays": sorted(processed_stays),
+                        "last_completed_stay_id": stay_id,
+                        "output_tmp_db": str(output_db_path.resolve()),
+                        "seed_checkpoint": str(effective_seed_checkpoint.resolve()) if effective_seed_checkpoint is not None else None,
+                        "seed_skip_count": effective_seed_skip_count,
+                        "seed_row_count": seed_row_count,
+                    },
+                )
 
-            processed_stays.add(stay_id)
-            processed_count = len(processed_stays)
-            # Include any seeded skip count so checkpoint filenames reflect absolute progress
-            total_processed = processed_count + (effective_seed_skip_count or 0)
-
-            _write_json_atomic(
-                state_path,
-                {
-                    "version": 1,
-                    "created_at": (resume_state or {}).get("created_at", _utc_now_iso()),
-                    "updated_at": _utc_now_iso(),
-                    "signature": signature,
-                    "total_stays": len(stay_ids),
-                    "processed_stays": sorted(processed_stays),
-                    "last_completed_stay_id": stay_id,
-                    "output_tmp_db": str(output_db_path.resolve()),
-                    "seed_checkpoint": str(effective_seed_checkpoint.resolve()) if effective_seed_checkpoint is not None else None,
-                    "seed_skip_count": effective_seed_skip_count,
-                    "seed_row_count": seed_row_count,
-                },
-            )
-
-            # Use absolute processed count (including seed offset) for export trigger and filename
+        def _maybe_backup(idx: int, total_processed: int) -> None:
             if args.backup_every > 0 and created_table and (total_processed % args.backup_every == 0 or idx == len(pending_stay_ids)):
                 _export_checkpoint_backup(
                     output_con=output_con,
@@ -657,6 +687,70 @@ def main() -> None:
                     processed_count=total_processed,
                 )
                 print(f"Checkpoint backup saved at processed={total_processed}: {backup_dir}")
+
+        if args.workers > 1:
+            ctx = multiprocessing.get_context("spawn")
+            prefetch = args.workers * 2  # ponytail: caps in-flight futures; more → more memory
+            with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as pool:
+                pbar = tqdm(total=len(pending_stay_ids), desc="Preparing event log")
+                idx = 0
+                sid_iter = iter(pending_stay_ids)
+                in_flight: dict = {}
+
+                for sid in itertools.islice(sid_iter, prefetch):
+                    f = pool.submit(_parallel_worker, str(args.input), sid, selected_columns)
+                    in_flight[f] = sid
+
+                while in_flight:
+                    done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        stay_id = in_flight.pop(future)
+                        idx += 1
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            print(f"\nWarning: stay_id={stay_id} failed: {exc}")
+                            result = None
+
+                        if result is not None:
+                            _, event_log_df = result
+                            output_con.register("event_log_batch", event_log_df)
+                            if not created_table:
+                                output_con.execute("CREATE TABLE event_log AS SELECT * FROM event_log_batch")
+                                created_table = True
+                            else:
+                                output_con.execute("INSERT INTO event_log SELECT * FROM event_log_batch")
+                            output_con.unregister("event_log_batch")
+
+                        processed_stays.add(stay_id)
+                        total_processed = len(processed_stays) + (effective_seed_skip_count or 0)
+                        _write_state(idx, stay_id)
+                        _maybe_backup(idx, total_processed)
+                        pbar.update(1)
+
+                        try:
+                            next_sid = next(sid_iter)
+                            nf = pool.submit(_parallel_worker, str(args.input), next_sid, selected_columns)
+                            in_flight[nf] = next_sid
+                        except StopIteration:
+                            pass
+                pbar.close()
+        else:
+            for idx, stay_id in enumerate(tqdm(pending_stay_ids, desc="Preparing event log"), start=1):
+                created_table = _process_batch_recursive(
+                    source_con=source_con,
+                    output_con=output_con,
+                    batch=[stay_id],
+                    selected_columns=selected_columns,
+                    created_table=created_table,
+                    source_relation="raw_events",
+                )
+
+                processed_stays.add(stay_id)
+                # Include any seeded skip count so checkpoint filenames reflect absolute progress
+                total_processed = len(processed_stays) + (effective_seed_skip_count or 0)
+                _write_state(idx, stay_id)
+                _maybe_backup(idx, total_processed)
 
         if not created_table:
             raise RuntimeError("No event-log rows were generated from input")

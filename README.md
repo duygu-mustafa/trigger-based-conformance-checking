@@ -119,7 +119,7 @@ For long runs, use `tmux` so the process survives terminal disconnects.
 
 ```bash
 tmux new -s eventlog
-python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/final/icu_event_log_full.parquet --use-all-data --backup-every 200 --workers 4
 # detach with Ctrl+b then d
 ```
 
@@ -132,7 +132,7 @@ tmux attach -t eventlog
 If the job is interrupted, resume where it left off:
 
 ```bash
-python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --resume
+python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/final/icu_event_log_full.parquet --use-all-data --resume --workers 4
 ```
 
 Alternative without tmux (`nohup`):
@@ -171,6 +171,61 @@ Execute declarative process-compliance rules against the event log and compute c
 ```bash
 source .venv/bin/activate
 python main_per_sbt.py
+```
+
+### Arguments
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input` | `data/final/icu_event_log_full.parquet` | Canonical event log (Parquet) |
+| `--output` | `data/results/full_results020726/trigger_results_full.csv` | Output results CSV |
+| `--resume` | off | Skip stays already present in output CSV and append new results |
+
+### Safe Long-Run Execution on Linux
+
+Conformance checking over the full dataset can take hours. Use the launcher script so the process survives terminal disconnects.
+
+```bash
+./run_conformance_safe.sh
+```
+
+Reattach to the tmux session later:
+
+```bash
+tmux attach -t conformance
+```
+
+Monitor the log in a separate terminal:
+
+```bash
+tail -f logs/main_per_sbt_<timestamp>.log
+```
+
+If interrupted, resume from where it left off (already-processed stays are skipped):
+
+```bash
+./run_conformance_safe.sh --resume
+```
+
+Full launcher options:
+
+```bash
+./run_conformance_safe.sh [options]
+
+  --input PATH      Input event log parquet (default: icu_event_log_full.parquet)
+  --output PATH     Output results CSV (default: data/results/full_results/trigger_results_full.csv)
+  --resume          Skip stays already present in output CSV
+  --session NAME    tmux session name (default: conformance)
+  --nohup           Force nohup background mode instead of tmux
+  --dry-run         Print command and exit without running
+```
+
+Alternative without tmux (`nohup`):
+
+```bash
+nohup python main_per_sbt.py \
+  --input data/final/icu_event_log_full.parquet \
+  --output data/results/full_results/trigger_results_full.csv \
+  > logs/conformance.out 2>&1 &
 ```
 
 To evaluate a checkpoint folder incrementally and write each checkpoint's results immediately, use:

@@ -37,54 +37,49 @@ mappings:
       Fired when no InvasiveVentilationStarted occurs within 48h after SBTStarted.
       Timestamp = min(start + 48h, stay_end).
   
+  # ── Post-SBT-Failure Intervention Activities ──────────────────────────────
+  # Real mapped activities backing INT-* rules and AnyFailureIntervention below.
+
+  Bronchodilator_Admin:
+    source: inputevents
+    itemid: 224170                                   # Albuterol / ipratropium MDI
+
+  Diuretic_Admin:
+    source: inputevents
+    itemids: [221794, 229639]                        # Furosemide, Bumetanide
+
+  AfterloadReduction_Admin:
+    source: inputevents
+    itemids: [222056, 222051, 225974, 221429]        # Nitroglycerin, Nitroprusside,
+                                                     # Metoprolol, Esmolol
+
+  ElectrolyteCorrection_Admin:
+    source: inputevents
+    itemids: [222011, 227536, 222151, 220995, 227523]
+                                                     # KCl (x2), K-Phos/Na-Phos, MgSO4 (x2)
+
+  ElectrolyteBG_Test:
+    source: labevents
+    itemids: [50971, 50960, 50970, 50882, 50818, 50820]
+                                                     # K, Mg, Phos, HCO3, pCO2, pH
+
+  HormonalLab_Test:
+    source: labevents
+    itemids: [227463, 50993, 50995]                  # Cortisol, TSH, Free T4
+
+  HormonalReplacement_Admin:
+    source: prescriptions
+    itemids: ["HYDROCORTISONE", "METHYLPREDNISOLONE", "DEXAMETHASONE", "LEVOTHYROXINE SODIUM"]
+
   AnyFailureIntervention:
     derived: true
     description: >
-      Synthetic activity fired when at least one post-SBT-failure intervention
-      is recorded across any of the three MIMIC-IV source tables within the
-      evaluation window. Used as the target of INT-COMPOSITE-01 to enforce that
-      at least one intervention pathway was addressed after a failed SBT.
-      Resolved in preprocessing before the conformance checking engine runs;
-      the resolved event inherits the timestamp of the earliest qualifying record.
-    logic:
-      operator: OR
-      sources:
- 
-        - label: "Airway: bronchodilator"
-          source: inputevents
-          itemids: [224170]                          # Albuterol / ipratropium MDI
- 
-        - label: "Fluid/compliance: diuretics"
-          source: inputevents
-          itemids: [221794, 229639]                  # Furosemide, Bumetanide
- 
-        - label: "Cardiac: afterload reduction"
-          source: inputevents
-          itemids: [222056, 222051, 225974, 221429]  # Nitroglycerin, Nitroprusside,
-                                                     # Metoprolol, Esmolol
- 
-        - label: "Metabolic: electrolyte correction"
-          source: inputevents
-          itemids: [222011, 227536, 222151, 220995, 227523]
-                                                     # KCl (x2), K-Phos/Na-Phos,
-                                                     # MgSO4 (x2)
- 
-        - label: "Metabolic: electrolyte and blood gas labs"
-          source: labevents
-          itemids: [50971, 50960, 50970, 50882, 50818, 50820]
-                                                     # K, Mg, Phos, HCO3, pCO2, pH
- 
-        - label: "Endocrine: cortisol and thyroid labs"
-          source: labevents
-          itemids: [227463, 50993, 50995]            # Cortisol, TSH, Free T4
- 
-        - label: "Endocrine: hormonal replacement"
-          source: prescriptions
-          drugnames:
-            - "HYDROCORTISONE"
-            - "METHYLPREDNISOLONE"
-            - "DEXAMETHASONE"
-            - "LEVOTHYROXINE SODIUM"
+      Synthetic activity fired when at least one of the seven post-SBT-failure
+      intervention activities above is recorded. Used as the target of
+      INT-COMPOSITE-01 to enforce that at least one intervention pathway was
+      addressed after a failed SBT. Resolved in
+      activity_emitter._derive_activities by copying/renaming the source event;
+      inherits its timestamp.
 
   # ── Discrete Clinical Action Activities ─────────────────────────────────
   # These represent deliberate one-off clinical decisions, not continuous monitoring.
@@ -118,9 +113,10 @@ mappings:
   OxygenationMeasured:
     derived: true
     description: >
-      Fires when oxygenation criterion is satisfied: PaO2/FiO2 >= 150 (itemid pao2fio2ratio)
-      OR SpO2 >= 90% (itemid 220277) with concurrent FiO2 <= 40% (fio2_bg) and
-      PEEP <= 5 cmH2O (peep_vent) within ±2h.
+      Fires unconditionally for every PaO2/FiO2 (itemid pao2fio2ratio) or SpO2
+      (itemid 220277) measurement. Threshold (>=150, or >=90% with FiO2 <= 40%
+      and PEEP <= 5 cmH2O) is enforced solely by the checker's oxygenation_ok
+      correlation_condition, not at emission time.
 
   pHMeasured:
     derived: true

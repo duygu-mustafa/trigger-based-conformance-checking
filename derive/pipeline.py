@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from derive.activity_emitter import emit_activities
-from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes, map_weaning_state
+from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes, map_weaning_state, vectorized_weaning_states
 from conformance.event_log_builder import build_event_log
 
 
@@ -107,30 +107,15 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
     if working.empty:
         return pd.DataFrame()
 
-    working["ventilator_mode"] = working.apply(
-        lambda row: row.get("value_text")
-        if str(row.get("source_table")) == "ventilator_setting" and str(row.get("itemid")) == "ventilator_mode"
-        else None,
-        axis=1,
-    )
-    working["ventilator_mode_hamilton"] = working.apply(
-        lambda row: row.get("value_text")
-        if str(row.get("source_table")) == "ventilator_setting" and str(row.get("itemid")) == "ventilator_mode_hamilton"
-        else None,
-        axis=1,
-    )
-    working["plateau_pressure"] = working.apply(
-        lambda row: row.get("value_num")
-        if str(row.get("source_table")) == "ventilator_setting" and str(row.get("itemid")) == "plateau_pressure"
-        else None,
-        axis=1,
-    )
-    working["peep"] = working.apply(
-        lambda row: row.get("value_num")
-        if str(row.get("source_table")) == "ventilator_setting" and str(row.get("itemid")) == "peep_vent"
-        else None,
-        axis=1,
-    )
+    vent_mask = working["source_table"].astype(str).eq("ventilator_setting")
+    itemid_s = working["itemid"].astype(str)
+    _vtext = working.get("value_text", pd.Series(index=working.index, dtype=object))
+    _vnum = working.get("value_num", pd.Series(index=working.index, dtype=object))
+
+    working["ventilator_mode"] = _vtext.where(vent_mask & itemid_s.eq("ventilator_mode"))
+    working["ventilator_mode_hamilton"] = _vtext.where(vent_mask & itemid_s.eq("ventilator_mode_hamilton"))
+    working["plateau_pressure"] = _vnum.where(vent_mask & itemid_s.eq("plateau_pressure"))
+    working["peep"] = _vnum.where(vent_mask & itemid_s.eq("peep_vent"))
 
     setting_cols = ["ventilator_mode", "ventilator_mode_hamilton", "plateau_pressure", "peep"]
     if not working[setting_cols].notna().any().any():
@@ -138,15 +123,8 @@ def _derive_weaning_frame_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     grouped = (
         working.sort_values(["stay_id", "event_time"])
-        .groupby(["stay_id", "event_time"], as_index=False)
-        .agg(
-            {
-                "ventilator_mode": _last_valid,
-                "ventilator_mode_hamilton": _last_valid,
-                "plateau_pressure": _last_valid,
-                "peep": _last_valid,
-            }
-        )
+        .groupby(["stay_id", "event_time"], as_index=False)[setting_cols]
+        .last()
     )
 
     if grouped.empty:
@@ -305,10 +283,13 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, l
         return {}
 
     working = working.sort_values(["stay_id", "charttime"]).copy()
-    working["is_full_support"] = working.apply(
-        lambda row: map_weaning_state(row) in ("Full Support", "Other"),
-        axis=1,
-    )
+    states = vectorized_weaning_states(working)
+    # "Other" rows (e.g. peep-only, no mode) are neutral: drop them so they
+    # can't open or close a full-support episode (Phase 7).
+    working = working.loc[states != "Other"].copy()
+    if working.empty:
+        return {}
+    working["is_full_support"] = states.loc[working.index].eq("Full Support")
 
     start_end_times: dict[str, list[tuple[pd.Timestamp, pd.Timestamp | None]]] = {}
     for stay_id, group in working.groupby("stay_id", sort=False):
