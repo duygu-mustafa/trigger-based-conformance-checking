@@ -17,6 +17,8 @@ import pandas as pd
 import yaml
 from tqdm import tqdm
 
+import time
+from runtime_log import track_step, profile_run, log_step
 from conformance.batch_runner import BatchConformanceRunner
 from conformance.results import ConformanceOutcome
 from conformance.rules import (
@@ -359,6 +361,7 @@ def main() -> None:
         writer.writeheader()
 
     remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
+    _conformance_start = time.time()
     for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
         # 1. Load full trace for this stay
         df_full = runner.con.execute(
@@ -568,6 +571,7 @@ def main() -> None:
             csv_handle.flush()
 
     csv_handle.close()
+    log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
     output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
 
@@ -583,40 +587,45 @@ def main() -> None:
     if not r_script.exists():
         raise FileNotFoundError(f"Missing R statistics script: {r_script}")
 
-    subprocess.run(
-        [
-            "Rscript",
-            str(r_script),
-            str(args.output),
-            str(stats_table_path),
-            str(stats_summary_path),
-        ],
-        check=True,
-        cwd=base_path,
-    )
+    with track_step("main_per_sbt", "r_stats"):
+        subprocess.run(
+            [
+                "Rscript",
+                str(r_script),
+                str(args.output),
+                str(stats_table_path),
+                str(stats_summary_path),
+            ],
+            check=True,
+            cwd=base_path,
+        )
 
     # Filter to only stays with actual conformance results
     stays_with_results = sorted(set(output_df["stay_id"].unique()))
-    export_to_frontend(runner, stays_with_results, output_df, frontend_data_dir)
+    with track_step("main_per_sbt", "frontend_export"):
+        export_to_frontend(runner, stays_with_results, output_df, frontend_data_dir)
 
     # --- AUTOMATIC SUMMARY GENERATION ---
     from derive.generate_summary import build_summary
-    case_files = sorted(frontend_data_dir.glob("case_*.json"))
-    if case_files:
-        summary = build_summary(case_files, frontend_data_dir, stats_summary_path if stats_summary_path.exists() else None)
-        summary_file = frontend_data_dir / "summary.json"
-        with summary_file.open("w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2)
-            f.write("\n")
-        print(f"Global summary generated at {summary_file}")
+    with track_step("main_per_sbt", "summary_generation"):
+        case_files = sorted(frontend_data_dir.glob("case_*.json"))
+        if case_files:
+            summary = build_summary(case_files, frontend_data_dir, stats_summary_path if stats_summary_path.exists() else None)
+            summary_file = frontend_data_dir / "summary.json"
+            with summary_file.open("w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2)
+                f.write("\n")
+            print(f"Global summary generated at {summary_file}")
 
     # --- COPY TO data/final/results ---
-    final_dir = base_path / "data" / "final" / "results"
-    final_dir.mkdir(parents=True, exist_ok=True)
-    for src in [args.output, stats_table_path, stats_summary_path, frontend_data_dir / "summary.json"]:
-        if src.exists():
-            shutil.copy2(src, final_dir / src.name)
-    print(f"Results copied to {final_dir}")
+    with track_step("main_per_sbt", "copy_final"):
+        final_dir = base_path / "data" / "final" / "results"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        for src in [args.output, stats_table_path, stats_summary_path, frontend_data_dir / "summary.json"]:
+            if src.exists():
+                shutil.copy2(src, final_dir / src.name)
+        print(f"Results copied to {final_dir}")
 
 if __name__ == "__main__":
-    main()
+    with profile_run("main_per_sbt"):
+        main()
