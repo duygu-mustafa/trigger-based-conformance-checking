@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 import numpy as _np
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -57,6 +57,10 @@ app.add_middleware(
 
 _jobs: dict[str, dict[str, Any]] = {}
 _job_cancel: dict[str, threading.Event] = {}
+
+# ── In-memory uploaded-log store (independent XES flow) ───────────────────────
+# ponytail: in-memory, dies on restart — fine for single-user studio; add disk cache only if reload pain shows up
+_uploaded_logs: dict[str, "pd.DataFrame"] = {}
 
 
 # ── Item label lookup ─────────────────────────────────────────────────────────
@@ -1398,6 +1402,192 @@ def cancel_job(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Job not found")
     _job_cancel[job_id].set()
     return {"status": "cancellation_requested"}
+
+
+# ── Independent XES upload + conformance flow ────────────────────────────────
+
+class RunUploadedRequest(BaseModel):
+    upload_id: str
+    custom_rules: list[CustomRuleInput] = []
+    sample_size: int | None = None
+    seed: int = 42
+    trigger_event: str | None = None
+
+
+@app.post("/api/upload_log")
+async def upload_log(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Parse an uploaded XES log (Rust4PM/rustxes) into a canonical DataFrame and cache it."""
+    import tempfile
+    import rustxes
+    import pandas as pd
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+
+    suffix = ".xes.gz" if file.filename and file.filename.endswith(".gz") else ".xes"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        try:
+            log_df, _log_attrs = rustxes.import_xes(tmp.name)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not parse XES: {e}")
+
+    df = log_df.to_pandas()
+    rename = {
+        "case:concept:name": "case_id",
+        "concept:name": "activity",
+        "time:timestamp": "timestamp",
+    }
+    missing = [k for k in rename if k not in df.columns]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"XES missing standard fields: {missing}")
+
+    df = df.rename(columns=rename)
+    df["case_id"] = df["case_id"].astype(str)
+    df["activity"] = df["activity"].astype(str)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    df = df.dropna(subset=["case_id", "activity", "timestamp"])
+    if df.empty:
+        raise HTTPException(status_code=400, detail="No usable events after parsing.")
+
+    upload_id = uuid.uuid4().hex
+    _uploaded_logs[upload_id] = df
+
+    # Surface event + case attribute columns so the Rule Builder can offer them
+    # as data conditions. rustxes broadcasts case-level attrs (prefixed "case:")
+    # to every row, so they're usable as plain per-event values once un-prefixed.
+    _skip = {"case_id", "activity", "timestamp"}
+    data_attributes = [
+        {
+            "key": col,
+            "label": col.removeprefix("case:"),
+            "numeric": bool(pd.api.types.is_numeric_dtype(df[col])),
+        }
+        for col in df.columns
+        if col not in _skip
+        and not col.startswith(("lifecycle:", "@@"))
+    ]
+
+    preview = df.head(50).copy()
+    for col in preview.columns:
+        if pd.api.types.is_datetime64_any_dtype(preview[col]):
+            preview[col] = preview[col].astype(str)
+    preview = preview.astype(object).where(pd.notnull(preview), None)
+
+    return {
+        "upload_id": upload_id,
+        "num_cases": int(df["case_id"].nunique()),
+        "num_events": int(len(df)),
+        "activities": sorted(df["activity"].unique().tolist()),
+        "data_attributes": data_attributes,
+        "preview_columns": df.columns.tolist(),
+        "preview_rows": preview.to_dict(orient="records"),
+    }
+
+
+@app.delete("/api/upload_log/{upload_id}")
+def delete_uploaded_log(upload_id: str) -> dict[str, Any]:
+    """Drop a cached uploaded log so it stops counting against server memory."""
+    if _uploaded_logs.pop(upload_id, None) is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    return {"status": "deleted", "upload_id": upload_id}
+
+
+def _build_generic_summary(results: list, model) -> dict[str, Any]:
+    """Per-constraint satisfied/violated/vacuous counts + violating case IDs. No group stats."""
+    from conformance.results import ConformanceOutcome
+
+    meta = {
+        c.id: {
+            "id": c.id,
+            "label": c.label,
+            "template": c.template.value,
+            "activation": c.activation,
+            "target": c.target,
+            "satisfied": 0,
+            "violated": 0,
+            "vacuous": 0,
+            "not_evaluated": 0,
+            "violating_case_ids": [],
+        }
+        for c in model.constraints
+    }
+
+    for trace in results:
+        for cr in trace.constraint_results:
+            entry = meta.get(cr.constraint_id)
+            if entry is None:
+                continue
+            if cr.outcome == ConformanceOutcome.SATISFIED:
+                entry["satisfied"] += 1
+            elif cr.outcome == ConformanceOutcome.VIOLATED:
+                entry["violated"] += 1
+                if len(entry["violating_case_ids"]) < 200:
+                    entry["violating_case_ids"].append(cr.case_id)
+            elif cr.outcome == ConformanceOutcome.VACUOUS:
+                entry["vacuous"] += 1
+            else:
+                entry["not_evaluated"] += 1
+
+    constraints = []
+    for entry in meta.values():
+        evaluated = entry["satisfied"] + entry["violated"]
+        entry["violation_rate"] = (entry["violated"] / evaluated) if evaluated else 0.0
+        constraints.append(entry)
+
+    return {"num_cases": len(results), "constraints": constraints}
+
+
+@app.post("/api/run_uploaded")
+def run_uploaded(request: RunUploadedRequest) -> dict[str, Any]:
+    """Run Declare conformance on an uploaded log with user-defined rules (whole-trace, synchronous).
+
+    ponytail: sync run, skipped the job/cancel plumbing of /api/run; add async only if large logs stall the request.
+    """
+    import random
+    import pandas as pd
+    from conformance.checker import check_log_conformance
+    from conformance.types import DeclareModel
+
+    df = _uploaded_logs.get(request.upload_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="Upload not found. Re-upload the log.")
+
+    model = DeclareModel(name="uploaded_run")
+    warnings = []
+    for cr in request.custom_rules:
+        try:
+            model.add(_custom_rule_to_constraint(cr))
+        except Exception as e:
+            warnings.append(f"Skipped rule '{cr.label}': {e}")
+
+    if not model.constraints:
+        raise HTTPException(status_code=400, detail="No valid rules to check.")
+
+    if request.sample_size:
+        all_ids = df["case_id"].unique().tolist()
+        rng = random.Random(request.seed)
+        sample_ids = set(rng.sample(all_ids, min(request.sample_size, len(all_ids))))
+        df = df[df["case_id"].isin(sample_ids)]
+
+    if request.trigger_event:
+        segments = []
+        for case_id, trace in df.groupby("case_id"):
+            episodes = _split_into_episodes(trace.sort_values("timestamp"), request.trigger_event)
+            for idx, ep_df in enumerate(episodes):
+                ep_df = ep_df.copy()
+                ep_df["case_id"] = f"{case_id}::ep{idx}"
+                segments.append(ep_df)
+        df = pd.concat(segments, ignore_index=True) if segments else df
+
+    results = check_log_conformance(df, model)
+    summary = _build_generic_summary(results, model)
+    summary["num_events"] = int(len(df))
+    summary["num_cases_sampled"] = int(df["case_id"].nunique())
+    summary["warnings"] = warnings
+    return _sanitize(summary)
 
 
 @app.get("/api/case/{stay_id}")

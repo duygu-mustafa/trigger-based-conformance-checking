@@ -4,6 +4,23 @@ import CustomEventModal from './CustomEventModal'
 import DataConditionModal from './DataConditionModal'
 import { FormulaBuilder, tokensToExpr, treeToTokens, emptyCondToken, migrateFlat, validateTokensOptional, validateTokens } from './ConditionTree'
 import { UilPen } from '@iconscout/react-unicons'
+import { rulesKey } from '../../datasetRules'
+
+// Load persisted rules for a dataset, migrating legacy condition shapes to tokens.
+function loadSavedRules(datasetId) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(rulesKey(datasetId)) || '[]')
+    return raw.map(r => {
+      const actTree = r.activation_condition_tree ?? migrateFlat(r.activation_conditions, r.activation_logic)
+      const corrTree = r.correlation_condition_tree ?? migrateFlat(r.correlation_conditions, r.correlation_logic)
+      return {
+        ...r,
+        activation_tokens: r.activation_tokens || treeToTokens(actTree),
+        correlation_tokens: r.correlation_tokens || treeToTokens(corrTree),
+      }
+    })
+  } catch { return [] }
+}
 
 // Templates offered to clinicians, grouped for usability
 const TEMPLATE_OPTIONS = [
@@ -78,7 +95,8 @@ function StepIndicator({ steps, currentStep }) {
   )
 }
 
-export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRule, customEventTypes = [], onSaveCustomEvent, onDeleteCustomEvent, customDataConditions = [], onSaveCustomDataCondition, onDeleteCustomDataCondition }) {
+export default function RuleBuilder({ activities = {}, datasetId = 'builtin', itemLabels = {}, onSaveRule, customEventTypes = [], onSaveCustomEvent, onDeleteCustomEvent, customDataConditions = [], onSaveCustomDataCondition, onDeleteCustomDataCondition, dataConditionsEnabled = true, eventBuilderEnabled = true }) {
+  const steps = dataConditionsEnabled ? STEPS : STEPS.filter(s => s.id !== 'conditions')
   const [step, setStep] = useState('template')
   const [showEventModal, setShowEventModal] = useState(false)
   const [showConditionModal, setShowConditionModal] = useState(false)
@@ -98,24 +116,15 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
   const [condError, setCondError] = useState('')
   const [saveCondOpen, setSaveCondOpen] = useState(null) // 'activation' | 'correlation' | null
   const [saveCondName, setSaveCondName] = useState('')
-  const [savedRules, setSavedRules] = useState(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem('studio_custom_rules') || '[]')
-      return raw.map(r => {
-        const actTree = r.activation_condition_tree ?? migrateFlat(r.activation_conditions, r.activation_logic)
-        const corrTree = r.correlation_condition_tree ?? migrateFlat(r.correlation_conditions, r.correlation_logic)
-        return {
-          ...r,
-          activation_tokens: r.activation_tokens || treeToTokens(actTree),
-          correlation_tokens: r.correlation_tokens || treeToTokens(corrTree),
-        }
-      })
-    }
-    catch { return [] }
-  })
+  const [savedRules, setSavedRules] = useState(() => loadSavedRules(datasetId))
+
+  // Reload the rule list when the active dataset changes (component stays mounted).
+  useEffect(() => { setSavedRules(loadSavedRules(datasetId)) }, [datasetId])
 
   const isUnary = UNARY_TEMPLATES.includes(rule.template)
   const allActivities = activities.all || []
+  const hasCategorized = ['ventilation', 'sbt', 'assessment', 'interventions', 'custom']
+    .some(k => activities[k]?.length)
 
   // Build item options list from itemLabels (hide internal/derived ids)
   const baseItemOptions = Object.entries(itemLabels)
@@ -149,13 +158,13 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
       if (err) { setCondError(err); return }
       setCondError('')
     }
-    const idx = STEPS.findIndex(s => s.id === step)
-    if (idx < STEPS.length - 1) setStep(STEPS[idx + 1].id)
+    const idx = steps.findIndex(s => s.id === step)
+    if (idx < steps.length - 1) setStep(steps[idx + 1].id)
   }
 
   function prevStep() {
-    const idx = STEPS.findIndex(s => s.id === step)
-    if (idx > 0) setStep(STEPS[idx - 1].id)
+    const idx = steps.findIndex(s => s.id === step)
+    if (idx > 0) setStep(steps[idx - 1].id)
   }
 
   function saveRule() {
@@ -180,7 +189,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
       ? savedRules.map(r => r.id === editingRuleId ? toSave : r)
       : [...savedRules, toSave]
     setSavedRules(updated)
-    localStorage.setItem('studio_custom_rules', JSON.stringify(updated))
+    localStorage.setItem(rulesKey(datasetId), JSON.stringify(updated))
     onSaveRule?.(toSave)
     setEditingRuleId(null)
     setRule({
@@ -198,7 +207,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
     if (editingRuleId === id) cancelEdit()
     const updated = savedRules.filter(r => r.id !== id)
     setSavedRules(updated)
-    localStorage.setItem('studio_custom_rules', JSON.stringify(updated))
+    localStorage.setItem(rulesKey(datasetId), JSON.stringify(updated))
   }
 
   function editRule(r) {
@@ -256,7 +265,7 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
       <div className="rule-builder-main">
         {/* Left: wizard */}
         <div className="rule-builder-wizard">
-          <StepIndicator steps={STEPS} currentStep={step} />
+          <StepIndicator steps={steps} currentStep={step} />
 
           {rule.template && step !== 'template' && (
             <div className="selected-rule-banner">
@@ -335,6 +344,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                         {activities.custom.map(a => <option key={a} value={a}>{a}</option>)}
                       </optgroup>
                     )}
+                    {!hasCategorized && allActivities.length > 0 && (
+                      <optgroup label="Log activities">
+                        {allActivities.map(a => <option key={a} value={a}>{a}</option>)}
+                      </optgroup>
+                    )}
                     {allActivities.length === 0 && (
                       <option disabled>No activities loaded</option>
                     )}
@@ -374,15 +388,22 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                           {activities.custom.map(a => <option key={a} value={a}>{a}</option>)}
                         </optgroup>
                       )}
+                      {!hasCategorized && allActivities.length > 0 && (
+                        <optgroup label="Log activities">
+                          {allActivities.map(a => <option key={a} value={a}>{a}</option>)}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                 )}
-                <div className="define-event-trigger">
-                  <span className="define-event-trigger-text">Can't find the event you're looking for?</span>
-                  <button type="button" className="define-event-link" onClick={() => setShowEventModal(true)}>
-                    Define it here
-                  </button>
-                </div>
+                {eventBuilderEnabled && (
+                  <div className="define-event-trigger">
+                    <span className="define-event-trigger-text">Can't find the event you're looking for?</span>
+                    <button type="button" className="define-event-link" onClick={() => setShowEventModal(true)}>
+                      Define it here
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -441,9 +462,11 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
                           {customDataConditions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
                       )}
-                      <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
-                        Manage data conditions
-                      </button>
+                      {eventBuilderEnabled && (
+                        <button type="button" className="define-event-link" onClick={() => setShowConditionModal(true)}>
+                          Manage data conditions
+                        </button>
+                      )}
                     </div>
                   </div>
                   <FormulaBuilder
@@ -722,21 +745,25 @@ export default function RuleBuilder({ activities = {}, itemLabels = {}, onSaveRu
         </div>
       )}
 
-      <CustomEventModal
-        isOpen={showEventModal}
-        onClose={() => setShowEventModal(false)}
-        savedEventTypes={customEventTypes}
-        onSave={onSaveCustomEvent}
-        onDelete={onDeleteCustomEvent}
-      />
-      <DataConditionModal
-        isOpen={showConditionModal}
-        onClose={() => setShowConditionModal(false)}
-        savedConditions={customDataConditions}
-        onSave={onSaveCustomDataCondition}
-        onDelete={onDeleteCustomDataCondition}
-        itemOptions={itemOptions}
-      />
+      {eventBuilderEnabled && (
+        <CustomEventModal
+          isOpen={showEventModal}
+          onClose={() => setShowEventModal(false)}
+          savedEventTypes={customEventTypes}
+          onSave={onSaveCustomEvent}
+          onDelete={onDeleteCustomEvent}
+        />
+      )}
+      {eventBuilderEnabled && (
+        <DataConditionModal
+          isOpen={showConditionModal}
+          onClose={() => setShowConditionModal(false)}
+          savedConditions={customDataConditions}
+          onSave={onSaveCustomDataCondition}
+          onDelete={onDeleteCustomDataCondition}
+          itemOptions={itemOptions}
+        />
+      )}
     </div>
   )
 }

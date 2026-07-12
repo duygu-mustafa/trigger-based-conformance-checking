@@ -2,7 +2,8 @@ const NAV_GROUPS = [
   {
     label: 'Configure',
     items: [
-      { id: 'library', label: 'Rule Library' },
+      { id: 'upload', label: 'Upload Log' },
+      { id: 'library', label: 'Rule Library', builtinOnly: true },
       { id: 'builder', label: 'Rule Builder' },
     ],
   },
@@ -15,14 +16,23 @@ const NAV_GROUPS = [
   {
     label: 'Results',
     items: [
-      { id: 'results-frequencies', label: 'Frequencies' },
-      { id: 'results-statistics', label: 'Statistics' },
-      { id: 'results-patients', label: 'Patients' },
+      { id: 'results-frequencies', label: 'Frequencies', builtinOnly: true },
+      { id: 'results-statistics', label: 'Statistics', builtinOnly: true },
+      { id: 'results-patients', label: 'Patients', builtinOnly: true },
     ],
   },
 ]
 
 
+
+function IconUpload() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M3 12v1.5A1.5 1.5 0 004.5 15h7a1.5 1.5 0 001.5-1.5V12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    </svg>
+  )
+}
 
 function IconLibrary() {
   return (
@@ -99,6 +109,7 @@ function IconExpand() {
 }
 
 const ICON_MAP = {
+  upload: IconUpload,
   library: IconLibrary,
   builder: IconBuilder,
   runner: IconRunner,
@@ -124,7 +135,8 @@ function NavItem({ item, activePage, onNavigate }) {
   )
 }
 
-export default function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
+export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, datasets = [], activeDatasetId = 'builtin', onSelectDataset, onDeleteDataset }) {
+  const isBuiltin = activeDatasetId === 'builtin'
   return (
     <aside className={`app-sidebar${collapsed ? ' collapsed' : ''}`} aria-label="Main navigation">
       <div className="sidebar-header">
@@ -144,16 +156,54 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
         </button>
       </div>
 
-      <nav className="sidebar-nav" role="navigation">
-        {NAV_GROUPS.map((group, gi) => (
-          <div key={group.label} className="sidebar-group">
-            {gi > 0 && <div className="sidebar-divider" />}
-            <span className="sidebar-group-label">{group.label}</span>
-            {group.items.map(item => (
-              <NavItem key={item.id} item={item} activePage={activePage} onNavigate={onNavigate} />
-            ))}
+      {!collapsed && (
+        <div className="sidebar-dataset">
+          <label className="sidebar-dataset-label" htmlFor="dataset-select">Dataset</label>
+          <div className="sidebar-dataset-row">
+            <select
+              id="dataset-select"
+              className="sidebar-dataset-select"
+              value={activeDatasetId}
+              onChange={e => onSelectDataset?.(e.target.value)}
+            >
+              <option value="builtin">ICU Weaning (built-in)</option>
+              {datasets.map(d => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+            {activeDatasetId !== 'builtin' && (
+              <button
+                type="button"
+                className="sidebar-dataset-delete"
+                title="Delete uploaded log"
+                aria-label="Delete uploaded log"
+                onClick={() => {
+                  if (window.confirm('Delete this uploaded log? This cannot be undone.')) {
+                    onDeleteDataset?.(activeDatasetId)
+                  }
+                }}
+              >
+                ×
+              </button>
+            )}
           </div>
-        ))}
+        </div>
+      )}
+
+      <nav className="sidebar-nav" role="navigation">
+        {NAV_GROUPS.map((group, gi) => {
+          const items = group.items.filter(item => isBuiltin || !item.builtinOnly)
+          if (items.length === 0) return null
+          return (
+            <div key={group.label} className="sidebar-group">
+              {gi > 0 && <div className="sidebar-divider" />}
+              <span className="sidebar-group-label">{group.label}</span>
+              {items.map(item => (
+                <NavItem key={item.id} item={item} activePage={activePage} onNavigate={onNavigate} />
+              ))}
+            </div>
+          )
+        })}
 
 
       </nav>

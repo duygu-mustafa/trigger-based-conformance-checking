@@ -4,6 +4,8 @@ import StatsDeepDive from '../SummaryView/StatsDeepDive'
 import ContrastBarChart from '../SummaryView/ContrastBarChart'
 import OutcomeScatterPlot from '../SummaryView/OutcomeScatterPlot'
 import ConstraintDetailView from '../SummaryView/ConstraintDetailView'
+import UploadedLogRunner from '../UploadView/UploadedLogRunner'
+import { rulesKey } from '../../datasetRules'
 
 const SAMPLE_PRESETS = [10, 25, 50, 100, 200]
 const RESULT_TABS = ['Frequencies', 'Statistics', 'Patients']
@@ -51,7 +53,11 @@ function loadPersistedResult() {
   } catch { return null }
 }
 
-export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
+export default function AnalysisRunner({ customRules = [], onOpenTimeline, uploadInfo = null, datasetId = 'builtin', onUploadStale }) {
+  if (uploadInfo) {
+    return <UploadedLogRunner uploadInfo={uploadInfo} datasetId={datasetId} onStale={onUploadStale} />
+  }
+
   const [sampleSize, setSampleSize] = useState(() => {
     try { return JSON.parse(localStorage.getItem('analysis_runner_sample_size') || '50') } catch { return 50 }
   })
@@ -78,7 +84,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   }, [jobState?.status])
 
   const savedRules = (() => {
-    try { return JSON.parse(localStorage.getItem('studio_custom_rules') || '[]') }
+    try { return JSON.parse(localStorage.getItem(rulesKey(datasetId)) || '[]') }
     catch { return [] }
   })()
   const allCustomRules = [...new Map([...customRules, ...savedRules].map(r => [r.id, r])).values()]

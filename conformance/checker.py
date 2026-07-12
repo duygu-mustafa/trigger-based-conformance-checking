@@ -368,7 +368,19 @@ def _evaluate_data_condition_status(
         observation_window_hours=observation_window_hours,
     )
     items = ctx["items"]
-    
+
+    # Uploaded wide logs (XES) carry data in per-event attribute columns rather than
+    # an itemid/value_num long form, so expose the current event row's own attributes
+    # as items. A data condition on such a log tests the activation/target event itself.
+    if "itemid" not in trace_df.columns:
+        for col, val in row.items():
+            if col in ("case_id", "activity", "timestamp") or pd.isna(val):
+                continue
+            try:
+                items[col] = float(val)
+            except (TypeError, ValueError):
+                items[col] = str(val)
+
     # Track values used in the expression for delta analysis
     extracted_values = {}
 

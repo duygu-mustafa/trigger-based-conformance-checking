@@ -6,8 +6,17 @@ import TimelineDrawer from './components/TimelineDrawer'
 import RuleLibrary from './components/StudioView/RuleLibrary'
 import RuleBuilder from './components/StudioView/RuleBuilder'
 import AnalysisRunner from './components/StudioView/AnalysisRunner'
+import XESUploadView from './components/UploadView/XESUploadView'
+import { loadRules, rulesKey } from './datasetRules'
+
+const BUILTIN_DATASET = { kind: 'builtin', id: 'builtin', name: 'ICU Weaning (built-in)' }
 
 const PAGE_META = {
+  upload: {
+    eyebrow: 'Configure',
+    title: 'Upload Log',
+    lead: 'Upload an XES event log to define and run Declare conformance rules independently of the ICU weaning pipeline.',
+  },
   library: {
     eyebrow: 'Configure',
     title: 'Rule Library',
@@ -86,6 +95,67 @@ export default function App() {
     catch { return [] }
   })
 
+  // Uploaded XES logs + active-dataset selection (global selector)
+  const [datasets, setDatasets] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('studio_datasets') || '[]') }
+    catch { return [] }
+  })
+  const [activeDatasetId, setActiveDatasetId] = useState(
+    () => localStorage.getItem('studio_active_dataset') || 'builtin'
+  )
+  const activeDataset =
+    activeDatasetId === 'builtin'
+      ? BUILTIN_DATASET
+      : datasets.find(d => d.id === activeDatasetId) || BUILTIN_DATASET
+
+  function selectDataset(id) {
+    setActiveDatasetId(id)
+    localStorage.setItem('studio_active_dataset', id)
+  }
+
+  function handleUploaded(info) {
+    setDatasets(prev => {
+      const next = [...prev.filter(d => d.id !== info.upload_id), {
+        kind: 'upload',
+        id: info.upload_id,
+        name: info.name || `Log ${prev.length + 1}`,
+        num_cases: info.num_cases,
+        num_events: info.num_events,
+        activities: info.activities,
+        dataAttributes: Object.fromEntries((info.data_attributes || []).map(a => [a.key, a.label])),
+        preview_columns: info.preview_columns,
+        preview_rows: info.preview_rows,
+      }]
+      localStorage.setItem('studio_datasets', JSON.stringify(next))
+      return next
+    })
+    selectDataset(info.upload_id)
+  }
+
+  function handleDeleteDataset(id) {
+    fetch(`/api/upload_log/${id}`, { method: 'DELETE' }).catch(() => {})
+    setDatasets(prev => {
+      const next = prev.filter(d => d.id !== id)
+      localStorage.setItem('studio_datasets', JSON.stringify(next))
+      return next
+    })
+    localStorage.removeItem(rulesKey(id))
+    if (activeDatasetId === id) selectDataset('builtin')
+  }
+
+  // Per-dataset custom rules — reload when the active dataset changes
+  useEffect(() => {
+    setCustomRules(loadRules(activeDatasetId))
+  }, [activeDatasetId])
+
+  // Builtin-only pages: bounce away when an uploaded dataset is active
+  useEffect(() => {
+    if (activeDatasetId === 'builtin') return
+    if (activePage === 'library' || activePage.startsWith('results-')) {
+      setActivePage('runner')
+    }
+  }, [activeDatasetId, activePage])
+
   // Load case manifest
   useEffect(() => {
     fetch('/data/manifest.json')
@@ -163,7 +233,20 @@ export default function App() {
     all: [...(activities.all || []), ...customEventTypes.map(et => et.name)],
   }
 
+  const isUpload = activeDataset.kind === 'upload'
+  const builderActivities = isUpload ? { all: activeDataset.activities || [] } : mergedActivities
+
   function renderContent() {
+    if (activePage === 'upload') {
+      return (
+        <XESUploadView
+          uploadInfo={isUpload ? activeDataset : null}
+          onUploaded={handleUploaded}
+          onNavigate={setActivePage}
+        />
+      )
+    }
+
     if (activePage === 'library') {
       if (apiError) return <ApiErrorState error={apiError} />
       return <RuleLibrary rules={rules} loading={rulesLoading} />
@@ -175,6 +258,9 @@ export default function App() {
         <AnalysisRunner
           customRules={customRules}
           onOpenTimeline={openTimeline}
+          uploadInfo={isUpload ? activeDataset : null}
+          datasetId={activeDatasetId}
+          onUploadStale={isUpload ? () => handleDeleteDataset(activeDataset.id) : undefined}
         />
       )
     }
@@ -215,6 +301,10 @@ export default function App() {
         onNavigate={setActivePage}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(c => !c)}
+        datasets={datasets}
+        activeDatasetId={activeDatasetId}
+        onSelectDataset={selectDataset}
+        onDeleteDataset={handleDeleteDataset}
       />
 
       <div className="app-main">
@@ -229,8 +319,11 @@ export default function App() {
             ? <ApiErrorState error={apiError} />
             : <div style={activePage !== 'builder' ? { display: 'none' } : undefined}>
                 <RuleBuilder
-                  activities={mergedActivities}
-                  itemLabels={itemLabels}
+                  activities={builderActivities}
+                  datasetId={activeDatasetId}
+                  itemLabels={isUpload ? (activeDataset.dataAttributes || {}) : itemLabels}
+                  dataConditionsEnabled={true}
+                  eventBuilderEnabled={!isUpload}
                   onSaveRule={rule => setCustomRules(r => [...r, rule])}
                   customEventTypes={customEventTypes}
                   onSaveCustomEvent={et => {
