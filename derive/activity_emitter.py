@@ -64,9 +64,7 @@ def _activity_rules(activity_mapping: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if cfg.get("derived"):
             continue
-        source = cfg.get("source")
-        if not isinstance(source, str):
-            continue
+        default_source = cfg.get("source")
 
         itemid_raw = cfg.get("itemid")
         itemids_raw = cfg.get("itemids")
@@ -87,12 +85,23 @@ def _activity_rules(activity_mapping: dict[str, Any]) -> list[dict[str, Any]]:
         if timestamp_field is not None:
             timestamp_field = str(timestamp_field)
 
-        for itemid in itemid_list:
+        for entry in itemid_list:
+            # entry may be a plain itemid, or {itemid: X, source: Y} to override
+            # the default source for items that live in a different table.
+            if isinstance(entry, dict):
+                itemid = entry.get("itemid")
+                source = entry.get("source", default_source)
+            else:
+                itemid = entry
+                source = default_source
+            if not isinstance(source, str):
+                continue
+
             out.append(
                 {
                     "activity": activity,
                     "source": source,
-                    "itemid": itemid,
+                    "itemid": str(itemid),
                     "value_equals": value_equals,
                     "timestamp_field": timestamp_field,
                 }
@@ -442,7 +451,7 @@ def emit_activities(
 
     mapped_frames: list[pd.DataFrame] = []
     for rule in rules:
-        mask = (raw["source_table"] == rule["source"]) & (raw["itemid"] == rule["itemid"])
+        mask = (raw["source_table"] == rule["source"]) & (raw["itemid"].astype(str) == rule["itemid"])
         value_equals = rule.get("value_equals")
         if value_equals is not None:
             raw_values = raw.get("value_text", pd.Series(index=raw.index, dtype=object)).astype(str)
