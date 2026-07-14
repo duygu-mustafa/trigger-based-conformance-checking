@@ -18,7 +18,7 @@ import yaml
 from tqdm import tqdm
 
 import time
-from runtime_log import track_step, profile_run, log_step
+from runtime_log import track_step, log_step
 from conformance.batch_runner import BatchConformanceRunner
 from conformance.results import ConformanceOutcome
 from conformance.rules import (
@@ -327,12 +327,238 @@ _OUTPUT_COLUMNS = [
     "num_mandatory_violations", "num_mandatory_satisfactions",
 ]
 
+# ponytail: per-process globals set by _init_worker; avoids repickling the
+# DuckDB runner/model for every task submitted to the pool.
+_WORKER_RUNNER = None
+_WORKER_LOOKUP = None
+
+
+def _init_worker(input_file: Path, model_paths: list[Path]) -> None:
+    global _WORKER_RUNNER, _WORKER_LOOKUP
+    _WORKER_RUNNER = BatchConformanceRunner(input_file=input_file, model_builder=_build_combined_model)
+    _WORKER_LOOKUP = _load_combined_constraint_id_lookup(model_paths)
+
+
+def _process_stay(stay_id: str) -> list[dict]:
+    """Compute conformance rows for a single stay. Runs in a worker process."""
+    runner = _WORKER_RUNNER
+    constraint_id_lookup = _WORKER_LOOKUP
+    rows: list[dict] = []
+
+    df_full = runner.con.execute(
+        f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
+        [str(stay_id)],
+    ).df().sort_values("timestamp")
+
+    if df_full.empty:
+        return rows
+    df_full = df_full.copy()
+    df_full["timestamp"] = pd.to_datetime(df_full["timestamp"], errors="coerce")
+    df_full = df_full.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if df_full.empty:
+        return rows
+
+    # Convert raw stay rows to canonical event log with derived activities
+    if not runner._is_event_log_input:
+        event_log = raw_to_event_log(df_full)
+    else:
+        event_log = df_full.copy()
+
+    episodes = _build_trigger_episodes(event_log)
+    if not episodes:
+        return rows
+
+    sbt_starts = (
+        event_log[event_log["activity"] == "SBTStarted"]
+        .drop_duplicates(subset=["timestamp"])
+        .sort_values("timestamp")
+    )
+    attempt_index = 0
+    for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
+        episode_df = event_log[
+            (event_log["timestamp"] >= episode_start)
+            & (event_log["timestamp"] < episode_end)
+        ].copy()
+        if episode_df.empty:
+            continue
+
+        # ponytail: fixed 24h pre-window matches the RC-DP time_condition;
+        # derive from constraint.time_condition if windows ever diverge.
+        context_df = event_log[
+            (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=24))
+            & (event_log["timestamp"] < episode_end)
+        ].copy()
+
+        sbt_in_episode = sbt_starts[
+            (sbt_starts["timestamp"] >= episode_start)
+            & (sbt_starts["timestamp"] < episode_end)
+        ]
+        sbt_start: pd.Timestamp | None = None
+        if not sbt_in_episode.empty:
+            sbt_start = sbt_in_episode.iloc[0]["timestamp"]
+            attempt_index += 1
+
+        # Read the outcome from the derived SBTFailed/SBTSucceeded event
+        # (Phase 3 guarantees it falls inside this episode's window) instead
+        # of recomputing it here — the emitter is the single source of truth
+        # (Phase 8).
+        sbt_end: pd.Timestamp | None = None
+        if sbt_start is not None:
+            outcome_rows = episode_df[
+                episode_df["activity"].isin(["SBTFailed", "SBTSucceeded"])
+                & (episode_df["timestamp"] >= sbt_start)
+            ].sort_values("timestamp")
+            if not outcome_rows.empty:
+                outcome_row = outcome_rows.iloc[0]
+                outcome_val = str(outcome_row["value_raw"])
+                attrs = outcome_row.get("attrs")
+                attrs = json.loads(attrs) if isinstance(attrs, str) else attrs
+                if not isinstance(attrs, dict):  # emitter writes attrs as [dict]
+                    attrs = attrs[0] if attrs is not None and len(attrs) else {}
+                revent_ts = attrs.get("revent_ts")
+                sbt_end = pd.Timestamp(revent_ts) if revent_ts else outcome_row["timestamp"]
+                if outcome_row["activity"] == "SBTSucceeded" and attrs.get("right_censored"):
+                    outcome_val = "Success (Right-Censored: Stay Ended)"
+            else:
+                # No outcome event emitted (e.g. synthetic/partial trace) —
+                # treat as right-censored at episode end.
+                outcome_val = "Success (Right-Censored: Stay Ended)"
+                sbt_end = episode_end
+        else:
+            outcome_val = "No SBT Attempt"
+
+        mandatory_violated: list[str] = []
+        mandatory_satisfied: list[str] = []
+        mandatory_vacuous: list[str] = []
+        informational_violated: list[str] = []
+        informational_satisfied: list[str] = []
+        informational_vacuous: list[str] = []
+        composite_interventions: list[str] = []
+        violation_forensics: dict[str, dict] = {}
+        satisfaction_forensics: dict[str, dict] = {}
+
+        for constraint in runner.model.constraints:
+            raw_constraint_id = getattr(constraint, "id", None) or constraint.label
+            canon_id = constraint_id_lookup.get(raw_constraint_id, raw_constraint_id)
+            if not canon_id and constraint.label:
+                canon_id = constraint_id_lookup.get(constraint.label, constraint.label)
+            if not canon_id:
+                continue
+
+            if canon_id == INT_COMPOSITE_ID:
+                continue
+
+            is_failure_rule = canon_id.startswith("INT-")
+            # Use the general checker for all constraints; derived activities
+            # (e.g., an SBTFailed emitted at re-ventilation time) are available
+            # in `event_log` so no special-case manual evaluation is required.
+            # RC-DP-* rules get a 24h pre-episode look-back so criteria measured
+            # before InvasiveVentilationStarted are still visible (Phase 5).
+            # INT-* response rules get a post-episode look-ahead: SBTFailed sits
+            # at the episode's last second (revent_ts - 1s), so correcting
+            # interventions charted after reintubation land in the next episode.
+            # Only the rule's own target activity is appended, so activations
+            # from the next episode (e.g. its SBTFailed) cannot leak in; each
+            # rule's max_hours still bounds the actual match.
+            if canon_id.startswith("RC-DP-"):
+                constraint_trace_df = context_df
+            elif is_failure_rule and constraint.target:
+                # ponytail: flat 48h = max max_hours in failure_correction.yaml
+                lookahead = event_log[
+                    (event_log["timestamp"] >= episode_end)
+                    & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=48))
+                    & (event_log["activity"] == constraint.target)
+                ]
+                constraint_trace_df = pd.concat([episode_df, lookahead]).sort_values("timestamp")
+            else:
+                constraint_trace_df = episode_df
+            res = evaluate_constraint(
+                case_id=str(stay_id),
+                trace_df=constraint_trace_df,
+                constraint=constraint,
+            )
+            outcome = res.outcome
+            manual_forensics = None
+
+            if outcome == ConformanceOutcome.VACUOUS:
+                target_vacuous = mandatory_vacuous
+                if is_failure_rule:
+                    target_vacuous = informational_vacuous
+                target_vacuous.append(canon_id)
+                continue
+
+            target_violated = mandatory_violated
+            target_satisfied = mandatory_satisfied
+            if is_failure_rule:
+                target_violated = informational_violated
+                target_satisfied = informational_satisfied
+
+            if outcome == ConformanceOutcome.VIOLATED:
+                target_violated.append(canon_id)
+                f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                if f_data:
+                    violation_forensics[canon_id] = f_data
+            elif outcome == ConformanceOutcome.SATISFIED:
+                target_satisfied.append(canon_id)
+                f_data = manual_forensics if manual_forensics else ({"deltas": res.satisfaction_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                if f_data:
+                    satisfaction_forensics[canon_id] = f_data
+
+        # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
+        composite_reason = None
+        if sbt_start is not None and attempt_index > 1:
+            composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
+                df_full=event_log,
+                sbt_start=sbt_start,
+            )
+            if composite_ok:
+                mandatory_satisfied.append(INT_COMPOSITE_ID)
+            else:
+                mandatory_violated.append(INT_COMPOSITE_ID)
+
+        # Find actual ventilation end within this trigger window
+        vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp")
+        vent_end: pd.Timestamp | None = None
+        if not vent_end_rows.empty:
+            vent_end = vent_end_rows.iloc[0]["timestamp"]
+        else:
+            # If ongoing, use the last timestamp in the stay
+            vent_end = df_full["timestamp"].max()
+
+        rows.append({
+            "stay_id": stay_id,
+            "episode_index": episode_idx,
+            "episode_start": str(episode_start),
+            "episode_end": str(episode_end),
+            "ventilation_start": str(episode_start),
+            "ventilation_end": str(vent_end),
+            "sbt_attempt": attempt_index if sbt_start is not None else "",
+            "sbt_start": str(sbt_start) if sbt_start is not None else "",
+            "sbt_end": str(sbt_end) if sbt_end is not None else "",
+            "sbt_outcome": outcome_val,
+            "mandatory_violated_constraints": ";".join(sorted(set(mandatory_violated))),
+            "mandatory_satisfied_constraints": ";".join(sorted(set(mandatory_satisfied))),
+            "mandatory_vacuous_constraints": ";".join(sorted(set(mandatory_vacuous))),
+            "info_violated_constraints": ";".join(sorted(set(informational_violated))),
+            "info_satisfied_constraints": ";".join(sorted(set(informational_satisfied))),
+            "info_vacuous_constraints": ";".join(sorted(set(informational_vacuous))),
+            "composite_interventions": ";".join(composite_interventions),
+            "composite_note": composite_reason or "",
+            "violation_forensics": json.dumps(violation_forensics),
+            "satisfaction_forensics": json.dumps(satisfaction_forensics),
+            "num_mandatory_violations": len(set(mandatory_violated)),
+            "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
+        })
+
+    return rows
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=Path("data/final/icu_event_log_full.parquet"))
     parser.add_argument("--output", type=Path, default=Path("data/results/full_results020726/trigger_results_full.csv"))
     parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
+    parser.add_argument("--workers", type=int, default=4, help="Parallel worker processes (1 = sequential).")
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -362,213 +588,29 @@ def main() -> None:
 
     remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
     _conformance_start = time.time()
-    for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
-        # 1. Load full trace for this stay
-        df_full = runner.con.execute(
-            f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
-            [str(stay_id)],
-        ).df().sort_values("timestamp")
-        
-        if df_full.empty:
-            continue
-        df_full = df_full.copy()
-        df_full["timestamp"] = pd.to_datetime(df_full["timestamp"], errors="coerce")
-        df_full = df_full.dropna(subset=["timestamp"]).sort_values("timestamp")
-        if df_full.empty:
-            continue
 
-        # Convert raw stay rows to canonical event log with derived activities
-        if not runner._is_event_log_input:
-            event_log = raw_to_event_log(df_full)
-        else:
-            event_log = df_full.copy()
-
-        episodes = _build_trigger_episodes(event_log)
-        if not episodes:
-            continue
-
-        sbt_starts = (
-            event_log[event_log["activity"] == "SBTStarted"]
-            .drop_duplicates(subset=["timestamp"])
-            .sort_values("timestamp")
-        )
-        attempt_index = 0
-        for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
-            episode_df = event_log[
-                (event_log["timestamp"] >= episode_start)
-                & (event_log["timestamp"] < episode_end)
-            ].copy()
-            if episode_df.empty:
-                continue
-
-            # ponytail: fixed 24h pre-window matches the RC-DP time_condition;
-            # derive from constraint.time_condition if windows ever diverge.
-            context_df = event_log[
-                (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=24))
-                & (event_log["timestamp"] < episode_end)
-            ].copy()
-
-            sbt_in_episode = sbt_starts[
-                (sbt_starts["timestamp"] >= episode_start)
-                & (sbt_starts["timestamp"] < episode_end)
-            ]
-            sbt_start: pd.Timestamp | None = None
-            if not sbt_in_episode.empty:
-                sbt_start = sbt_in_episode.iloc[0]["timestamp"]
-                attempt_index += 1
-
-            # Read the outcome from the derived SBTFailed/SBTSucceeded event
-            # (Phase 3 guarantees it falls inside this episode's window) instead
-            # of recomputing it here — the emitter is the single source of truth
-            # (Phase 8).
-            sbt_end: pd.Timestamp | None = None
-            if sbt_start is not None:
-                outcome_rows = episode_df[
-                    episode_df["activity"].isin(["SBTFailed", "SBTSucceeded"])
-                    & (episode_df["timestamp"] >= sbt_start)
-                ].sort_values("timestamp")
-                if not outcome_rows.empty:
-                    outcome_row = outcome_rows.iloc[0]
-                    outcome_val = str(outcome_row["value_raw"])
-                    attrs = outcome_row.get("attrs")
-                    attrs = json.loads(attrs) if isinstance(attrs, str) else attrs
-                    if not isinstance(attrs, dict):  # emitter writes attrs as [dict]
-                        attrs = attrs[0] if attrs is not None and len(attrs) else {}
-                    revent_ts = attrs.get("revent_ts")
-                    sbt_end = pd.Timestamp(revent_ts) if revent_ts else outcome_row["timestamp"]
-                    if outcome_row["activity"] == "SBTSucceeded" and attrs.get("right_censored"):
-                        outcome_val = "Success (Right-Censored: Stay Ended)"
-                else:
-                    # No outcome event emitted (e.g. synthetic/partial trace) —
-                    # treat as right-censored at episode end.
-                    outcome_val = "Success (Right-Censored: Stay Ended)"
-                    sbt_end = episode_end
-            else:
-                outcome_val = "No SBT Attempt"
-
-            mandatory_violated: list[str] = []
-            mandatory_satisfied: list[str] = []
-            mandatory_vacuous: list[str] = []
-            informational_violated: list[str] = []
-            informational_satisfied: list[str] = []
-            informational_vacuous: list[str] = []
-            composite_interventions: list[str] = []
-            violation_forensics: dict[str, dict] = {}
-            satisfaction_forensics: dict[str, dict] = {}
-
-            for constraint in runner.model.constraints:
-                raw_constraint_id = getattr(constraint, "id", None) or constraint.label
-                canon_id = constraint_id_lookup.get(raw_constraint_id, raw_constraint_id)
-                if not canon_id and constraint.label:
-                    canon_id = constraint_id_lookup.get(constraint.label, constraint.label)
-                if not canon_id:
-                    continue
-
-                if canon_id == INT_COMPOSITE_ID:
-                    continue
-
-                is_failure_rule = canon_id.startswith("INT-")
-                # Use the general checker for all constraints; derived activities
-                # (e.g., an SBTFailed emitted at re-ventilation time) are available
-                # in `event_log` so no special-case manual evaluation is required.
-                # RC-DP-* rules get a 24h pre-episode look-back so criteria measured
-                # before InvasiveVentilationStarted are still visible (Phase 5).
-                # INT-* response rules get a post-episode look-ahead: SBTFailed sits
-                # at the episode's last second (revent_ts - 1s), so correcting
-                # interventions charted after reintubation land in the next episode.
-                # Only the rule's own target activity is appended, so activations
-                # from the next episode (e.g. its SBTFailed) cannot leak in; each
-                # rule's max_hours still bounds the actual match.
-                if canon_id.startswith("RC-DP-"):
-                    constraint_trace_df = context_df
-                elif is_failure_rule and constraint.target:
-                    # ponytail: flat 48h = max max_hours in failure_correction.yaml
-                    lookahead = event_log[
-                        (event_log["timestamp"] >= episode_end)
-                        & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=48))
-                        & (event_log["activity"] == constraint.target)
-                    ]
-                    constraint_trace_df = pd.concat([episode_df, lookahead]).sort_values("timestamp")
-                else:
-                    constraint_trace_df = episode_df
-                res = evaluate_constraint(
-                    case_id=str(stay_id),
-                    trace_df=constraint_trace_df,
-                    constraint=constraint,
-                )
-                outcome = res.outcome
-                manual_forensics = None
-
-                if outcome == ConformanceOutcome.VACUOUS:
-                    target_vacuous = mandatory_vacuous
-                    if is_failure_rule:
-                        target_vacuous = informational_vacuous
-                    target_vacuous.append(canon_id)
-                    continue
-
-                target_violated = mandatory_violated
-                target_satisfied = mandatory_satisfied
-                if is_failure_rule:
-                    target_violated = informational_violated
-                    target_satisfied = informational_satisfied
-
-                if outcome == ConformanceOutcome.VIOLATED:
-                    target_violated.append(canon_id)
-                    f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
-                    if f_data:
-                        violation_forensics[canon_id] = f_data
-                elif outcome == ConformanceOutcome.SATISFIED:
-                    target_satisfied.append(canon_id)
-                    f_data = manual_forensics if manual_forensics else ({"deltas": res.satisfaction_deltas, "delay_seconds": res.delay_seconds} if res else None)
-                    if f_data:
-                        satisfaction_forensics[canon_id] = f_data
-
-            # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
-            composite_reason = None
-            if sbt_start is not None and attempt_index > 1:
-                composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
-                    df_full=event_log,
-                    sbt_start=sbt_start,
-                )
-                if composite_ok:
-                    mandatory_satisfied.append(INT_COMPOSITE_ID)
-                else:
-                    mandatory_violated.append(INT_COMPOSITE_ID)
-
-            # Find actual ventilation end within this trigger window
-            vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp")
-            vent_end: pd.Timestamp | None = None
-            if not vent_end_rows.empty:
-                vent_end = vent_end_rows.iloc[0]["timestamp"]
-            else:
-                # If ongoing, use the last timestamp in the stay
-                vent_end = df_full["timestamp"].max()
-
-            writer.writerow({
-                "stay_id": stay_id,
-                "episode_index": episode_idx,
-                "episode_start": str(episode_start),
-                "episode_end": str(episode_end),
-                "ventilation_start": str(episode_start),
-                "ventilation_end": str(vent_end),
-                "sbt_attempt": attempt_index if sbt_start is not None else "",
-                "sbt_start": str(sbt_start) if sbt_start is not None else "",
-                "sbt_end": str(sbt_end) if sbt_end is not None else "",
-                "sbt_outcome": outcome_val,
-                "mandatory_violated_constraints": ";".join(sorted(set(mandatory_violated))),
-                "mandatory_satisfied_constraints": ";".join(sorted(set(mandatory_satisfied))),
-                "mandatory_vacuous_constraints": ";".join(sorted(set(mandatory_vacuous))),
-                "info_violated_constraints": ";".join(sorted(set(informational_violated))),
-                "info_satisfied_constraints": ";".join(sorted(set(informational_satisfied))),
-                "info_vacuous_constraints": ";".join(sorted(set(informational_vacuous))),
-                "composite_interventions": ";".join(composite_interventions),
-                "composite_note": composite_reason or "",
-                "violation_forensics": json.dumps(violation_forensics),
-                "satisfaction_forensics": json.dumps(satisfaction_forensics),
-                "num_mandatory_violations": len(set(mandatory_violated)),
-                "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
-            })
+    if args.workers <= 1:
+        _init_worker(args.input, model_paths)
+        for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
+            for row in _process_stay(stay_id):
+                writer.writerow(row)
             csv_handle.flush()
+    else:
+        import concurrent.futures as cf
+
+        with cf.ProcessPoolExecutor(
+            max_workers=args.workers,
+            initializer=_init_worker,
+            initargs=(args.input, model_paths),
+        ) as pool:
+            for rows in tqdm(
+                pool.map(_process_stay, remaining_ids, chunksize=8),
+                initial=len(done_ids),
+                total=len(stay_ids),
+            ):
+                for row in rows:
+                    writer.writerow(row)
+                csv_handle.flush()
 
     csv_handle.close()
     log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
@@ -627,5 +669,5 @@ def main() -> None:
         print(f"Results copied to {final_dir}")
 
 if __name__ == "__main__":
-    with profile_run("main_per_sbt"):
+    with track_step("main_per_sbt", "total"):
         main()

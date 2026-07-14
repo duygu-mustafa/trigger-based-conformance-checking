@@ -7,14 +7,15 @@ set -euo pipefail
 # - Writes timestamped logs and supports --resume
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
+PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"chmod 
 
-INPUT="icu_event_log_full.parquet"
+INPUT="data/final/icu_event_log_full.parquet"
 OUTPUT="data/results/full_results/trigger_results_full.csv"
 SESSION_NAME="conformance"
 RESUME=0
 DRY_RUN=0
 FORCE_NOHUP=0
+WORKERS=4
 
 usage() {
   cat <<'EOF'
@@ -25,6 +26,7 @@ Options:
   --input PATH      Input event log parquet (default: icu_event_log_full.parquet)
   --output PATH     Output results CSV (default: data/results/full_results/trigger_results_full.csv)
   --resume          Skip stays already present in output CSV
+  --workers N       Parallel worker processes (default: 4)
   --session NAME    tmux session name (default: conformance)
   --nohup           Force nohup mode instead of tmux
   --dry-run         Print command and exit
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
     --resume)
       RESUME=1
       shift
+      ;;
+    --workers)
+      WORKERS="$2"
+      shift 2
       ;;
     --session)
       SESSION_NAME="$2"
@@ -96,7 +102,7 @@ mkdir -p "$LOG_DIR"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/main_per_sbt_${TIMESTAMP}.log"
 
-CMD=("$PYTHON_BIN" "$ROOT_DIR/main_per_sbt.py" "--input" "$INPUT" "--output" "$OUTPUT")
+CMD=("$PYTHON_BIN" "$ROOT_DIR/main_per_sbt.py" "--input" "$INPUT" "--output" "$OUTPUT" "--workers" "$WORKERS")
 
 if [[ "$RESUME" -eq 1 ]]; then
   CMD+=("--resume")
