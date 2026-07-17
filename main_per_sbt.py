@@ -65,7 +65,18 @@ def _assert_intervention_activities_match_mapping() -> None:
 _assert_intervention_activities_match_mapping()
 
 
-def _build_trigger_episodes(df_full: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+def _build_trigger_episodes(
+    df_full: pd.DataFrame,
+    window_hours: float | None = None,
+    end_event: str | None = None,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Segment a stay into episodes per method.tex Definition (episode).
+
+    Horizon = earliest of three candidates: next trigger t_next (fallback,
+    always applies), fixed window t_Delta (if window_hours set), end-event
+    t_phi (first `end_event` strictly after the trigger, if set). Both
+    optional boundaries default off -> fallback-only behavior unchanged.
+    """
     triggers = (
         df_full[df_full["activity"] == "InvasiveVentilationStarted"]
         .drop_duplicates(subset=["timestamp"])
@@ -79,12 +90,21 @@ def _build_trigger_episodes(df_full: pd.DataFrame) -> list[tuple[pd.Timestamp, p
     windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
     for idx, row in triggers.iterrows():
         start_ts = row["timestamp"]
-        end_ts = (
+        t_next = (
             triggers.iloc[idx + 1]["timestamp"]
             if idx + 1 < len(triggers)
             else trace_end_exclusive
         )
-        windows.append((start_ts, end_ts))
+        candidates = [t_next]
+        if window_hours is not None:
+            candidates.append(start_ts + pd.Timedelta(hours=window_hours))
+        if end_event is not None:
+            ev = df_full[
+                (df_full["activity"] == end_event) & (df_full["timestamp"] > start_ts)
+            ]["timestamp"]
+            if not ev.empty:
+                candidates.append(ev.min())
+        windows.append((start_ts, min(candidates)))
     return windows
 
 
@@ -331,12 +351,22 @@ _OUTPUT_COLUMNS = [
 # DuckDB runner/model for every task submitted to the pool.
 _WORKER_RUNNER = None
 _WORKER_LOOKUP = None
+_WORKER_EPISODE_WINDOW_HOURS: float | None = None
+_WORKER_EPISODE_END_EVENT: str | None = None
 
 
-def _init_worker(input_file: Path, model_paths: list[Path]) -> None:
+def _init_worker(
+    input_file: Path,
+    model_paths: list[Path],
+    episode_window_hours: float | None = None,
+    episode_end_event: str | None = None,
+) -> None:
     global _WORKER_RUNNER, _WORKER_LOOKUP
+    global _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
     _WORKER_RUNNER = BatchConformanceRunner(input_file=input_file, model_builder=_build_combined_model)
     _WORKER_LOOKUP = _load_combined_constraint_id_lookup(model_paths)
+    _WORKER_EPISODE_WINDOW_HOURS = episode_window_hours
+    _WORKER_EPISODE_END_EVENT = episode_end_event
 
 
 def _process_stay(stay_id: str) -> list[dict]:
@@ -364,7 +394,9 @@ def _process_stay(stay_id: str) -> list[dict]:
     else:
         event_log = df_full.copy()
 
-    episodes = _build_trigger_episodes(event_log)
+    episodes = _build_trigger_episodes(
+        event_log, _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
+    )
     if not episodes:
         return rows
 
@@ -559,6 +591,20 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("data/results/full_results020726/trigger_results_full.csv"))
     parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
     parser.add_argument("--workers", type=int, default=4, help="Parallel worker processes (1 = sequential).")
+    parser.add_argument(
+        "--episode-window-hours",
+        type=float,
+        default=None,
+        help="Fixed observation window (t_Delta) bounding each episode, in hours. "
+        "Default: unbounded (episode ends at next trigger).",
+    )
+    parser.add_argument(
+        "--episode-end-event",
+        type=str,
+        default=None,
+        help="Activity label whose first occurrence after the trigger ends the "
+        "episode (t_phi). Default: none.",
+    )
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -590,7 +636,9 @@ def main() -> None:
     _conformance_start = time.time()
 
     if args.workers <= 1:
-        _init_worker(args.input, model_paths)
+        _init_worker(
+            args.input, model_paths, args.episode_window_hours, args.episode_end_event
+        )
         for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
             for row in _process_stay(stay_id):
                 writer.writerow(row)
@@ -601,7 +649,7 @@ def main() -> None:
         with cf.ProcessPoolExecutor(
             max_workers=args.workers,
             initializer=_init_worker,
-            initargs=(args.input, model_paths),
+            initargs=(args.input, model_paths, args.episode_window_hours, args.episode_end_event),
         ) as pool:
             for rows in tqdm(
                 pool.map(_process_stay, remaining_ids, chunksize=8),

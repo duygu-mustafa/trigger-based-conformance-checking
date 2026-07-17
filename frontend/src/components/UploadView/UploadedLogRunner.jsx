@@ -24,6 +24,8 @@ export default function UploadedLogRunner({ uploadInfo, datasetId, onStale }) {
   const [sampleSize, setSampleSize] = useState(50)
   const [seed, setSeed] = useState(42)
   const [triggerEvent, setTriggerEvent] = useState('')
+  const [episodeWindowHours, setEpisodeWindowHours] = useState('')
+  const [episodeEndEvent, setEpisodeEndEvent] = useState('')
 
   const savedRules = loadRules(datasetId ?? uploadInfo.upload_id ?? uploadInfo.id)
   const activities = uploadInfo.activities || []
@@ -53,6 +55,8 @@ export default function UploadedLogRunner({ uploadInfo, datasetId, onStale }) {
           sample_size: sampleAll ? null : sampleSize,
           seed,
           trigger_event: triggerEvent || null,
+          episode_window_hours: episodeWindowHours === '' ? null : parseFloat(episodeWindowHours),
+          episode_end_event: episodeEndEvent || null,
         }),
       })
       if (!res.ok) {
@@ -124,6 +128,31 @@ export default function UploadedLogRunner({ uploadInfo, datasetId, onStale }) {
               onChange={e => setTriggerEvent(e.target.value)}
             >
               <option value="">Whole trace (no split)</option>
+              {activities.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+
+          <div className="runner-field">
+            <label className="field-label">Episode window (hours)</label>
+            <input
+              className="studio-input"
+              type="number" min="0" step="1"
+              placeholder="unbounded"
+              value={episodeWindowHours}
+              onChange={e => setEpisodeWindowHours(e.target.value)}
+              disabled={!triggerEvent}
+            />
+          </div>
+
+          <div className="runner-field">
+            <label className="field-label">Episode end event</label>
+            <select
+              className="studio-input"
+              value={episodeEndEvent}
+              onChange={e => setEpisodeEndEvent(e.target.value)}
+              disabled={!triggerEvent}
+            >
+              <option value="">None</option>
               {activities.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
           </div>

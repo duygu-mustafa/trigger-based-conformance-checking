@@ -465,6 +465,8 @@ class RunRequest(BaseModel):
     custom_event_types: list[CustomEventType] = []
     custom_data_items: list[CustomDataItem] = []
     trigger_event: str = "InvasiveVentilationStarted"
+    episode_window_hours: float | None = None
+    episode_end_event: str | None = None
 
 
 # ── Custom rule → DeclareConstraint ──────────────────────────────────────────
@@ -566,10 +568,19 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
 
 # ── Analysis runner ───────────────────────────────────────────────────────────
 
-def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.DataFrame"]:
+def _split_into_episodes(
+    df: "pd.DataFrame",
+    trigger_activity: str,
+    window_hours: float | None = None,
+    end_event: str | None = None,
+) -> list["pd.DataFrame"]:
     """Split a stay DataFrame into episode sub-frames using trigger_activity boundaries.
 
-    Returns one DataFrame per episode. Falls back to [df] when no triggers are found.
+    Per method.tex Definition (episode), the horizon is the earliest of: next
+    trigger (fallback, always applies), fixed window t_Delta (if window_hours
+    set), and first `end_event` strictly after the trigger (t_phi, if set).
+    Both optional boundaries default off -> fallback-only behavior unchanged.
+    Returns one DataFrame per episode. Falls back to [df] when no triggers.
     """
     import pandas as pd
 
@@ -586,7 +597,15 @@ def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.
     episodes = []
     for idx, row in triggers.iterrows():
         start_ts = row["timestamp"]
-        end_ts = triggers.iloc[idx + 1]["timestamp"] if idx + 1 < len(triggers) else trace_end
+        t_next = triggers.iloc[idx + 1]["timestamp"] if idx + 1 < len(triggers) else trace_end
+        candidates = [t_next]
+        if window_hours is not None:
+            candidates.append(start_ts + pd.Timedelta(hours=window_hours))
+        if end_event is not None:
+            ev = df[(df["activity"] == end_event) & (df["timestamp"] > start_ts)]["timestamp"]
+            if not ev.empty:
+                candidates.append(ev.min())
+        end_ts = min(candidates)
         episode_df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
         if not episode_df.empty:
             episodes.append(episode_df)
@@ -1022,7 +1041,10 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                 df = df.sort_values("timestamp").reset_index(drop=True)
 
             if not df.empty:
-                episodes = list(_split_into_episodes(df, request.trigger_event))
+                episodes = list(_split_into_episodes(
+                    df, request.trigger_event,
+                    request.episode_window_hours, request.episode_end_event,
+                ))
                 for ep_idx, episode_df in enumerate(episodes):
                     activities = set(episode_df["activity"].dropna().tolist()) if "activity" in episode_df.columns else set()
                     if "SBTStarted" not in activities:
@@ -1412,6 +1434,8 @@ class RunUploadedRequest(BaseModel):
     sample_size: int | None = None
     seed: int = 42
     trigger_event: str | None = None
+    episode_window_hours: float | None = None
+    episode_end_event: str | None = None
 
 
 @app.post("/api/upload_log")
@@ -1575,7 +1599,10 @@ def run_uploaded(request: RunUploadedRequest) -> dict[str, Any]:
     if request.trigger_event:
         segments = []
         for case_id, trace in df.groupby("case_id"):
-            episodes = _split_into_episodes(trace.sort_values("timestamp"), request.trigger_event)
+            episodes = _split_into_episodes(
+                trace.sort_values("timestamp"), request.trigger_event,
+                request.episode_window_hours, request.episode_end_event,
+            )
             for idx, ep_df in enumerate(episodes):
                 ep_df = ep_df.copy()
                 ep_df["case_id"] = f"{case_id}::ep{idx}"
