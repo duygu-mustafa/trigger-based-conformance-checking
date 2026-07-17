@@ -41,8 +41,8 @@ mappings:
   # Real mapped activities backing INT-* rules and AnyFailureIntervention below.
 
   Bronchodilator_Admin:
-    source: inputevents
-    itemid: 224170                                   # Albuterol / ipratropium MDI
+    source: chartevents
+    itemid: 224170                                   # Albuterol / ipratropium MDI (charted, not inputevents)
 
   Diuretic_Admin:
     source: inputevents
@@ -65,7 +65,11 @@ mappings:
 
   HormonalLab_Test:
     source: labevents
-    itemids: [227463, 50993, 50995]                  # Cortisol, TSH, Free T4
+    itemids:
+      - itemid: 227463                               # Cortisol (charted, not labevents)
+        source: chartevents
+      - 50993                                        # TSH
+      - 50995                                        # Free T4
 
   HormonalReplacement_Admin:
     source: prescriptions

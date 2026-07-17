@@ -102,9 +102,7 @@ model:
       description: >
         Patient is awake and easily arousable.
         Satisfied if CAM-ICU RASS LOC (228302) = 'Yes'
-      logic: OR
-      expressions:
-        - "items[228302] == 'Yes'"
+      expression: "items[228302] == 'Yes'"
 
     inspiratory_effort_ok:
       title: "Inspiratory effort criterion met"
