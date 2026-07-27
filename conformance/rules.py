@@ -265,6 +265,7 @@ def _parse_constraint(
         ),
         activation_condition_title=activation_title,
         target_condition_title=correlation_title,
+        outcome_scope=str(raw.get("outcome_scope") or "episode"),
     )
 
     # Attach additional metadata used by downstream exporters/UI.

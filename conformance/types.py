@@ -87,6 +87,10 @@ class DeclareConstraint:
     activation_condition_title: Optional[str] = None
     target_condition_title: Optional[str] = None
     target_selection: Optional[str] = None
+    # "episode" (default): outcome = same episode's sbt_outcome.
+    # "next_episode": inter-episode rule — statistical outcome is the next
+    # episode's sbt_outcome (breaks circularity for SBTFailed-activated rules).
+    outcome_scope: str = "episode"
 
     def __post_init__(self) -> None:
         is_unary = self.template in UNARY_TEMPLATES

@@ -9,40 +9,83 @@ def load_conformance_data(file_path: Path) -> pd.DataFrame:
     """Load the trigger-episode results."""
     return pd.read_csv(file_path)
 
+def load_inter_episode_rules(
+    config_path: Path = Path("configs/declare/failure_correction.yaml"),
+) -> set[str]:
+    """Rule IDs flagged `outcome_scope: next_episode` in the Declare config.
+
+    These rules activate on SBTFailed, which is definitionally the same-episode
+    outcome (circular). Their exposure is therefore tested against the *next*
+    episode's outcome instead.
+    """
+    import yaml
+    with config_path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    constraints = data.get("constraints", data.get("model", {}).get("constraints", [])) or []
+    return {
+        str(c["id"])
+        for c in constraints
+        if isinstance(c, dict) and c.get("outcome_scope") == "next_episode" and c.get("id")
+    }
+
+def _binarize_label(x) -> float:
+    """1 = Success, 0 = Failure, NaN = unknown/censored/no attempt.
+
+    Substring matching mirrors classify_outcome() in statistics_R.r so both
+    implementations classify pipeline labels ("Success", "Success
+    (Right-Censored: Stay Ended)", "Failure (Reventilated <48h)") identically.
+    """
+    if pd.isnull(x):
+        return np.nan
+    label = str(x).lower()
+    if "success" in label:
+        return 1.0
+    if "failure" in label:
+        return 0.0
+    return np.nan
+
 def binarize_outcome(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert categorical outcomes to binary.
     1 = Success (No Revent <48h / Last State: SBT)
     0 = Failure (Reventilated <48h or Last State: Invasive Vent)
+
+    Also binarizes `next_sbt_outcome` (outcome of episode i+1) into
+    `next_outcome_binary` for inter-episode rules; NaN = censored
+    (no subsequent episode, or no evaluable SBT in it).
     """
-    success_label = "Success (No Revent <48h / Last State: SBT)"
-    df["outcome_binary"] = df["sbt_outcome"].apply(
-        lambda x: 1 if x == success_label else (0 if pd.notnull(x) and "Failure" in str(x) else np.nan)
-    )
+    df["outcome_binary"] = df["sbt_outcome"].apply(_binarize_label)
+    if "next_sbt_outcome" in df.columns:
+        df["next_outcome_binary"] = df["next_sbt_outcome"].apply(_binarize_label)
+    else:
+        df["next_outcome_binary"] = np.nan
     return df
 
 def get_rule_binary(row: pd.Series, rule_id: str) -> float:
     """
     Encode rule state to binary (1, 0, or NaN).
-    
+
     For all rules:
-    - 1: VIOLATED (Exposed to risk)
-    - 0: SATISFIED or VACUOUS (Unexposed)
+    - 1: VIOLATED (activated, corrective action absent)
+    - 0: SATISFIED (activated, corrective action present)
+    - NaN: VACUOUS (never activated) or absent — excluded from the 2x2
+
+    Vacuous episodes are excluded rather than pooled with satisfied: for a
+    failure-activated rule (Response(SBTFailed, X)), vacuous means "no SBT
+    failure occurred", a different population from "failure occurred and was
+    corrected". Pooling them makes exposure a proxy for the outcome.
     """
     satisfied = str(row.get("mandatory_satisfied_constraints", "")).split(";") + \
                 str(row.get("info_satisfied_constraints", "")).split(";")
     violated = str(row.get("mandatory_violated_constraints", "")).split(";") + \
                str(row.get("info_violated_constraints", "")).split(";")
-    vacuous = str(row.get("mandatory_vacuous_constraints", "")).split(";") + \
-              str(row.get("info_vacuous_constraints", "")).split(";")
-    
+
     satisfied = [s for s in satisfied if s]
     violated = [v for v in violated if v]
-    vacuous = [v for v in vacuous if v]
 
     if rule_id in violated:
         return 1.0
-    if rule_id in satisfied or rule_id in vacuous:
+    if rule_id in satisfied:
         return 0.0
     return np.nan
 
@@ -69,7 +112,8 @@ def build_case_level_table(df: pd.DataFrame) -> pd.DataFrame:
         case_data = {
             "stay_id": row["stay_id"],
             "episode_index": row["episode_index"],
-            "outcome": row["outcome_binary"]
+            "outcome": row["outcome_binary"],
+            "next_outcome": row["next_outcome_binary"],
         }
         
         for rule_id in sorted(all_rules):
@@ -79,7 +123,7 @@ def build_case_level_table(df: pd.DataFrame) -> pd.DataFrame:
         
     return pd.DataFrame(case_rows)
 
-def generate_contingency_table(df_cases: pd.DataFrame, rule_id: str):
+def generate_contingency_table(df_cases: pd.DataFrame, rule_id: str, outcome_col: str = "outcome"):
     """
     Generate 2x2 table for a specific rule vs outcome.
     Outcome = 1 (Success - No Revent <48h) | Outcome = 0 (Failure)
@@ -96,15 +140,18 @@ def generate_contingency_table(df_cases: pd.DataFrame, rule_id: str):
     Rule=1 (Satisfied/Exposed) | a                  | b
     Rule=0 (Violated/Unexposed)| c                  | d
     """
-    # Drop rows where either rule or outcome is NaN
-    valid = df_cases[[rule_id, "outcome"]].dropna()
-    
-    a = len(valid[(valid[rule_id] == 1) & (valid["outcome"] == 1)])
-    b = len(valid[(valid[rule_id] == 1) & (valid["outcome"] == 0)])
-    c = len(valid[(valid[rule_id] == 0) & (valid["outcome"] == 1)])
-    d = len(valid[(valid[rule_id] == 0) & (valid["outcome"] == 0)])
-    
-    return a, b, c, d
+    # Drop rows where either rule or outcome is NaN. For inter-episode rules
+    # (outcome_col="next_outcome") the NaN-drop is the censoring step: episodes
+    # without a subsequent evaluable episode are excluded.
+    valid = df_cases[[rule_id, outcome_col]].dropna()
+
+    a = len(valid[(valid[rule_id] == 1) & (valid[outcome_col] == 1)])
+    b = len(valid[(valid[rule_id] == 1) & (valid[outcome_col] == 0)])
+    c = len(valid[(valid[rule_id] == 0) & (valid[outcome_col] == 1)])
+    d = len(valid[(valid[rule_id] == 0) & (valid[outcome_col] == 0)])
+
+    n_censored = int(df_cases[rule_id].notna().sum() - len(valid))
+    return a, b, c, d, n_censored
 
 def calculate_stats(a, b, c, d):
     """
@@ -184,23 +231,30 @@ if __name__ == "__main__":
         print(f"Created analysis table with {len(df_cases)} SBT cases.")
         
         # Identify rules from the columns of the case-level table
-        exclude_cols = {"stay_id", "episode_index", "outcome"}
+        exclude_cols = {"stay_id", "episode_index", "outcome", "next_outcome"}
         all_rules_list = sorted([col for col in df_cases.columns if col not in exclude_cols])
+
+        inter_episode_rules = load_inter_episode_rules()
+        print(f"Inter-episode rules (tested against next episode's outcome): {sorted(inter_episode_rules)}")
 
         # 2. Perform Statistical Analysis for each rule
         summary_rows = []
         for rule_id in all_rules_list:
-            a, b, c, d = generate_contingency_table(df_cases, rule_id)
+            is_inter = rule_id in inter_episode_rules
+            outcome_col = "next_outcome" if is_inter else "outcome"
+            a, b, c, d, n_censored = generate_contingency_table(df_cases, rule_id, outcome_col)
             n_exposed = a + b
             n_unexposed = c + d
-            
+
             if (n_exposed + n_unexposed) == 0:
                 continue
-                
+
             stats = calculate_stats(a, b, c, d)
-            
+
             row = {
                 "rule_name": rule_id,
+                "outcome_variable": "next_episode" if is_inter else "same_episode",
+                "n_censored": n_censored,
                 "n_exposed": n_exposed,
                 "n_unexposed": n_unexposed,
                 "a": a, "b": b, "c": c, "d": d,
@@ -239,7 +293,7 @@ if __name__ == "__main__":
         # Example output
         if not df_summary.empty:
             print("\nTop findings (by raw p-value):")
-            print(df_summary.sort_values("p_raw").head(10)[["rule_name", "p_raw", "p_fdr", "or", "significant_fdr"]])
+            print(df_summary.sort_values("p_raw").head(10)[["rule_name", "outcome_variable", "p_raw", "or", "n_censored"]])
         else:
             print("No rules to analyze.")
     else:

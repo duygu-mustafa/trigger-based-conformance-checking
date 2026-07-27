@@ -340,7 +340,8 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
 _OUTPUT_COLUMNS = [
     "stay_id", "episode_index", "episode_start", "episode_end",
     "ventilation_start", "ventilation_end", "sbt_attempt", "sbt_start", "sbt_end",
-    "sbt_outcome", "mandatory_violated_constraints", "mandatory_satisfied_constraints",
+    "sbt_outcome", "next_sbt_outcome",
+    "mandatory_violated_constraints", "mandatory_satisfied_constraints",
     "mandatory_vacuous_constraints", "info_violated_constraints", "info_satisfied_constraints",
     "info_vacuous_constraints", "composite_interventions", "composite_note",
     "violation_forensics", "satisfaction_forensics",
@@ -581,6 +582,12 @@ def _process_stay(stay_id: str) -> list[dict]:
             "num_mandatory_violations": len(set(mandatory_violated)),
             "num_mandatory_satisfactions": len(set(mandatory_satisfied)),
         })
+
+    # Inter-episode outcome link: each episode carries the next episode's
+    # sbt_outcome so SBTFailed-activated (INT-*) rules can be evaluated
+    # against a prospective, non-circular outcome. Last episode = "" (censored).
+    for i, row in enumerate(rows):
+        row["next_sbt_outcome"] = rows[i + 1]["sbt_outcome"] if i + 1 < len(rows) else ""
 
     return rows
 

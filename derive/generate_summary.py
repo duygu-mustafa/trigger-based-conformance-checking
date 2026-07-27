@@ -161,6 +161,8 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
                     else:
                         rule_class = "neutral"
                     stats_map[cid] = {
+                        "outcome_variable": str(row.get("outcome_variable") or "same_episode"),
+                        "n_censored": safe_float_or_none(row.get("n_censored")),
                         "n_exposed": safe_float_or_none(row.get("n_exposed")),
                         "n_unexposed": safe_float_or_none(row.get("n_unexposed")),
                         "a": safe_float_or_none(row.get("a")),
