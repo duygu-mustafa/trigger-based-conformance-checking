@@ -415,12 +415,10 @@ def _process_stay(stay_id: str) -> list[dict]:
         if episode_df.empty:
             continue
 
-        # ponytail: fixed 24h pre-window matches the RC-DP time_condition;
-        # derive from constraint.time_condition if windows ever diverge.
-        context_df = event_log[
-            (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=24))
-            & (event_log["timestamp"] < episode_end)
-        ].copy()
+        # Per-constraint context windows set in YAML via
+        # context_window_pre_hours / context_window_post_hours.
+        # Pre: all events in [episode_start - W_pre, episode_end).
+        # Post: only target-label events in [episode_end, episode_end + W_post).
 
         sbt_in_episode = sbt_starts[
             (sbt_starts["timestamp"] >= episode_start)
@@ -482,29 +480,30 @@ def _process_stay(stay_id: str) -> list[dict]:
                 continue
 
             is_failure_rule = canon_id.startswith("INT-")
-            # Use the general checker for all constraints; derived activities
-            # (e.g., an SBTFailed emitted at re-ventilation time) are available
-            # in `event_log` so no special-case manual evaluation is required.
-            # RC-DP-* rules get a 24h pre-episode look-back so criteria measured
-            # before InvasiveVentilationStarted are still visible (Phase 5).
-            # INT-* response rules get a post-episode look-ahead: SBTFailed sits
-            # at the episode's last second (revent_ts - 1s), so correcting
-            # interventions charted after reintubation land in the next episode.
-            # Only the rule's own target activity is appended, so activations
-            # from the next episode (e.g. its SBTFailed) cannot leak in; each
-            # rule's max_hours still bounds the actual match.
-            if canon_id.startswith("RC-DP-"):
-                constraint_trace_df = context_df
-            elif is_failure_rule and constraint.target:
-                # ponytail: flat 48h = max max_hours in failure_correction.yaml
-                lookahead = event_log[
+            pre_hours = getattr(constraint, "context_window_pre_hours", None)
+            post_hours = getattr(constraint, "context_window_post_hours", None)
+            trace_parts: list[pd.DataFrame] = []
+            if pre_hours is not None and pre_hours > 0:
+                trace_parts.append(
+                    event_log[
+                        (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=pre_hours))
+                        & (event_log["timestamp"] < episode_end)
+                    ]
+                )
+            else:
+                trace_parts.append(episode_df)
+            if post_hours is not None and post_hours > 0 and constraint.target is not None:
+                post_df = event_log[
                     (event_log["timestamp"] >= episode_end)
-                    & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=48))
+                    & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=post_hours))
                     & (event_log["activity"] == constraint.target)
                 ]
-                constraint_trace_df = pd.concat([episode_df, lookahead]).sort_values("timestamp")
-            else:
-                constraint_trace_df = episode_df
+                trace_parts.append(post_df)
+            constraint_trace_df = (
+                pd.concat(trace_parts).sort_values("timestamp")
+                if len(trace_parts) > 1
+                else trace_parts[0]
+            )
             res = evaluate_constraint(
                 case_id=str(stay_id),
                 trace_df=constraint_trace_df,

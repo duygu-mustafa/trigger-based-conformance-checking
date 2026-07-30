@@ -61,7 +61,7 @@ def binarize_outcome(df: pd.DataFrame) -> pd.DataFrame:
         df["next_outcome_binary"] = np.nan
     return df
 
-def get_rule_binary(row: pd.Series, rule_id: str) -> float:
+def get_rule_binary(row: pd.Series, rule_id: str, pool_vacuous: bool = False) -> float:
     """
     Encode rule state to binary (1, 0, or NaN).
 
@@ -74,22 +74,31 @@ def get_rule_binary(row: pd.Series, rule_id: str) -> float:
     failure-activated rule (Response(SBTFailed, X)), vacuous means "no SBT
     failure occurred", a different population from "failure occurred and was
     corrected". Pooling them makes exposure a proxy for the outcome.
+
+    pool_vacuous=True disables that differentiation: vacuous satisfactions are
+    counted as satisfied (0) alongside activated satisfactions. Use to compare
+    against the activations-only encoding.
     """
     satisfied = str(row.get("mandatory_satisfied_constraints", "")).split(";") + \
                 str(row.get("info_satisfied_constraints", "")).split(";")
     violated = str(row.get("mandatory_violated_constraints", "")).split(";") + \
                str(row.get("info_violated_constraints", "")).split(";")
+    vacuous = str(row.get("mandatory_vacuous_constraints", "")).split(";") + \
+              str(row.get("info_vacuous_constraints", "")).split(";")
 
     satisfied = [s for s in satisfied if s]
     violated = [v for v in violated if v]
+    vacuous = [v for v in vacuous if v]
 
     if rule_id in violated:
         return 1.0
     if rule_id in satisfied:
         return 0.0
+    if pool_vacuous and rule_id in vacuous:
+        return 0.0
     return np.nan
 
-def build_case_level_table(df: pd.DataFrame) -> pd.DataFrame:
+def build_case_level_table(df: pd.DataFrame, pool_vacuous: bool = False) -> pd.DataFrame:
     """Transform trace results to case-level analysis table."""
     # Filter to cases with an actual SBT attempt
     df_sbt = df[df["sbt_attempt"].notnull() & (df["sbt_attempt"] != "")].copy()
@@ -117,7 +126,7 @@ def build_case_level_table(df: pd.DataFrame) -> pd.DataFrame:
         }
         
         for rule_id in sorted(all_rules):
-            case_data[rule_id] = get_rule_binary(row, rule_id)
+            case_data[rule_id] = get_rule_binary(row, rule_id, pool_vacuous)
             
         case_rows.append(case_data)
         
@@ -220,81 +229,169 @@ def calculate_stats(a, b, c, d):
         "continuity_correction": has_zero
     }
 
+def load_constraint_labels(
+    config_dir: Path = Path("configs/declare"),
+) -> dict[str, str]:
+    """Map constraint id -> human label from all Declare YAMLs (frontend 'Clinical Rule')."""
+    import yaml
+    labels: dict[str, str] = {}
+    for cfg in config_dir.glob("*.yaml"):
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        constraints = data.get("constraints", data.get("model", {}).get("constraints", [])) or []
+        for c in constraints:
+            if isinstance(c, dict) and c.get("id"):
+                labels[str(c["id"])] = str(c.get("label") or c.get("id"))
+    return labels
+
+
+def _classify(or_val, or_low, or_high, p) -> str:
+    """Frontend 'Clinical Relevance': significant + CI wholly one side of 1."""
+    if p is None or pd.isnull(p) or p >= 0.05:
+        return "inconclusive"
+    if pd.isnull(or_low) or pd.isnull(or_high):
+        return "inconclusive"
+    if or_val < 1 and or_high < 1:
+        return "useful"      # violation tracks failure -> rule protective
+    if or_val > 1 and or_low > 1:
+        return "harmful"     # violation tracks success -> flag
+    return "inconclusive"
+
+
+def export_frontend_csv(df_summary: pd.DataFrame, labels: dict[str, str], out_path: Path) -> None:
+    """CSV mirroring the frontend StatsDeepDive table, sorted by p-value."""
+    def fmt_ci(v, lo, hi):
+        if pd.isnull(v):
+            return ""
+        return f"{v:.2f} [{lo:.2f}, {hi:.2f}]" if not (pd.isnull(lo) or pd.isnull(hi)) else f"{v:.2f}"
+
+    rows = []
+    for _, r in df_summary.iterrows():
+        rel = _classify(r["or"], r["or_ci_low"], r["or_ci_high"], r["p_raw"])
+        rows.append({
+            "clinical_rule": labels.get(r["rule_name"], r["rule_name"]),
+            "constraint_id": r["rule_name"],
+            "outcome_variable": r["outcome_variable"],
+            "exposed_violated": int(r["n_exposed"]),
+            "unexposed_satisfied": int(r["n_unexposed"]),
+            "OR_95CI": fmt_ci(r["or"], r["or_ci_low"], r["or_ci_high"]),
+            "RR_95CI": fmt_ci(r["rr"], r["rr_ci_low"], r["rr_ci_high"]),
+            "p_value": f"{r['p_raw']:.2e}",
+            "clinical_relevance": rel,
+            "significant": r["p_raw"] < 0.05,
+        })
+    out = pd.DataFrame(rows).sort_values("p_value")
+    out.to_csv(out_path, index=False)
+    print(f"  frontend-style -> {out_path}")
+
+
+def export_r_compatible_stats(df_summary: pd.DataFrame, out_path: Path) -> None:
+    """Rewrite summary with the column names generate_summary.py / R expect.
+
+    generate_summary reads fisher_p, or_low, or_high, rr_low, rr_high; our
+    internal summary uses p_raw, or_ci_low/high, rr_ci_low/high. Rename so the
+    frontend summary.json can be regenerated from this run.
+    """
+    out = df_summary.rename(columns={
+        "p_raw": "fisher_p",
+        "or_ci_low": "or_low", "or_ci_high": "or_high",
+        "rr_ci_low": "rr_low", "rr_ci_high": "rr_high",
+    })[[
+        "rule_name", "outcome_variable", "n_censored", "n_exposed", "n_unexposed",
+        "a", "b", "c", "d", "fisher_p", "or", "or_low", "or_high", "rr", "rr_low", "rr_high",
+    ]]
+    out.to_csv(out_path, index=False)
+    print(f"  R/frontend-compatible stats -> {out_path}")
+
+
+def run_analysis(df: pd.DataFrame, pool_vacuous: bool, inter_episode_rules: set[str],
+                 out_table: Path, out_summary: Path) -> pd.DataFrame:
+    """Build case table + per-rule stats for one vacuous-handling mode, write both CSVs."""
+    df_cases = build_case_level_table(df, pool_vacuous=pool_vacuous)
+    print(f"[{'pooled' if pool_vacuous else 'activations-only'}] "
+          f"analysis table with {len(df_cases)} SBT cases.")
+
+    exclude_cols = {"stay_id", "episode_index", "outcome", "next_outcome"}
+    all_rules_list = sorted([col for col in df_cases.columns if col not in exclude_cols])
+
+    summary_rows = []
+    for rule_id in all_rules_list:
+        is_inter = rule_id in inter_episode_rules
+        outcome_col = "next_outcome" if is_inter else "outcome"
+        a, b, c, d, n_censored = generate_contingency_table(df_cases, rule_id, outcome_col)
+        n_exposed = a + b
+        n_unexposed = c + d
+        if (n_exposed + n_unexposed) == 0:
+            continue
+        stats = calculate_stats(a, b, c, d)
+        summary_rows.append({
+            "rule_name": rule_id,
+            "outcome_variable": "next_episode" if is_inter else "same_episode",
+            "vacuous_mode": "pooled" if pool_vacuous else "activations_only",
+            "n_censored": n_censored,
+            "n_exposed": n_exposed,
+            "n_unexposed": n_unexposed,
+            "a": a, "b": b, "c": c, "d": d,
+            "expected_a": stats["expected_a"],
+            "p_raw": stats["p_raw"],
+            "or": stats["or_point"],
+            "or_ci_low": stats["or_ci_low"],
+            "or_ci_high": stats["or_ci_high"],
+            "rr": stats["rr_point"],
+            "rr_ci_low": stats["rr_ci_low"],
+            "rr_ci_high": stats["rr_ci_high"],
+            "used_continuity_correction": stats["continuity_correction"],
+        })
+
+    df_summary = pd.DataFrame(summary_rows)
+    df_cases.to_csv(out_table, index=False)
+    df_summary.to_csv(out_summary, index=False)
+    print(f"  table   -> {out_table}")
+    print(f"  summary -> {out_summary}")
+    return df_summary
+
+
 if __name__ == "__main__":
-    input_csv = Path("data/results/trigger_results.csv")
-    if input_csv.exists():
-        df = load_conformance_data(input_csv)
-        print(f"Loaded {len(df)} trigger episodes.")
-        
-        # 1. Generate Case-Level Table
-        df_cases = build_case_level_table(df)
-        print(f"Created analysis table with {len(df_cases)} SBT cases.")
-        
-        # Identify rules from the columns of the case-level table
-        exclude_cols = {"stay_id", "episode_index", "outcome", "next_outcome"}
-        all_rules_list = sorted([col for col in df_cases.columns if col not in exclude_cols])
-
-        inter_episode_rules = load_inter_episode_rules()
-        print(f"Inter-episode rules (tested against next episode's outcome): {sorted(inter_episode_rules)}")
-
-        # 2. Perform Statistical Analysis for each rule
-        summary_rows = []
-        for rule_id in all_rules_list:
-            is_inter = rule_id in inter_episode_rules
-            outcome_col = "next_outcome" if is_inter else "outcome"
-            a, b, c, d, n_censored = generate_contingency_table(df_cases, rule_id, outcome_col)
-            n_exposed = a + b
-            n_unexposed = c + d
-
-            if (n_exposed + n_unexposed) == 0:
-                continue
-
-            stats = calculate_stats(a, b, c, d)
-
-            row = {
-                "rule_name": rule_id,
-                "outcome_variable": "next_episode" if is_inter else "same_episode",
-                "n_censored": n_censored,
-                "n_exposed": n_exposed,
-                "n_unexposed": n_unexposed,
-                "a": a, "b": b, "c": c, "d": d,
-                "expected_a": stats["expected_a"],
-                "p_raw": stats["p_raw"],
-                "or": stats["or_point"],
-                "or_ci_low": stats["or_ci_low"],
-                "or_ci_high": stats["or_ci_high"],
-                "rr": stats["rr_point"],
-                "rr_ci_low": stats["rr_ci_low"],
-                "rr_ci_high": stats["rr_ci_high"],
-                "used_continuity_correction": stats["continuity_correction"]
-            }
-            summary_rows.append(row)
-            
-        df_summary = pd.DataFrame(summary_rows)
-        
-        # # 3. Multiple Testing Correction (no longer applied — raw p-value used)
-        # if not df_summary.empty:
-        #     df_summary["p_bonf"] = np.minimum(df_summary["p_raw"] * len(df_summary), 1.0)
-        #     _rej, p_fdr, _as1, _as2 = multipletests(df_summary["p_raw"], method="fdr_bh")
-        #     df_summary["p_fdr"] = p_fdr
-        #     df_summary["significant_bonf"] = df_summary["p_bonf"] < 0.05
-        #     df_summary["significant_fdr"] = df_summary["p_fdr"] < 0.05
-            
-        # 4. Save Results
-        output_table_path = Path("data/results/statistical_analysis_table.csv")
-        df_cases.to_csv(output_table_path, index=False)
-        
-        output_summary_path = Path("data/results/statistical_results_summary.csv")
-        df_summary.to_csv(output_summary_path, index=False)
-        
-        print(f"Analysis table saved to {output_table_path}")
-        print(f"Statistical summary saved to {output_summary_path}")
-        
-        # Example output
-        if not df_summary.empty:
-            print("\nTop findings (by raw p-value):")
-            print(df_summary.sort_values("p_raw").head(10)[["rule_name", "outcome_variable", "p_raw", "or", "n_censored"]])
-        else:
-            print("No rules to analyze.")
-    else:
+    input_csv = Path("data/results/full_results/trigger_results_full.csv")
+    out_dir = input_csv.parent
+    if not input_csv.exists():
         print(f"Input file {input_csv} not found.")
+        raise SystemExit(1)
+
+    df = load_conformance_data(input_csv)
+    print(f"Loaded {len(df)} trigger episodes.")
+    inter_episode_rules = load_inter_episode_rules()
+    print(f"Inter-episode rules (tested against next episode's outcome): {sorted(inter_episode_rules)}")
+
+    labels = load_constraint_labels()
+
+    results = {}
+    for pool, tag in [(False, "activations_only"), (True, "pooled")]:
+        results[tag] = run_analysis(
+            df, pool, inter_episode_rules,
+            out_table=out_dir / f"statistical_analysis_table_{tag}.csv",
+            out_summary=out_dir / f"statistical_results_summary_{tag}.csv",
+        )
+
+    # Frontend-style findings CSV for the activations-only run
+    export_frontend_csv(
+        results["activations_only"], labels,
+        out_dir / "findings_frontend_activations_only.csv",
+    )
+    # R/frontend-compatible stats -> feed generate_summary.py --stats-csv
+    export_r_compatible_stats(
+        results["activations_only"],
+        out_dir / "rule_statistics_activations_only.csv",
+    )
+
+    # Side-by-side comparison keyed on rule_name (OR under each mode)
+    combined = pd.concat(results.values(), ignore_index=True)
+    both_path = out_dir / "statistical_results_summary_both.csv"
+    combined.to_csv(both_path, index=False)
+    print(f"  combined (both modes, long form) -> {both_path}")
+
+    if not combined.empty:
+        pivot = combined.pivot_table(
+            index=["rule_name", "outcome_variable"], columns="vacuous_mode",
+            values=["or", "p_raw", "n_exposed"], aggfunc="first")
+        print("\nSide-by-side (OR / p_raw / n_exposed per mode):")
+        print(pivot.to_string())

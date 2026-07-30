@@ -283,6 +283,20 @@ def _parse_constraint(
         except (TypeError, ValueError):
             constraint.observation_window_hours = obs_window
 
+    ctx_pre = raw.get("context_window_pre_hours")
+    if ctx_pre is not None:
+        try:
+            constraint.context_window_pre_hours = float(ctx_pre)
+        except (TypeError, ValueError):
+            constraint.context_window_pre_hours = ctx_pre
+
+    ctx_post = raw.get("context_window_post_hours")
+    if ctx_post is not None:
+        try:
+            constraint.context_window_post_hours = float(ctx_post)
+        except (TypeError, ValueError):
+            constraint.context_window_post_hours = ctx_post
+
     return constraint
 
 

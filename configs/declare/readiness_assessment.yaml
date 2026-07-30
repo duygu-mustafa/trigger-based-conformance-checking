@@ -139,6 +139,7 @@ model:
     - id: RC-DP-01
       label: "Oxygenation criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: OxygenationMeasured
       target_selection: last
@@ -187,6 +188,7 @@ model:
     - id: RC-DP-02
       label: "pH criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: pHMeasured
       target_selection: last
@@ -231,6 +233,7 @@ model:
     - id: RC-DP-03
       label: "Hemoglobin criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: HemoglobinMeasured
       target_selection: last
@@ -275,6 +278,7 @@ model:
     - id: RC-DP-04
       label: "Temperature criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: TemperatureMeasured
       target_selection: last
@@ -321,6 +325,7 @@ model:
     - id: RC-DP-05
       label: "Vasopressor criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: VasopressorMeasured
       target_selection: last
@@ -367,6 +372,7 @@ model:
     - id: RC-DP-06
       label: "Mental status criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: MentalStatusMeasured
       correlation_condition: mental_status_ok
@@ -414,6 +420,7 @@ model:
     - id: RC-DP-07
       label: "Inspiratory effort criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: InspiratoryEffortMeasured
       target_selection: last

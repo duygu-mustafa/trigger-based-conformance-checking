@@ -87,6 +87,8 @@ class DeclareConstraint:
     activation_condition_title: Optional[str] = None
     target_condition_title: Optional[str] = None
     target_selection: Optional[str] = None
+    context_window_pre_hours: Optional[float] = None
+    context_window_post_hours: Optional[float] = None
     # "episode" (default): outcome = same episode's sbt_outcome.
     # "next_episode": inter-episode rule — statistical outcome is the next
     # episode's sbt_outcome (breaks circularity for SBTFailed-activated rules).

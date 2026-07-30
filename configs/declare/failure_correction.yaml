@@ -47,7 +47,9 @@ constraints:
     label: "Bronchodilator present in post-failure intervention window"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: Bronchodilator_Admin
+    context_window_post_hours: 24
     # source: icu.inputevents, itemid 224170
     time_condition:
       max_hours: 24
@@ -63,7 +65,9 @@ constraints:
     label: "Diuretic present in post-failure intervention window"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: Diuretic_Admin
+    context_window_post_hours: 24
     # source: icu.inputevents
     # itemids: [221794 (Furosemide), 229639 (Bumetanide)]
     time_condition:
@@ -80,7 +84,9 @@ constraints:
     label: "Afterload reduction present in post-failure intervention window"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: AfterloadReduction_Admin
+    context_window_post_hours: 24
     # source: icu.inputevents
     # itemids: [222056 (Nitroglycerin), 222051 (Nitroprusside),
     #           225974 (Metoprolol),    221429 (Esmolol)]
@@ -98,7 +104,9 @@ constraints:
     label: "Electrolyte and blood gas labs drawn after SBT failure"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: ElectrolyteBG_Test
+    context_window_post_hours: 6
     # source: hosp.labevents
     # itemids: [50971 (K), 50960 (Mg), 50970 (Phos),
     #           50882 (HCO3), 50818 (pCO2), 50820 (pH)]
@@ -117,7 +125,9 @@ constraints:
     label: "Electrolyte replacement present in post-failure intervention window"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: ElectrolyteCorrection_Admin
+    context_window_post_hours: 24
     # source: icu.inputevents
     # itemids: [222011, 227536 (KCl), 222151 (K-Phos/Na-Phos),
     #           220995, 227523 (MgSO4)]
@@ -135,7 +145,9 @@ constraints:
     label: "Cortisol and thyroid function labs drawn after SBT failure"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: HormonalLab_Test
+    context_window_post_hours: 24
     # source: hosp.labevents
     # itemids: [227463 (Cortisol), 50993 (TSH), 50995 (Free T4)]
     time_condition:
@@ -153,7 +165,9 @@ constraints:
     label: "Hormonal replacement present in post-failure intervention window"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: HormonalReplacement_Admin
+    context_window_post_hours: 48
     # source: hosp.prescriptions
     # drugnames (adrenal): ["HYDROCORTISONE", "METHYLPREDNISOLONE", "DEXAMETHASONE"]
     # drugnames (thyroid): ["LEVOTHYROXINE SODIUM"]
@@ -172,7 +186,9 @@ constraints:
     label: "At least one failure intervention must occur after SBT failure"
     template: RESPONSE
     activation: SBTFailed
+    outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: AnyFailureIntervention
+    context_window_post_hours: 24
     # AnyFailureIntervention is a derived activity resolved in preprocessing:
     # exists(inputevents,  itemid IN [224170, 221794, 229639,
     #                                 222056, 222051, 225974, 221429,
