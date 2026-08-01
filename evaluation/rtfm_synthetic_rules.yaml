@@ -1,0 +1,132 @@
+version: 1
+
+model:
+  name: rtfm_synthetic
+  description: >
+    Synthetic Declare rule variants for the E4 rule-complexity benchmark
+    (evaluation/benchmark_scalability.py). Not a process model: each rule is a
+    controlled variation of one complexity component so per-rule runtime can be
+    regressed on the complexity measure in evaluation/complexity.py. Three
+    sweeps: template family (SYN-T*), number of clauses at a fixed single
+    attribute (SYN-C*), number of distinct attributes at one clause each
+    (SYN-A*). All predicates reference attributes that the RTFM log carries on
+    the Create Fine event, so activation conditions actually evaluate rather
+    than short-circuit on missing values.
+
+  constraints:
+    # --- Template sweep: same activity pair, increasing evaluator work -------
+    - id: SYN-T1
+      label: "Template sweep: unary existence"
+      template: EXISTENCE
+      activation: Send Fine
+      severity: informational
+
+    - id: SYN-T2
+      label: "Template sweep: unordered binary"
+      template: RESPONDED_EXISTENCE
+      activation: Create Fine
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-T3
+      label: "Template sweep: ordered binary"
+      template: RESPONSE
+      activation: Create Fine
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-T4
+      label: "Template sweep: alternate variant"
+      template: ALTERNATE_RESPONSE
+      activation: Create Fine
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-T5
+      label: "Template sweep: chain variant"
+      template: CHAIN_RESPONSE
+      activation: Create Fine
+      target: Send Fine
+      severity: informational
+
+    # --- Clause sweep: RESPONSE, 1..5 clauses, single attribute --------------
+    - id: SYN-C1
+      label: "Clause sweep: 1 clause"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-C2
+      label: "Clause sweep: 2 clauses"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['amount'] < 10000"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-C3
+      label: "Clause sweep: 3 clauses"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['amount'] < 10000 and items['amount'] != 1"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-C4
+      label: "Clause sweep: 4 clauses"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['amount'] < 10000 and items['amount'] != 1 and items['amount'] >= 2"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-C5
+      label: "Clause sweep: 5 clauses"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['amount'] < 10000 and items['amount'] != 1 and items['amount'] >= 2 and items['amount'] <= 9999"
+      target: Send Fine
+      severity: informational
+
+    # --- Attribute sweep: RESPONSE, 1..5 distinct attributes, 1 clause each --
+    - id: SYN-A1
+      label: "Attribute sweep: 1 attribute"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-A2
+      label: "Attribute sweep: 2 attributes"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['points'] >= 0"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-A3
+      label: "Attribute sweep: 3 attributes"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['points'] >= 0 and items['totalPaymentAmount'] >= 0"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-A4
+      label: "Attribute sweep: 4 attributes"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['points'] >= 0 and items['totalPaymentAmount'] >= 0 and items['article'] > 0"
+      target: Send Fine
+      severity: informational
+
+    - id: SYN-A5
+      label: "Attribute sweep: 5 attributes"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: "items['amount'] > 0 and items['points'] >= 0 and items['totalPaymentAmount'] >= 0 and items['article'] > 0 and items['vehicleClass'] == 'A'"
+      target: Send Fine
+      severity: informational

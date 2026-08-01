@@ -7,7 +7,7 @@ set -euo pipefail
 # - Writes timestamped logs and supports --resume
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"chmod 
+PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
 INPUT="data/final/icu_event_log_full.parquet"
 OUTPUT="data/results/full_results/trigger_results_full.csv"

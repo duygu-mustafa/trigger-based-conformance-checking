@@ -1,0 +1,119 @@
+version: 1
+
+model:
+  name: rtfm
+  description: >
+    Declare rules for the Road Traffic Fine Management Process (Italian local
+    police fine collection). Activity names follow the concept:name values of
+    the public XES log. The `severity` key is not part of the Declare schema --
+    conformance.rules ignores it -- and is read by evaluation/rtfm_utils.py to
+    split constraints across the mandatory_/info_ result columns.
+
+  data_conditions:
+    large_fine:
+      title: "Fine amount above 50 EUR"
+      description: "Base fine amount recorded at Create Fine exceeds 50 EUR."
+      expression: "items['amount'] > 50"
+
+  constraints:
+    - id: RTF-01
+      label: "Every case starts with fine creation"
+      template: INIT
+      activation: Create Fine
+      severity: mandatory
+      rationale: >
+        The fine record is the origin of the process; nothing may precede it.
+
+    - id: RTF-02
+      label: "A fine must be created before it is sent"
+      template: PRECEDENCE
+      activation: Send Fine
+      target: Create Fine
+      severity: mandatory
+      rationale: >
+        Dispatch to the offender presupposes a registered fine.
+
+    - id: RTF-03
+      label: "A sent fine must be notified within 90 days"
+      template: RESPONSE
+      activation: Send Fine
+      target: Insert Fine Notification
+      time_condition:
+        min_hours: 0
+        max_hours: 2160
+      severity: mandatory
+      rationale: >
+        Notification records the offender's receipt of the fine and starts the
+        payment clock; a dispatch that is never notified leaves the case in
+        limbo.
+
+    - id: RTF-04
+      label: "Penalty may only be added after notification"
+      template: PRECEDENCE
+      activation: Add penalty
+      target: Insert Fine Notification
+      severity: mandatory
+      rationale: >
+        The penalty doubles the amount owed for missing the payment deadline.
+        The deadline only runs once the offender has been notified.
+
+    - id: RTF-05
+      label: "Credit collection only after a penalty was added"
+      template: PRECEDENCE
+      activation: Send for Credit Collection
+      target: Add penalty
+      severity: mandatory
+      rationale: >
+        Handover to the collection agency is the final escalation step and
+        follows the penalty stage.
+
+    - id: RTF-06
+      label: "Penalty is added at most once"
+      template: AT_MOST_ONE
+      activation: Add penalty
+      severity: informational
+      rationale: >
+        A single penalty per fine; repeated penalties indicate duplicate
+        processing.
+
+    - id: RTF-07
+      label: "A prefecture appeal must be sent after it is registered"
+      template: RESPONSE
+      activation: Insert Date Appeal to Prefecture
+      target: Send Appeal to Prefecture
+      severity: mandatory
+      rationale: >
+        Registering an appeal date obliges the office to forward the appeal to
+        the prefecture.
+
+    - id: RTF-08
+      label: "A prefecture result must be notified to the offender"
+      template: RESPONSE
+      activation: Receive Result Appeal from Prefecture
+      target: Notify Result Appeal to Offender
+      severity: mandatory
+      rationale: >
+        The offender must learn the outcome of their own appeal.
+
+    - id: RTF-09
+      label: "Large fines must be sent to the offender"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: large_fine
+      activation_condition_display: "Fine amount above 50 EUR"
+      target: Send Fine
+      severity: informational
+      rationale: >
+        Data-aware rule: fines above the 50 EUR threshold are expected to be
+        dispatched rather than settled on the spot. Exercises the wide-log
+        attribute path in the checker (items['amount']).
+
+    - id: RTF-10
+      label: "A case sent for credit collection is not also paid"
+      template: NOT_CO_EXISTENCE
+      activation: Send for Credit Collection
+      target: Payment
+      severity: informational
+      rationale: >
+        Credit collection and payment are alternative endings; their
+        co-occurrence signals a payment that arrived after handover.
