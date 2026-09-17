@@ -180,7 +180,7 @@ python main_per_sbt.py
 | `--output` | `data/results/full_results020726/trigger_results_full.csv` | Output results CSV |
 | `--resume` | off | Skip stays already present in output CSV and append new results |
 
-### Safe Long-Run Execution on Linux
+### Safe Long-Run Execution on Linux 
 
 Conformance checking over the full dataset can take hours. Use the launcher script so the process survives terminal disconnects.
 

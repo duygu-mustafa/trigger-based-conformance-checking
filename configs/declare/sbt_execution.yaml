@@ -64,12 +64,12 @@ model:
       description: >
         Depressed mental status or agitation. SAS >= 6 (Very Agitated /
         Danger Agitation) or SAS <= 2 (Very Sedated / Unarousable) or
-        RASS LOC = No. Akella Table 4, criterion 5.
+        RASS LOC = Yes. Akella Table 4, criterion 5.
       logic: OR
       expressions:
         - "items[223753] >= 6"
         - "items[223753] <= 2"
-        - "items[228302] == 'No'"
+        - "items[228302] == 'Yes'"
 
     any_failure_criterion:
       title: "Any SBT failure criterion met"
@@ -85,7 +85,7 @@ model:
         - "items[220179] < 90"
         - "items[223753] >= 6"
         - "items[223753] <= 2"
-        - "items[228302] == 'No'"
+        - "items[228302] == 'Yes'"
 
     psv_indicated:
       description: "Patient ventilated > 24 h — PSV mode (5-8 cmH2O) preferred over T-piece."
@@ -152,7 +152,7 @@ model:
     #   activation_condition: "mental_status_failure"
     #   target: SBTSucceeded
     #   rationale: >
-    #     Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = No
+    #     Agitation (SAS >= 6) or over-sedation (SAS <= 2) or RASS LOC = Yes
     #     during the trial is a failure criterion (Akella Table 4). A Success
     #     outcome following this violation is a documentation inconsistency.
 
@@ -190,8 +190,10 @@ model:
       template: RESPONSE
       activation: SBTFailed
       target: SBTStarted
+      context_window_post_hours: 48
       correlation_condition: "date(target_ts) == date(activation_ts) + timedelta(days=1)"
       correlation_condition_display: "Next calendar day"
+      outcome_scope: next_episode
       rationale: >
         A failed SBT creates an obligation for a repeated trial on the following
         calendar day (Akella et al., 2022). Same-day retries and delays beyond
@@ -205,8 +207,10 @@ model:
       # SBTStarted satisfying ϕ_c (same calendar day) IS found.
       activation: SBTFailed
       target: SBTStarted
+      context_window_post_hours: 48
       correlation_condition: "date(target_ts) == date(activation_ts)"
       correlation_condition_display: "Same calendar day"
+      outcome_scope: next_episode
       rationale: >
         Same-day retries are too early; they risk patient fatigue and deviate
         from the 24-hour re-attempt protocol (Akella et al., 2022).
@@ -216,8 +220,10 @@ model:
       template: RESPONSE
       activation: SBTFailed
       target: SBTStarted
+      context_window_post_hours: 48
       correlation_condition: "date(target_ts) <= date(activation_ts) + timedelta(days=1)"
       correlation_condition_display: "≤ next calendar day"
+      outcome_scope: next_episode
       rationale: >
         Delaying the repeated trial beyond the next calendar day deviates from
         the 24-hour re-attempt protocol (Akella et al., 2022).

@@ -20,14 +20,14 @@ const StatsDeepDive = ({ summaryData }) => {
   };
 
   const classCounts = useMemo(() => {
-    const raw = (summaryData?.violation_frequency || []).filter(v => v.count > 0 && v.odds_ratio !== undefined);
+    const raw = (summaryData?.violation_frequency || []).filter(v => v.constraint_id !== 'SBT-TM-02').filter(v => v.count > 0 && v.odds_ratio !== undefined);
     const counts = { useful: 0, harmful: 0, neutral: 0 };
     raw.forEach(v => { counts[v.rule_class] = (counts[v.rule_class] || 0) + 1; });
     return counts;
   }, [summaryData]);
 
   const statsData = useMemo(() => {
-    const raw = (summaryData?.violation_frequency || [])
+    const raw = (summaryData?.violation_frequency || []).filter(v => v.constraint_id !== 'SBT-TM-02')
       .filter(v => v.count > 0 && v.odds_ratio !== undefined);
 
     const sorted = [...raw].sort((a, b) => {

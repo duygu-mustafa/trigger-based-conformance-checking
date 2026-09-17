@@ -32,4 +32,12 @@ def build_event_log(activity_df: pd.DataFrame) -> pd.DataFrame:
     out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
     out = out.dropna(subset=["case_id", "activity", "timestamp"])
 
-    return out[CANONICAL_EVENT_LOG_COLUMNS].sort_values(["case_id", "timestamp"]).reset_index(drop=True)
+    # MIMIC-IV charttime is minute-precision, so many events in a case share an
+    # exact timestamp. Break ties on activity/itemid so ordering is deterministic
+    # and reproducible across runs, independent of upstream row order — this does
+    # not resolve the underlying temporal ambiguity, only makes it consistent.
+    return (
+        out[CANONICAL_EVENT_LOG_COLUMNS]
+        .sort_values(["case_id", "timestamp", "activity", "itemid"], kind="stable")
+        .reset_index(drop=True)
+    )

@@ -43,9 +43,8 @@ def build_synthetic_raw_df() -> pd.DataFrame:
         _row(1, t0 + pd.Timedelta(hours=3), "ventilator_setting", "ventilator_mode", value_text="CMV"),
         # Diuretic administration (furosemide).
         _row(1, t0 + pd.Timedelta(hours=2), "inputevents", 221794, value_num=20.0),
-        # Mental status: RASS 'No' and SAS 3 (satisfies SAS branch only).
-        _row(1, t0 + pd.Timedelta(minutes=30), "chartevents", 228302, value_text="No"),
-        _row(1, t0 + pd.Timedelta(minutes=45), "chartevents", 223753, value_num=3.0),
+        # Mental status: RASS 'Yes' (criterion not met; unrelated to activities under test here).
+        _row(1, t0 + pd.Timedelta(minutes=30), "chartevents", 228302, value_text="Yes"),
         # Cuff leak test via cuff pressure.
         _row(1, t0 + pd.Timedelta(hours=2, minutes=30), "chartevents", 224417, value_num=25.0),
     ]
@@ -111,14 +110,15 @@ def test_raw_to_event_log_activities():
     print("PASS: test_raw_to_event_log_activities")
 
 
-def test_rc_dp_06_mental_status_sas_only():
-    # RC-DP-06's mental_status_ok checks RASS LOC ('Yes') only; SAS is
-    # deliberately excluded (S96 decision). A RASS 'Yes' row within 24h of
-    # SBTStarted must satisfy the rule.
+def test_rc_dp_06_mental_status_rass_or_sas():
+    # RC-DP-06's mental_status_ok checks RASS LOC ('No') OR SAS (in [3, 4]).
+    # MentalStatusMeasured is emitted for every RASS LOC and every SAS reading,
+    # since RASS is documented in only a small fraction of stays in this cohort
+    # and SAS is the far more common fallback instrument.
     t0 = pd.Timestamp("2026-01-01 00:00:00")
     raw_df = pd.DataFrame([
         _row(1, t0, "ventilator_setting", "ventilator_mode", value_text="CMV"),
-        _row(1, t0 + pd.Timedelta(hours=1), "chartevents", 228302, value_text="Yes"),
+        _row(1, t0 + pd.Timedelta(hours=1), "chartevents", 228302, value_text="No"),
         _row(1, t0 + pd.Timedelta(hours=2), "ventilator_setting", "ventilator_mode", value_text="SIMV/PSV"),
     ])
     event_log = raw_to_event_log(raw_df)
@@ -127,11 +127,23 @@ def test_rc_dp_06_mental_status_sas_only():
     constraint = next(c for c in model.constraints if getattr(c, "id", None) == "RC-DP-06")
     result = evaluate_constraint(case_id="1", trace_df=event_log, constraint=constraint)
     assert result.outcome == ConformanceOutcome.SATISFIED, (
-        f"RASS 'Yes' mental status must satisfy RC-DP-06 (got {result.outcome}, "
+        f"RASS 'No' mental status must satisfy RC-DP-06 (got {result.outcome}, "
         f"reason={result.violation_reason})"
     )
 
-    print("PASS: test_rc_dp_06_mental_status_sas_only")
+    raw_df_sas = pd.DataFrame([
+        _row(2, t0, "ventilator_setting", "ventilator_mode", value_text="CMV"),
+        _row(2, t0 + pd.Timedelta(hours=1), "chartevents", 223753, value_num=4, value_text="Calm/Cooperative"),
+        _row(2, t0 + pd.Timedelta(hours=2), "ventilator_setting", "ventilator_mode", value_text="SIMV/PSV"),
+    ])
+    event_log_sas = raw_to_event_log(raw_df_sas)
+    result_sas = evaluate_constraint(case_id="2", trace_df=event_log_sas, constraint=constraint)
+    assert result_sas.outcome == ConformanceOutcome.SATISFIED, (
+        f"SAS=4 mental status must satisfy RC-DP-06 (got {result_sas.outcome}, "
+        f"reason={result_sas.violation_reason})"
+    )
+
+    print("PASS: test_rc_dp_06_mental_status_rass_or_sas")
 
 
 def test_rc_dp_01_oxygenation_unconditional_emission():
@@ -203,6 +215,65 @@ def test_rc_dp_02_24h_lookback_across_episode_start():
     )
 
     print("PASS: test_rc_dp_02_24h_lookback_across_episode_start")
+
+
+def test_rc_dp_no_leak_from_prior_episode():
+    # Episode 1 has its own SBTStarted near its end. Episode 2 starts 16h
+    # later (inside RC-DP-02's 24h pre-window) and has no SBT of its own.
+    # The pre-window must supply pH lookback evidence only, not a borrowed
+    # activation: episode 2 should be VACUOUS, not SATISFIED/VIOLATED.
+    episode1_start = pd.Timestamp("2026-01-01 00:00:00")
+    episode1_end = pd.Timestamp("2026-01-01 20:00:00")
+    episode2_start = episode1_end
+    episode2_end = pd.Timestamp("2026-01-05 00:00:00")
+
+    def event(activity, ts, itemid=None, value_num=None):
+        return {
+            "case_id": "case1",
+            "activity": activity,
+            "timestamp": ts,
+            "itemid": itemid,
+            "value_raw": None,
+            "value_num": value_num,
+            "unit": None,
+            "attrs": {},
+            "patient_id": "p1",
+            "stay_id": 1,
+        }
+
+    event_log = pd.DataFrame([
+        event("InvasiveVentilationStarted", episode1_start),
+        event("pHMeasured", episode1_start + pd.Timedelta(hours=1), itemid="ph_bg", value_num=7.35),
+        event("SBTStarted", episode1_start + pd.Timedelta(hours=2)),
+        # episode 2 has no SBTStarted of its own.
+    ])
+
+    model = build_readiness_assessment_model()
+    constraint = next(c for c in model.constraints if getattr(c, "id", None) == "RC-DP-02")
+
+    unfixed_pre_window_df = event_log[
+        (event_log["timestamp"] >= episode2_start - pd.Timedelta(hours=24))
+        & (event_log["timestamp"] < episode2_end)
+    ]
+    result_unfixed = evaluate_constraint(case_id="case1", trace_df=unfixed_pre_window_df, constraint=constraint)
+    assert result_unfixed.outcome != ConformanceOutcome.VACUOUS, (
+        "sanity check: an unfiltered pre-window must reproduce the leak "
+        f"(borrowing episode 1's SBTStarted), got {result_unfixed.outcome}"
+    )
+
+    fixed_pre_window_df = unfixed_pre_window_df[
+        ~(
+            (unfixed_pre_window_df["activity"] == constraint.activation)
+            & (unfixed_pre_window_df["timestamp"] < episode2_start)
+        )
+    ]
+    result_fixed = evaluate_constraint(case_id="case1", trace_df=fixed_pre_window_df, constraint=constraint)
+    assert result_fixed.outcome == ConformanceOutcome.VACUOUS, (
+        "episode 2 has no SBT of its own, so RC-DP-02 must be vacuous once "
+        f"episode 1's activation is stripped from the pre-window (got {result_fixed.outcome})"
+    )
+
+    print("PASS: test_rc_dp_no_leak_from_prior_episode")
 
 
 def test_sbt_outcome_single_source_of_truth():
@@ -333,9 +404,10 @@ def main():
     failures = []
     for test_fn in (
         test_raw_to_event_log_activities,
-        test_rc_dp_06_mental_status_sas_only,
+        test_rc_dp_06_mental_status_rass_or_sas,
         test_rc_dp_01_oxygenation_unconditional_emission,
         test_rc_dp_02_24h_lookback_across_episode_start,
+        test_rc_dp_no_leak_from_prior_episode,
         test_sbt_outcome_single_source_of_truth,
         test_other_ventilator_rows_do_not_fragment_episode,
         test_int_response_post_episode_lookahead,

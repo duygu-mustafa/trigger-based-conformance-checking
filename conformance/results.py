@@ -26,6 +26,14 @@ class ConstraintResult:
     violation_deltas: dict[str, float] = field(default_factory=dict)
     satisfaction_deltas: dict[str, float] = field(default_factory=dict)
     delay_seconds: Optional[float] = None
+    # Why an activation failed, counted over the activations of this constraint.
+    # "absent": no target event at all before the activation.
+    # "stale": a target event exists but lies outside the time condition.
+    # "unmet": a target event is in window but its correlation condition is false.
+    violation_causes: dict[str, int] = field(default_factory=dict)
+    # Values the correlation condition read at the first activation that failed
+    # because the condition was false. Empty when the failure was absence.
+    violation_values: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

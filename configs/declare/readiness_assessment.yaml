@@ -100,9 +100,15 @@ model:
     mental_status_ok:
       title: "Mental status criterion met"
       description: >
-        Patient is awake and easily arousable.
-        Satisfied if CAM-ICU RASS LOC (228302) = 'Yes'
-      expression: "items[228302] == 'Yes'"
+        Patient is awake and easily arousable. Satisfied if CAM-ICU RASS LOC
+        (228302) = 'No', or via the SAS fallback instrument (223753) in
+        [3, 4] (Sedated/Calm-Cooperative). RASS LOC is documented in only a
+        small fraction of stays; SAS is the far more common instrument in
+        this cohort, so the fallback is required for adequate coverage.
+      logic: OR
+      expressions:
+        - "items[228302] == 'No'"
+        - "items[223753] in [3, 4]"
 
     inspiratory_effort_ok:
       title: "Inspiratory effort criterion met"
@@ -376,18 +382,18 @@ model:
       activation: SBTStarted
       target: MentalStatusMeasured
       correlation_condition: mental_status_ok
-      correlation_condition_display: "RASS LOC 'Yes'"
+      correlation_condition_display: "RASS LOC 'No' OR SAS in [3, 4]"
       target_selection: last
       time_condition:
         min_hours: -24
         max_hours: 0
       rationale: >
-        SBTStarted must be preceded within 24h by a MentalStatusMeasured event.
-        Only the most recent MentalStatusMeasured before SBTStarted is evaluated
-        (target_selection: last). MentalStatusMeasured is emitted only when the
-        criterion IS satisfied (threshold enforced in emitter due to OR across two
-        instruments): RASS LOC = 'Yes' (itemid 228302)
-        Akella Table 2, criterion 8.
+        SBTStarted must be preceded within 24h by a MentalStatusMeasured event
+        whose most recent reading satisfies RASS LOC (228302) = 'No' or, via
+        the SAS fallback (223753), is in [3, 4]. MentalStatusMeasured is
+        emitted for every RASS LOC and SAS measurement; the threshold is
+        enforced via correlation_condition on the most recent preceding
+        event (target_selection: last). Akella Table 2, criterion 8.
 
     # - id: RC-DP-06a
     #   label: "Mental status criterion must be met at SBT start (not_responded_existence)"

@@ -80,7 +80,7 @@ def _build_trigger_episodes(
     triggers = (
         df_full[df_full["activity"] == "InvasiveVentilationStarted"]
         .drop_duplicates(subset=["timestamp"])
-        .sort_values("timestamp")
+        .sort_values("timestamp", kind="stable")
         .reset_index(drop=True)
     )
     if triggers.empty:
@@ -113,7 +113,7 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     if prior.empty:
         return None
 
-    failures = prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])].sort_values("timestamp")
+    failures = prior[prior["activity"].isin(["SBTFailed", "SBTStopped"])].sort_values("timestamp", kind="stable")
     if failures.empty:
         return None
     return failures.iloc[-1]["timestamp"]
@@ -261,7 +261,7 @@ def export_to_frontend(runner, stay_ids, results_df, output_dir):
               )
             """,
             [str(stay_id)] + core_activities + list(whitelist_ids),
-        ).df().sort_values("timestamp")
+        ).df().sort_values("timestamp", kind="stable")
         
         # Format timestamps for JSON
         df_stay["timestamp"] = pd.to_datetime(df_stay["timestamp"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
@@ -354,6 +354,7 @@ _WORKER_RUNNER = None
 _WORKER_LOOKUP = None
 _WORKER_EPISODE_WINDOW_HOURS: float | None = None
 _WORKER_EPISODE_END_EVENT: str | None = None
+_WORKER_NO_SEGMENTATION: bool = False
 
 
 def _init_worker(
@@ -361,13 +362,15 @@ def _init_worker(
     model_paths: list[Path],
     episode_window_hours: float | None = None,
     episode_end_event: str | None = None,
+    no_segmentation: bool = False,
 ) -> None:
     global _WORKER_RUNNER, _WORKER_LOOKUP
-    global _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
+    global _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT, _WORKER_NO_SEGMENTATION
     _WORKER_RUNNER = BatchConformanceRunner(input_file=input_file, model_builder=_build_combined_model)
     _WORKER_LOOKUP = _load_combined_constraint_id_lookup(model_paths)
     _WORKER_EPISODE_WINDOW_HOURS = episode_window_hours
     _WORKER_EPISODE_END_EVENT = episode_end_event
+    _WORKER_NO_SEGMENTATION = no_segmentation
 
 
 def _process_stay(stay_id: str) -> list[dict]:
@@ -379,13 +382,13 @@ def _process_stay(stay_id: str) -> list[dict]:
     df_full = runner.con.execute(
         f"SELECT * FROM events WHERE {runner._batch_key_column} = ?",
         [str(stay_id)],
-    ).df().sort_values("timestamp")
+    ).df().sort_values("timestamp", kind="stable")
 
     if df_full.empty:
         return rows
     df_full = df_full.copy()
     df_full["timestamp"] = pd.to_datetime(df_full["timestamp"], errors="coerce")
-    df_full = df_full.dropna(subset=["timestamp"]).sort_values("timestamp")
+    df_full = df_full.dropna(subset=["timestamp"]).sort_values("timestamp", kind="stable")
     if df_full.empty:
         return rows
 
@@ -395,16 +398,25 @@ def _process_stay(stay_id: str) -> list[dict]:
     else:
         event_log = df_full.copy()
 
-    episodes = _build_trigger_episodes(
-        event_log, _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
-    )
+    if _WORKER_NO_SEGMENTATION:
+        # Ablation: one evaluation trace per stay, i.e. the trace-global reading the
+        # method replaces. Everything downstream is unchanged, so the resulting
+        # verdicts differ only through the loss of segmentation.
+        episodes = [(
+            event_log.iloc[0]["timestamp"],
+            event_log.iloc[-1]["timestamp"] + pd.Timedelta(seconds=1),
+        )]
+    else:
+        episodes = _build_trigger_episodes(
+            event_log, _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
+        )
     if not episodes:
         return rows
 
     sbt_starts = (
         event_log[event_log["activity"] == "SBTStarted"]
         .drop_duplicates(subset=["timestamp"])
-        .sort_values("timestamp")
+        .sort_values("timestamp", kind="stable")
     )
     attempt_index = 0
     for episode_idx, (episode_start, episode_end) in enumerate(episodes, start=1):
@@ -438,7 +450,7 @@ def _process_stay(stay_id: str) -> list[dict]:
             outcome_rows = episode_df[
                 episode_df["activity"].isin(["SBTFailed", "SBTSucceeded"])
                 & (episode_df["timestamp"] >= sbt_start)
-            ].sort_values("timestamp")
+            ].sort_values("timestamp", kind="stable")
             if not outcome_rows.empty:
                 outcome_row = outcome_rows.iloc[0]
                 outcome_val = str(outcome_row["value_raw"])
@@ -484,12 +496,22 @@ def _process_stay(stay_id: str) -> list[dict]:
             post_hours = getattr(constraint, "context_window_post_hours", None)
             trace_parts: list[pd.DataFrame] = []
             if pre_hours is not None and pre_hours > 0:
-                trace_parts.append(
-                    event_log[
-                        (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=pre_hours))
-                        & (event_log["timestamp"] < episode_end)
-                    ]
-                )
+                pre_window_df = event_log[
+                    (event_log["timestamp"] >= episode_start - pd.Timedelta(hours=pre_hours))
+                    & (event_log["timestamp"] < episode_end)
+                ]
+                if constraint.activation is not None:
+                    # The pre-window exists to supply correlation/target evidence
+                    # (e.g. chart readings) for the lookback, not to source new
+                    # activations. Without this, an activation event belonging to
+                    # a preceding episode that falls inside this episode's
+                    # pre-window would be misread as this episode's own trigger.
+                    is_pre_episode_activation = (
+                        (pre_window_df["activity"] == constraint.activation)
+                        & (pre_window_df["timestamp"] < episode_start)
+                    )
+                    pre_window_df = pre_window_df[~is_pre_episode_activation]
+                trace_parts.append(pre_window_df)
             else:
                 trace_parts.append(episode_df)
             if post_hours is not None and post_hours > 0 and constraint.target is not None:
@@ -500,7 +522,7 @@ def _process_stay(stay_id: str) -> list[dict]:
                 ]
                 trace_parts.append(post_df)
             constraint_trace_df = (
-                pd.concat(trace_parts).sort_values("timestamp")
+                pd.concat(trace_parts).sort_values("timestamp", kind="stable")
                 if len(trace_parts) > 1
                 else trace_parts[0]
             )
@@ -528,6 +550,13 @@ def _process_stay(stay_id: str) -> list[dict]:
             if outcome == ConformanceOutcome.VIOLATED:
                 target_violated.append(canon_id)
                 f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
+                if f_data and res is not None and manual_forensics is None:
+                    # Why the activation failed, and — where the criterion was
+                    # assessed but not met — the values the condition read.
+                    if res.violation_causes:
+                        f_data["causes"] = res.violation_causes
+                    if res.violation_values:
+                        f_data["values"] = res.violation_values
                 if f_data:
                     violation_forensics[canon_id] = f_data
             elif outcome == ConformanceOutcome.SATISFIED:
@@ -549,7 +578,7 @@ def _process_stay(stay_id: str) -> list[dict]:
                 mandatory_violated.append(INT_COMPOSITE_ID)
 
         # Find actual ventilation end within this trigger window
-        vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp")
+        vent_end_rows = episode_df[episode_df["activity"] == "InvasiveVentilationEnded"].sort_values("timestamp", kind="stable")
         vent_end: pd.Timestamp | None = None
         if not vent_end_rows.empty:
             vent_end = vent_end_rows.iloc[0]["timestamp"]
@@ -611,6 +640,24 @@ def main() -> None:
         help="Activity label whose first occurrence after the trigger ends the "
         "episode (t_phi). Default: none.",
     )
+    parser.add_argument(
+        "--no-segmentation",
+        action="store_true",
+        help="Ablation: evaluate each stay as one trace instead of segmenting it into "
+        "trigger episodes. Yields one output row per stay with episode_index = 1.",
+    )
+    parser.add_argument(
+        "--stay-ids",
+        type=Path,
+        default=None,
+        help="File with one stay id per line; restricts the run to those stays.",
+    )
+    parser.add_argument(
+        "--skip-postprocess",
+        action="store_true",
+        help="Stop after writing the conformance CSV, skipping the R statistics, "
+        "frontend export and summary generation.",
+    )
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -622,6 +669,23 @@ def main() -> None:
     constraint_id_lookup = _load_combined_constraint_id_lookup(model_paths)
     
     stay_ids = runner.get_stay_ids()
+
+    if args.stay_ids is not None:
+        wanted = {
+            line.strip()
+            for line in args.stay_ids.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        selected = [s for s in stay_ids if str(s) in wanted]
+        missing = len(wanted) - len(selected)
+        print(
+            f"Restricting to {len(selected)} of {len(stay_ids)} stays from {args.stay_ids}"
+            + (f" ({missing} requested ids not present in the log)" if missing else "")
+        )
+        stay_ids = selected
+
+    if args.no_segmentation:
+        print("Segmentation disabled: one evaluation trace per stay.")
 
     done_ids: set[str] = set()
     if args.resume and args.output.exists():
@@ -643,7 +707,8 @@ def main() -> None:
 
     if args.workers <= 1:
         _init_worker(
-            args.input, model_paths, args.episode_window_hours, args.episode_end_event
+            args.input, model_paths, args.episode_window_hours, args.episode_end_event,
+            args.no_segmentation,
         )
         for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
             for row in _process_stay(stay_id):
@@ -655,7 +720,10 @@ def main() -> None:
         with cf.ProcessPoolExecutor(
             max_workers=args.workers,
             initializer=_init_worker,
-            initargs=(args.input, model_paths, args.episode_window_hours, args.episode_end_event),
+            initargs=(
+                args.input, model_paths, args.episode_window_hours, args.episode_end_event,
+                args.no_segmentation,
+            ),
         ) as pool:
             for rows in tqdm(
                 pool.map(_process_stay, remaining_ids, chunksize=8),
@@ -670,6 +738,10 @@ def main() -> None:
     log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
     output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
+
+    if args.skip_postprocess:
+        print("Skipping R statistics, frontend export and summary generation.")
+        return
 
     # --- AUTOMATIC FRONTEND EXPORT ---
     # Calculate path relative to this script's location to be robust

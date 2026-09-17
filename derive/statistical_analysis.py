@@ -10,23 +10,25 @@ def load_conformance_data(file_path: Path) -> pd.DataFrame:
     return pd.read_csv(file_path)
 
 def load_inter_episode_rules(
-    config_path: Path = Path("configs/declare/failure_correction.yaml"),
+    config_dir: Path = Path("configs/declare"),
 ) -> set[str]:
-    """Rule IDs flagged `outcome_scope: next_episode` in the Declare config.
+    """Rule IDs flagged `outcome_scope: next_episode` across all Declare configs.
 
     These rules activate on SBTFailed, which is definitionally the same-episode
     outcome (circular). Their exposure is therefore tested against the *next*
     episode's outcome instead.
     """
     import yaml
-    with config_path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    constraints = data.get("constraints", data.get("model", {}).get("constraints", [])) or []
-    return {
-        str(c["id"])
-        for c in constraints
-        if isinstance(c, dict) and c.get("outcome_scope") == "next_episode" and c.get("id")
-    }
+    rule_ids: set[str] = set()
+    for cfg in config_dir.glob("*.yaml"):
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        constraints = data.get("constraints", data.get("model", {}).get("constraints", [])) or []
+        rule_ids.update(
+            str(c["id"])
+            for c in constraints
+            if isinstance(c, dict) and c.get("outcome_scope") == "next_episode" and c.get("id")
+        )
+    return rule_ids
 
 def _binarize_label(x) -> float:
     """1 = Success, 0 = Failure, NaN = unknown/censored/no attempt.

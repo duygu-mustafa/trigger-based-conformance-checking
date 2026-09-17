@@ -87,6 +87,119 @@ def build_trigger_episodes(
     return windows
 
 
+def compute_segmentation_metrics(
+    log: pd.DataFrame,
+    trigger_activity: str,
+    return_distributions: bool = False,
+) -> dict:
+    """Descriptive segmentation metrics for one candidate trigger activity.
+
+    Quantifies what choosing `trigger_activity` as the episode trigger does to
+    the analysable data, without running conformance checking:
+
+    * coverage — cases lacking the trigger yield zero episodes and drop out;
+    * granularity — episodes per case and episode size;
+    * prefix loss — events before the first trigger fall outside every window;
+    * same-day collapse — RTFM timestamps have day resolution, so repeated
+      triggers on one date collapse to a single episode boundary
+      (``build_trigger_episodes`` deduplicates on timestamp);
+    * label validity — :func:`derive_episode_outcome` reads the amount owed
+      from the episode's own ``Create Fine`` row; episodes without one get
+      ``due = 0 + expenses`` and bias toward "Success".
+
+    Returns a flat dict of scalars (one comparison-table row per trigger).
+    With ``return_distributions=True`` the dict additionally carries the raw
+    per-case episode counts and per-episode event counts under ``_dist_*``
+    keys (numpy arrays, for plots; pop them before tabulating).
+    """
+    import numpy as np
+
+    n_cases_total = log["case_id"].nunique()
+    n_events_total = len(log)
+
+    eps_per_case: list[int] = []
+    ep_event_counts: list[int] = []
+    ep_duration_days: list[float] = []
+    events_in_covered_cases = 0
+    events_covered = 0
+    collapsed_triggers = 0
+    outcome_counts = {"Success": 0, "Failure": 0}
+    eps_without_create_fine = 0
+
+    for _, trace in log.groupby("case_id", sort=False):
+        trace = trace.sort_values("timestamp")
+        trigger_rows = trace[trace["activity"] == trigger_activity]
+        if trigger_rows.empty:
+            continue
+        collapsed_triggers += len(trigger_rows) - trigger_rows["timestamp"].nunique()
+        windows = build_trigger_episodes(trace, trigger_activity)
+        events_in_covered_cases += len(trace)
+
+        n_eps_this_case = 0
+        for start_ts, end_ts in windows:
+            episode = trace[
+                (trace["timestamp"] >= start_ts) & (trace["timestamp"] < end_ts)
+            ]
+            if episode.empty:
+                continue
+            n_eps_this_case += 1
+            ep_event_counts.append(len(episode))
+            ep_duration_days.append(
+                (episode["timestamp"].max() - start_ts) / pd.Timedelta(days=1)
+            )
+            events_covered += len(episode)
+            label, _ = derive_episode_outcome(episode)
+            outcome_counts[label] = outcome_counts.get(label, 0) + 1
+            if not (episode["activity"] == CREATE_FINE).any():
+                eps_without_create_fine += 1
+        eps_per_case.append(n_eps_this_case)
+
+    n_covered = len(eps_per_case)
+    n_episodes = len(ep_event_counts)
+    eps_arr = np.array(eps_per_case) if eps_per_case else np.array([0])
+    size_arr = np.array(ep_event_counts) if ep_event_counts else np.array([0])
+    dur_arr = np.array(ep_duration_days) if ep_duration_days else np.array([0.0])
+    n_labeled = sum(outcome_counts.values())
+
+    metrics = {
+        "trigger": trigger_activity,
+        "n_cases_total": n_cases_total,
+        "n_cases_covered": n_covered,
+        "case_coverage": n_covered / n_cases_total if n_cases_total else 0.0,
+        "n_episodes": n_episodes,
+        "eps_per_case_mean": float(eps_arr.mean()),
+        "eps_per_case_median": float(np.median(eps_arr)),
+        "eps_per_case_max": int(eps_arr.max()),
+        "multi_episode_case_share": float((eps_arr > 1).mean()),
+        "ep_events_mean": float(size_arr.mean()),
+        "ep_events_median": float(np.median(size_arr)),
+        "ep_events_p90": float(np.percentile(size_arr, 90)),
+        "ep_duration_days_mean": float(dur_arr.mean()),
+        "ep_duration_days_median": float(np.median(dur_arr)),
+        "event_coverage": (
+            events_covered / events_in_covered_cases if events_in_covered_cases else 0.0
+        ),
+        "prefix_loss": (
+            1 - events_covered / events_in_covered_cases
+            if events_in_covered_cases
+            else 0.0
+        ),
+        "events_lost_to_dropped_cases": n_events_total - events_in_covered_cases,
+        "same_day_collapsed_triggers": collapsed_triggers,
+        "success_share": (
+            outcome_counts.get("Success", 0) / n_labeled if n_labeled else 0.0
+        ),
+        "eps_without_create_fine": eps_without_create_fine,
+        "eps_without_create_fine_share": (
+            eps_without_create_fine / n_episodes if n_episodes else 0.0
+        ),
+    }
+    if return_distributions:
+        metrics["_dist_eps_per_case"] = eps_arr
+        metrics["_dist_ep_events"] = size_arr
+    return metrics
+
+
 def _numeric(episode_df: pd.DataFrame, column: str) -> pd.Series:
     """Return a column as floats, or an empty float series if absent."""
     if column not in episode_df.columns:

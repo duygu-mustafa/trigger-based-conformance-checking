@@ -46,6 +46,9 @@ def _sanitize(obj):
 
 app = FastAPI(title="Clinician Studio API")
 
+# Rules temporarily hidden from the frontend (not deleted from configs).
+DISABLED_RULE_IDS = {"SBT-TM-02"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:4173", "http://127.0.0.1:5173"],
@@ -308,6 +311,8 @@ def get_rules() -> list[dict[str, Any]]:
     ):
         model = builder()
         for c in model.constraints:
+            if getattr(c, "id", None) in DISABLED_RULE_IDS:
+                continue
             rules.append(_constraint_to_dict(c))
     return rules
 
@@ -587,7 +592,7 @@ def _split_into_episodes(
     triggers = (
         df[df["activity"] == trigger_activity]
         .drop_duplicates(subset=["timestamp"])
-        .sort_values("timestamp")
+        .sort_values("timestamp", kind="stable")
         .reset_index(drop=True)
     )
     if triggers.empty:
@@ -1038,7 +1043,7 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                 df = pd.concat([df, cond_df], ignore_index=True)
 
             if custom_df is not None or cond_df is not None:
-                df = df.sort_values("timestamp").reset_index(drop=True)
+                df = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
             if not df.empty:
                 episodes = list(_split_into_episodes(
@@ -1210,6 +1215,8 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
     violation_frequency = []
     for c in model.constraints:
         cid = c.id
+        if cid in DISABLED_RULE_IDS:
+            continue
         counts = cid_counts.get(cid, {"total": 0, "success": 0, "failure": 0, "satisfied": 0, "vacuous": 0})
 
         a = counts.get("failure", 0)
@@ -1600,7 +1607,7 @@ def run_uploaded(request: RunUploadedRequest) -> dict[str, Any]:
         segments = []
         for case_id, trace in df.groupby("case_id"):
             episodes = _split_into_episodes(
-                trace.sort_values("timestamp"), request.trigger_event,
+                trace.sort_values("timestamp", kind="stable"), request.trigger_event,
                 request.episode_window_hours, request.episode_end_event,
             )
             for idx, ep_df in enumerate(episodes):
@@ -1636,7 +1643,7 @@ def get_case_data(stay_id: str):
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No data for case {stay_id}")
 
-    df = df.sort_values("timestamp")
+    df = df.sort_values("timestamp", kind="stable")
     events = []
     for row in df.to_dict(orient="records"):
         cleaned = {}

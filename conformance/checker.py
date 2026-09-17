@@ -117,7 +117,7 @@ def _build_items_snapshot(
         return {}
 
     # Sort by timestamp and get the latest value for each item
-    upto = upto.sort_values("timestamp")
+    upto = upto.sort_values("timestamp", kind="stable")
     latest = upto.groupby("itemid", sort=False).tail(1)
 
     # Build dictionary with coerced values
@@ -185,6 +185,56 @@ def _sbt_duration_minutes(
         return 0.0
     start_ts = starts.iloc[-1]["timestamp"]
     return max(0.0, float((evaluation_ts - start_ts).total_seconds()) / 60.0)
+
+
+# Keys `_evaluate_data_condition_status` always adds to its extracted values, so a
+# failure diagnosis can tell the item readings apart from the temporal context.
+_CONTEXT_VALUE_KEYS = frozenset(
+    {
+        "hours_since_stay_start",
+        "hours_since_intubation",
+        "ventilation_duration_hours",
+        "sbt_duration_min",
+    }
+)
+
+
+# How informative each failure cause is, so that the diagnosis reported for an
+# activation is the most specific one any candidate target produced.
+_CAUSE_PRECEDENCE = {
+    "absent": 1,
+    "stale": 2,
+    "no_payload": 3,
+    "partial_payload": 4,
+    "unmet": 5,
+}
+
+
+def _unmet_cause(condition_values: dict[str, object]) -> str:
+    """Tell a criterion assessed and not met from one whose payload is missing.
+
+    A correlation condition also evaluates to false when the items it reads are
+    absent from the observation window, which is a documentation gap rather than a
+    clinical finding. "no_payload" names the case where every reading is missing and
+    "partial_payload" the case where only some are, which a disjunctive criterion can
+    reach without its outcome being decidable. "unmet" is reserved for a condition
+    that was false on readings that were all present.
+    """
+    readings = [v for k, v in condition_values.items() if k not in _CONTEXT_VALUE_KEYS]
+    if not readings:
+        return "unmet"
+    n_missing = 0
+    for value in readings:
+        if isinstance(value, str):
+            continue
+        try:
+            if math.isnan(float(value)):
+                n_missing += 1
+        except (TypeError, ValueError):
+            continue
+    if n_missing == 0:
+        return "unmet"
+    return "no_payload" if n_missing == len(readings) else "partial_payload"
 
 
 def _build_eval_context(
@@ -579,12 +629,18 @@ def _evaluate_constraint_impl(
         require_before: bool,
         require_adjacent: bool,
         directional_time: bool,
-    ) -> tuple[bool, str | None, float | None, dict[str, float]]:
+    ) -> tuple[bool, str | None, float | None, dict[str, float], str | None]:
+        """Return (matched, error, time_delta, condition_values, failure_cause).
+
+        `failure_cause` is None on a match and otherwise names why the candidate
+        did not discharge the activation: "stale" for a target outside the time
+        condition, "unmet" for one whose correlation condition is false.
+        """
         target_ts = target_row["timestamp"]
         if require_after and not (target_ts > activation_ts):
-            return False, None, None, {}
+            return False, None, None, {}, "stale"
         if require_before and not (target_ts < activation_ts):
-            return False, None, None, {}
+            return False, None, None, {}, "stale"
 
         if require_adjacent:
             # Adjacency is guaranteed by caller selecting the direct predecessor/successor.
@@ -594,7 +650,7 @@ def _evaluate_constraint_impl(
         time_delta = delta_seconds if directional_time else abs(delta_seconds)
 
         if not _within_time_window(time_delta, constraint):
-            return False, None, time_delta, {}
+            return False, None, time_delta, {}, "stale"
 
         if constraint.correlation_cond is not None:
             corr_ok, corr_err, corr_values = _evaluate_data_condition(
@@ -605,12 +661,12 @@ def _evaluate_constraint_impl(
                 target_ts=target_ts,
             )
             if corr_err is not None:
-                return False, corr_err, time_delta, corr_values
+                return False, corr_err, time_delta, corr_values, "unmet"
             if not corr_ok:
-                return False, None, time_delta, corr_values
-            return True, None, time_delta, corr_values
+                return False, None, time_delta, corr_values, _unmet_cause(corr_values)
+            return True, None, time_delta, corr_values, None
 
-        return True, None, time_delta, {}
+        return True, None, time_delta, {}, None
 
     # ============ EXISTENCE / ABSENCE / EXACTLY / INIT / END (unary) ============
     if constraint.template == DeclareTemplate.EXISTENCE:
@@ -728,7 +784,7 @@ def _evaluate_constraint_impl(
         if trace_df.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
-        first_row = trace_df.sort_values("timestamp").iloc[0]
+        first_row = trace_df.sort_values("timestamp", kind="stable").iloc[0]
         ok = bool(first_row["activity"] == constraint.activation)
         eval_error = None
         violation_deltas = {}
@@ -759,7 +815,7 @@ def _evaluate_constraint_impl(
         if trace_df.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
 
-        last_row = trace_df.sort_values("timestamp").iloc[-1]
+        last_row = trace_df.sort_values("timestamp", kind="stable").iloc[-1]
         ok = bool(last_row["activity"] == constraint.activation)
         eval_error = None
         violation_deltas = {}
@@ -833,7 +889,7 @@ def _evaluate_constraint_impl(
             best_effort_forensics = None
             
             for _, target_row in candidates.iterrows():
-                ok_match, corr_error, delta, vals = _target_matches(
+                ok_match, corr_error, delta, vals, _cause = _target_matches(
                     target_row,
                     act_ts,
                     require_after=True,
@@ -942,7 +998,7 @@ def _evaluate_constraint_impl(
             act_ts = act_row["timestamp"]
             matched = False
             for _, target_row in target_rows.iterrows():
-                ok_match, corr_error, delta, vals = _target_matches(
+                ok_match, corr_error, delta, vals, _cause = _target_matches(
                     target_row,
                     act_ts,
                     require_after=False,
@@ -1027,6 +1083,8 @@ def _evaluate_constraint_impl(
         violation_deltas = {}
         satisfaction_deltas = {}
         delay_seconds = None
+        violation_causes: dict[str, int] = {}
+        violation_values: dict[str, float] = {}
 
         for _, act_row in act_rows.iterrows():
             act_ts = act_row["timestamp"]
@@ -1046,11 +1104,16 @@ def _evaluate_constraint_impl(
                         candidates = candidates[candidates["timestamp"] > prev_act_ts]
 
             if getattr(constraint, 'target_selection', None) == 'last' and not candidates.empty:
-                candidates = candidates.sort_values('timestamp').tail(1)
+                candidates = candidates.sort_values('timestamp', kind="stable").tail(1)
 
             matched = False
+            # Why this activation was not discharged, if it was not: "absent" when
+            # no candidate target exists at all, otherwise the cause reported by the
+            # last candidate examined.
+            cause = "absent" if candidates.empty else None
+            cause_values: dict[str, float] = {}
             for _, cand_row in candidates.iterrows():
-                ok_match, corr_error, delta, vals = _target_matches(
+                ok_match, corr_error, delta, vals, cand_cause = _target_matches(
                     cand_row,
                     act_ts,
                     require_after=False,
@@ -1068,6 +1131,11 @@ def _evaluate_constraint_impl(
                     if first_match_target_ts is None:
                         first_match_target_ts = str(cand_row["timestamp"])
                     break
+                # Keep the most specific diagnosis across the candidates examined.
+                if _CAUSE_PRECEDENCE.get(cand_cause, 0) > _CAUSE_PRECEDENCE.get(cause, 0):
+                    cause = cand_cause
+                if cand_cause == "unmet" and vals:
+                    cause_values = vals
 
             is_negative = constraint.template in {
                 DeclareTemplate.NOT_PRECEDENCE,
@@ -1079,6 +1147,10 @@ def _evaluate_constraint_impl(
                     satisfaction_deltas = vals
             else:
                 violated += 1
+                if not matched and not is_negative and cause is not None:
+                    violation_causes[cause] = violation_causes.get(cause, 0) + 1
+                    if cause_values and not violation_values:
+                        violation_values = cause_values
                 if first_violation_ts is None:
                     first_violation_ts = str(act_ts)
                     if not matched and not is_negative:
@@ -1102,6 +1174,8 @@ def _evaluate_constraint_impl(
             violation_deltas=violation_deltas if not ok else {},
             satisfaction_deltas=satisfaction_deltas if ok else {},
             delay_seconds=delay_seconds,
+            violation_causes=violation_causes,
+            violation_values=violation_values,
             violation_reason=(
                 None
                 if ok
@@ -1563,7 +1637,7 @@ def check_log_conformance(
 
     # Evaluate all constraints for each patient trace
     for case_id, trace in event_log_df.groupby("case_id"):
-        trace_sorted = trace.sort_values("timestamp")
+        trace_sorted = trace.sort_values("timestamp", kind="stable")
         # Evaluate each constraint against this case's trace
         constraint_results = [
             evaluate_constraint(case_id=str(case_id), trace_df=trace_sorted, constraint=c)

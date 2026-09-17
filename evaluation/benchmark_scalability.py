@@ -385,9 +385,16 @@ class ResultsWriter:
     or code versions.
     """
 
-    def __init__(self, filename: str, key_cols: list[str], resume: bool) -> None:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        self.path = OUT_DIR / filename
+    def __init__(
+        self,
+        filename: str,
+        key_cols: list[str],
+        resume: bool,
+        out_dir: Path | None = None,
+    ) -> None:
+        out_dir = out_dir or OUT_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self.path = out_dir / filename
         self.key_cols = key_cols
         self.done: set[tuple[str, ...]] = set()
         if self.path.exists():

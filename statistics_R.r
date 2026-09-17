@@ -280,10 +280,11 @@ rule_cols <- setdiff(names(case_table), id_cols)
 rule_cols <- rule_cols[grepl('-', rule_cols)]
 
 # Inter-episode rules: exposure measured in episode i, outcome = episode i+1.
-# Keep in sync with `outcome_scope: next_episode` in configs/declare/failure_correction.yaml.
+# Keep in sync with `outcome_scope: next_episode` in configs/declare/*.yaml.
 inter_episode_rules <- c(
   'INT-TR-01', 'INT-TR-02', 'INT-TR-03', 'INT-TR-04', 'INT-TR-05',
-  'INT-DX-04', 'INT-DX-05', 'INT-COMPOSITE-01'
+  'INT-DX-04', 'INT-DX-05', 'INT-COMPOSITE-01',
+  'SBT-TM-01', 'SBT-TM-01-early', 'SBT-TM-01-late'
 )
 
 results <- do.call(rbind, lapply(rule_cols, function(rule_col) {

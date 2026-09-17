@@ -154,8 +154,11 @@ mappings:
   MentalStatusMeasured:
     derived: true
     description: >
-      Fires when mental status criterion is satisfied: RASS LOC = 'Yes' (itemid 228302)
-      OR SAS ∈ {3, 4} (itemid 223753).
+      Fires for every RASS LOC measurement (itemid 228302) and every SAS
+      measurement (itemid 223753, the far more common fallback instrument
+      in this cohort). Threshold (RASS = 'No', or SAS in [3, 4]) is enforced
+      via correlation_condition on the PRECEDENCE rule (RC-DP-06), evaluated
+      on the most recent preceding event (target_selection: last).
 
   InspiratoryEffortMeasured:
     derived: true

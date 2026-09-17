@@ -13,6 +13,9 @@ modified.
 | `complexity.py` | Rule complexity measure C(r) = w_template + n_clauses + n_attributes + t_time |
 | `benchmark_scalability.py` | Scalability benchmark (E1 log size, E2 trace length, E3 model size, E4 rule complexity, E5 memory) |
 | `rtfm_synthetic_rules.yaml` | Synthetic rule variants for the E4 complexity sweeps (SYN-T/C/A) |
+| `synthetic_log.py` | Generator for logs with planted ground truth: SE1 verdict catalogue, SE2/SE3 multi-episode log |
+| `benchmark_synthetic.py` | Ground-truth experiments (SE1 correctness, SE2 scoping, SE3 association recovery) |
+| `synthetic_analysis.py` | Reads `data/synthetic/`, produces thesis figures and LaTeX table fragments |
 | `scalability_analysis.ipynb` | Reads `data/benchmarks/`, produces thesis figures (`figures/`) and tables |
 | `data/` | Parquet cache of the log and all result CSVs (generated) |
 
@@ -36,6 +39,38 @@ paid >= amount(Create Fine) + expense
 
 Bad (`"Failure"`) otherwise. See `derive_episode_outcome` in `rtfm_utils.py` for the attribute
 quirks behind the arithmetic.
+
+## Ground-truth experiments
+
+The fine log records no correct verdict and no reason an episode ended as it did, so it cannot
+say whether the checker is *right* — only that it runs. `synthetic_log.py` generates logs where
+both are known by construction, and `benchmark_synthetic.py` runs three experiments on them:
+
+* **SE1 (verdict correctness)** — 85 hand-written micro-traces, one per template and variant,
+  each paired with the verdict the activation semantics prescribe. Covers all 24 implemented
+  templates plus activation/correlation conditions, forward and backward time windows, and the
+  target-selection modes. Found and fixed a role-reversal defect in the succession decomposition.
+* **SE2 (episode vs case scoping)** — a multi-episode log with per-episode verdicts planted,
+  checked once per episode and once per whole case. Reports violations the case-scoped reading
+  masks and violations it invents.
+* **SE3 (association recovery)** — the episode outcome is planted at known risk ratios; the
+  statistical stage is asked to recover them, under both scopes and both vacuity treatments.
+
+```
+python evaluation/benchmark_synthetic.py --experiments SE1            # seconds
+python evaluation/benchmark_synthetic.py --experiments SE2 SE3 --reps 20 --cases 1000
+python evaluation/synthetic_analysis.py                               # figures + LaTeX tables
+```
+
+SE2/SE3 replications are keyed by seed and appended as they finish, so `--resume` continues an
+interrupted run. Results go to `data/synthetic/`, figures and table fragments to `figures/`.
+
+The outcome model multiplies a baseline success probability by the planted risk ratio of every
+violated rule. That makes each rule's marginal risk ratio equal its planted value **only while no
+episode's probability exceeds one** — clipping withholds part of the effect from exactly the
+episodes violating the most rules and biases every estimate toward the null. `generate_log`
+rejects a configuration that would need clipping rather than doing it silently, and
+`tests/test_synthetic_generator.py` asserts the model stays unbiased.
 
 ## Scalability benchmark
 

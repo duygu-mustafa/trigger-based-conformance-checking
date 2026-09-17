@@ -197,7 +197,7 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
 
     outcome_rows: list[dict[str, object]] = []
     for case_id, case_starts in sbt_started.groupby("case_id", sort=False):
-        case_starts = case_starts.sort_values("timestamp").reset_index(drop=True)
+        case_starts = case_starts.sort_values("timestamp", kind="stable").reset_index(drop=True)
         stay_end_ts = activity_df[activity_df["case_id"] == case_id]["timestamp"].max()
         case_vents = vent_starts[vent_starts["case_id"] == case_id]
 
@@ -347,14 +347,20 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
         derived_frames.append(pd.DataFrame(vp_rows))
 
     # ── MentalStatusMeasured ──────────────────────────────────────────────────
-    mental_rows: list[dict] = []
-    for _, row in _by_itemid("228302").iterrows():  # RASS LOC
-        if str(row.get("value_raw") or "").strip().lower() == "yes":
-            mental_rows.append(_criterion_row(row, "MentalStatusMeasured", "RASS_LOC=Yes"))
-    for _, row in _by_itemid("223753").iterrows():  # SAS
-        val = row.get("value_num")
-        if pd.notna(val) and float(val) in {3.0, 4.0}:
-            mental_rows.append(_criterion_row(row, "MentalStatusMeasured", "SAS_in_3_4"))
+    # RASS LOC (228302) is the primary instrument, but it is documented in
+    # only a small fraction of stays. SAS (223753) is the fallback instrument
+    # used far more often and must also emit MentalStatusMeasured, or the
+    # readiness/failure criteria are starved of a target event for most cases.
+    mental_rows = [
+        _criterion_row(r, "MentalStatusMeasured", "228302")
+        for _, r in _by_itemid("228302").iterrows()  # RASS LOC
+        if str(r.get("value_raw") or "").strip() != ""
+    ]
+    mental_rows += [
+        _criterion_row(r, "MentalStatusMeasured", "223753")
+        for _, r in _by_itemid("223753").iterrows()  # SAS
+        if pd.notna(r.get("value_num"))
+    ]
     if mental_rows:
         derived_frames.append(pd.DataFrame(mental_rows))
 
