@@ -2,7 +2,7 @@
 
 Compares the episode-level verdicts (baseline, `trigger_results_full.csv`) against a
 no-segmentation run of the same stays (one evaluation trace per stay, produced by
-`main_per_sbt.py --no-segmentation`) on three axes per constraint:
+`main.py --no-segmentation`) on three axes per constraint:
 
   * masking     — flagged at episode level, not flagged at trace level (a violation
                    in one trial discharged/hidden by pooling all trials into one trace)

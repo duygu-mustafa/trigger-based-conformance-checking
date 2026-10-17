@@ -1,6 +1,20 @@
+"""Outcome-association statistics per constraint (Python counterpart of statistics_R.r).
+
+For each constraint, episodes are encoded as exposed (violated) / unexposed
+(satisfied) and related to the episode outcome (Success = 1, Failure = 0) in a
+2x2 table: Fisher's exact test, odds ratio and risk ratio with Woolf / log 95% CIs
+(0.5 continuity correction when a cell is zero). Rules with
+`outcome_scope: next_episode` are tested against the next episode's outcome.
+Vacuous episodes are excluded by default (activations-only); pool_vacuous=True
+counts them as satisfied.
+
+Used by case_study/ and evaluation/. Run as a script, it analyses
+data/results/full_results/trigger_results_full.csv under both vacuity modes and
+writes the CSVs next to it. main.py uses statistics_R.r instead, whose
+odds ratio is the conditional MLE of fisher.test (the RR is computed identically).
+"""
 import pandas as pd
 import numpy as np
-import json
 from pathlib import Path
 from scipy.stats import fisher_exact
 from statsmodels.stats.multitest import multipletests
@@ -35,7 +49,8 @@ def _binarize_label(x) -> float:
 
     Substring matching mirrors classify_outcome() in statistics_R.r so both
     implementations classify pipeline labels ("Success", "Success
-    (Right-Censored: Stay Ended)", "Failure (Reventilated <48h)") identically.
+    (Right-Censored: Stay Ended)", "Failure (Reventilated <48h)",
+    "Failure (Died <=48h)") identically.
     """
     if pd.isnull(x):
         return np.nan
@@ -48,9 +63,9 @@ def _binarize_label(x) -> float:
 
 def binarize_outcome(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Convert categorical outcomes to binary.
-    1 = Success (No Revent <48h / Last State: SBT)
-    0 = Failure (Reventilated <48h or Last State: Invasive Vent)
+    Convert categorical outcomes to binary (see _binarize_label).
+    1 = Success (no re-ventilation within 48 h, incl. right-censored)
+    0 = Failure (re-ventilated or died within 48 h)
 
     Also binarizes `next_sbt_outcome` (outcome of episode i+1) into
     `next_outcome_binary` for inter-episode rules; NaN = censored
@@ -137,7 +152,7 @@ def build_case_level_table(df: pd.DataFrame, pool_vacuous: bool = False) -> pd.D
 def generate_contingency_table(df_cases: pd.DataFrame, rule_id: str, outcome_col: str = "outcome"):
     """
     Generate 2x2 table for a specific rule vs outcome.
-    Outcome = 1 (Success - No Revent <48h) | Outcome = 0 (Failure)
+    Outcome = 1 (Success) | Outcome = 0 (Failure)
 
     Rule encoding is uniform across ALL rule types (see get_rule_binary):
     Rule=1 (Violated/Exposed), Rule=0 (Satisfied/Unexposed).

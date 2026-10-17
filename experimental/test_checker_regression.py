@@ -1,8 +1,11 @@
-"""Equivalence test: old switch-case checker vs. new automata-based checker.
+"""Regression test: checker at git ref ``midterm/frontend`` vs. current checker.
 
-Loads the old _evaluate_constraint_impl from git HEAD and runs it against the
-current (automata-based) implementation on synthetic traces for all 24
-DeclareTemplate values.  Asserts .outcome matches for each case.
+Loads ``_evaluate_constraint_impl`` from ``conformance/checker.py`` as it was at
+the git ref ``midterm/frontend`` and runs it against the current
+``conformance.checker`` implementation on synthetic traces for all 24
+DeclareTemplate values. Asserts ``.outcome`` matches for each case.
+
+Requires the git ref to exist locally; kept in experimental/ for that reason.
 """
 
 import importlib.util

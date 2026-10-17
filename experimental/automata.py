@@ -1,10 +1,14 @@
-"""Explicit finite automata for MP-Declare constraint evaluation.
+"""Explicit finite automata for MP-Declare constraint evaluation (experimental).
+
+Alternative, streaming evaluation engine. The pipeline does not use it: all
+conformance results come from conformance/checker.py. This module is kept as a
+cross-check of the checker's semantics (experimental/test_automata_target_selection.py).
 
 Each MP-Declare constraint is evaluated by replaying the episode trace over a
 finite-state automaton that tracks obligation lifecycle (inactive → pending →
-fulfilled/violated).  Data and temporal conditions are implemented as
-transition guards; the LAST extension modifies target-selection policy within
-the automaton for measurement-heavy rules.
+fulfilled/violated). Data and temporal conditions are implemented as
+transition guards; the target-selection mode (any / earliest / latest) restricts
+which in-window target can discharge a pending obligation.
 """
 
 from __future__ import annotations

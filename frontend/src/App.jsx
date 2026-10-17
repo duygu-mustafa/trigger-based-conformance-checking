@@ -278,6 +278,7 @@ export default function App() {
       return (
         <AnalysisRunner
           customRules={customRules}
+          predefinedRuleCount={rules.length}
           onOpenTimeline={openTimeline}
           uploadInfo={isUpload ? activeDataset : null}
           datasetId={activeDatasetId}

@@ -76,7 +76,7 @@ if [ "$MODE" = "full" ] && [ -z "$AUTO_YES" ]; then
 fi
 
 # --- Stage 2: the no-segmentation conformance run ----------------------------
-run_step "2/4 no-segmentation conformance run" "$PY" main_per_sbt.py \
+run_step "2/4 no-segmentation conformance run" "$PY" main.py \
   --input data/final/icu_event_log_full.parquet \
   --output "$ABLATION_CSV" \
   --stay-ids "$STAY_IDS" \

@@ -1,15 +1,24 @@
-"""Simplified derive pipeline entry points.
+"""Raw MIMIC-IV rows -> canonical event log.
 
-Prefer importing from this file in notebooks and scripts.
+raw_to_event_log() is the entry point used by prepare_event_log.py and the
+conformance runners. Per stay it
+  1. drops explicit procedureevents 225792 (invasive ventilation) rows and infers
+     InvasiveVentilationStarted/Ended from ventilator settings instead
+     (Full Support onset/offset),
+  2. reconstructs SBT episodes from ventilator-mode transitions
+     (derive/sbt_episodes.py) and emits one SBTStarted anchor per episode,
+  3. maps rows to activities and derives outcome and criterion activities
+     (derive/activity_emitter.py, configs/activity_mapping.yaml),
+  4. normalizes the result to the canonical schema
+     (conformance/event_log_builder.py).
 """
 
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
 from derive.activity_emitter import emit_activities
-from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes, map_weaning_state, vectorized_weaning_states
+from derive.sbt_episodes import build_sbt_episodes as _build_sbt_episodes, vectorized_weaning_states
 from conformance.event_log_builder import build_event_log
 
 
@@ -21,7 +30,7 @@ __all__ = [
 
 
 def build_sbt_episodes(weaning_df: pd.DataFrame) -> pd.DataFrame:
-    """Wrapper for sbt_episodes.build_sbt_episodes with thesis-specific defaults."""
+    """Build SBT episodes from a weaning frame (sbt_episodes.build_sbt_episodes, default parameters)."""
     return _build_sbt_episodes(weaning_df)
 
 
@@ -44,13 +53,6 @@ def sbt_episodes_to_events(episodes_df: pd.DataFrame) -> pd.DataFrame:
             'value_num': 1.0
         })
     return pd.DataFrame(events)
-
-
-def _last_valid(series: pd.Series) -> object:
-    non_null = series.dropna()
-    if non_null.empty:
-        return None
-    return non_null.iloc[-1]
 
 
 _MISSING_TEXT_TOKENS = {"", "none", "null", "nan", "nat", "[null]", "<na>"}
@@ -172,104 +174,12 @@ def _remove_explicit_invasive_vent_rows(raw_df: pd.DataFrame) -> pd.DataFrame:
     return raw_df.loc[~mask].copy()
 
 
-def _explicit_invasive_vent_start_times_from_raw(raw_df: pd.DataFrame) -> dict[str, pd.Timestamp]:
-    """Return the first explicit invasive ventilation start timestamp per stay."""
-
-    required = {"stay_id", "source_table", "itemid"}
-    if not required.issubset(raw_df.columns):
-        return {}
-
-    working = raw_df.copy()
-    if "starttime" in working.columns:
-        working["starttime"] = pd.to_datetime(working["starttime"], errors="coerce")
-    if "event_time" in working.columns:
-        working["event_time"] = pd.to_datetime(working["event_time"], errors="coerce")
-
-    mask = (
-        working["source_table"].astype(str).eq("procedureevents")
-        & working["itemid"].astype(str).eq("225792")
-    )
-    if not mask.any():
-        return {}
-
-    candidates = working.loc[mask, ["stay_id"] + (["starttime"] if "starttime" in working.columns else []) + (["event_time"] if "event_time" in working.columns else [])].copy()
-    if candidates.empty:
-        return {}
-
-    if "starttime" in candidates.columns:
-        start_ts = candidates["starttime"].where(candidates["starttime"].notna(), candidates.get("event_time"))
-    else:
-        start_ts = candidates["event_time"]
-
-    candidates = candidates.assign(start_ts=pd.to_datetime(start_ts, errors="coerce"))
-    candidates = candidates.dropna(subset=["stay_id", "start_ts"])
-    if candidates.empty:
-        return {}
-
-    start_times: dict[str, pd.Timestamp] = {}
-    for stay_id, group in candidates.groupby("stay_id", sort=False):
-        start_times[str(stay_id)] = group["start_ts"].min()
-
-    return start_times
-
-
-def _invasive_vent_start_times_from_raw(raw_df: pd.DataFrame) -> dict[str, pd.Timestamp]:
-    """Return the first inferred invasive ventilation start timestamp per stay."""
-
-    all_starts = _full_support_start_times_from_settings(raw_df)
-    first_starts: dict[str, pd.Timestamp] = {}
-    for stay_id, starts in all_starts.items():
-        if starts:
-            first_starts[stay_id] = starts[0]
-    return first_starts
-
-
-def _keep_directly_preceded_sbt_episodes(
-    episodes: pd.DataFrame,
-    invasive_start_times: dict[str, pd.Timestamp],
-) -> pd.DataFrame:
-    """Keep only the first SBT episode that follows the invasive-vent start per stay.
-
-    The prepare-event-log entry point should emit a single SBT episode per invasive
-    ventilation episode. Later SBTs in the same stay are treated as follow-on events
-    unless a new invasive ventilation start is inferred first.
-    """
-
-    if episodes.empty or not invasive_start_times:
-        return episodes
-
-    working = episodes.copy()
-    working["sbt_start_time"] = pd.to_datetime(working["sbt_start_time"], errors="coerce")
-    working = working.dropna(subset=["stay_id", "sbt_start_time"]).copy()
-    if working.empty:
-        return working
-
-    working["stay_id_text"] = working["stay_id"].astype(str)
-
-    kept_rows: list[pd.DataFrame] = []
-    for stay_id_text, group in working.sort_values(["stay_id_text", "sbt_start_time"]).groupby("stay_id_text", sort=False):
-        invasive_start_ts = invasive_start_times.get(stay_id_text)
-        if invasive_start_ts is None:
-            continue
-
-        eligible = group[group["sbt_start_time"] >= invasive_start_ts]
-        if eligible.empty:
-            continue
-
-        kept_rows.append(eligible.head(1))
-
-    if not kept_rows:
-        return working.iloc[0:0].drop(columns=["stay_id_text"], errors="ignore")
-
-    return pd.concat(kept_rows, ignore_index=True).drop(columns=["stay_id_text"], errors="ignore")
-
-
 def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, list[pd.Timestamp]]:
-    """Infer all invasive ventilation trigger timestamps from ventilator settings.
+    """Infer invasive ventilation (start, end) pairs per stay from ventilator settings.
 
-    Trigger rule per stay:
-    - create a trigger if the first observed ventilation mode is Full Support,
-    - create a trigger on each transition from SBT-candidate ventilation to Full Support.
+    A start is emitted at the first observed Full Support mode and at each
+    transition from non-Full-Support to Full Support; the end is the first
+    transition back to non-Full-Support after it (None if there is none).
     """
 
     weaning_df = _derive_weaning_frame_from_raw(raw_df)
@@ -285,7 +195,7 @@ def _full_support_start_times_from_settings(raw_df: pd.DataFrame) -> dict[str, l
     working = working.sort_values(["stay_id", "charttime"]).copy()
     states = vectorized_weaning_states(working)
     # "Other" rows (e.g. peep-only, no mode) are neutral: drop them so they
-    # can't open or close a full-support episode (Phase 7).
+    # can't open or close a full-support episode.
     working = working.loc[states != "Other"].copy()
     if working.empty:
         return {}
@@ -369,40 +279,17 @@ def _synthesize_invasive_vent_events_from_settings(raw_df: pd.DataFrame) -> pd.D
     return pd.DataFrame(synthetic_rows)
 
 
-def _load_yaml(path: str | Path) -> dict[str, Any]:
-    try:
-        import yaml
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "PyYAML is required to load pipeline config. Install with `pip install pyyaml`."
-        ) from exc
-
-    with Path(path).open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Invalid pipeline config at {path}: expected top-level mapping")
-    return data
-
-
 def raw_to_event_log(
     raw_df,
     *,
-    pipeline_config_path: str | Path | None = None,
     item_dictionary_path: str | Path | None = None,
     activity_mapping_path: str | Path | None = None,
 ):
-    """Run configured map/derive steps to produce canonical checker event log.
+    """Convert raw event rows (one or more stays) into the canonical event log.
 
-    The current implementation always builds mapped activities and forwards the
-    resulting dataframe to the canonical event-log normalizer.
+    See the module docstring for the steps. Previously derived SBT rows
+    (source_table 'sbt_derived') in the input are discarded and rebuilt.
     """
-    
-    if pipeline_config_path is not None:
-        # Validates config file existence/shape now and keeps compatibility with
-        # the run_* switches for future staged execution.
-        _load_yaml(pipeline_config_path)
-
     if "source_table" in raw_df.columns:
         raw_df = raw_df[raw_df["source_table"].ne("sbt_derived")].copy()
     raw_df = _remove_explicit_invasive_vent_rows(raw_df)
@@ -414,7 +301,7 @@ def raw_to_event_log(
     weaning_df = _derive_weaning_frame_from_raw(raw_df)
     if not weaning_df.empty:
         # Keep all detected SBT episodes; trigger-based episode segmentation is
-        # now handled in downstream conformance orchestration.
+        # done later, in main.py.
         episodes = build_sbt_episodes(weaning_df)
         sbt_events = sbt_episodes_to_events(episodes)
         if not sbt_events.empty:

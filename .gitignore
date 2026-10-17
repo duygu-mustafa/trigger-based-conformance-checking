@@ -13,7 +13,6 @@ ENV/
 *.pkl
 *.pickle
 data/
-*.txt
 *.csv.gz
 *.decl
 *.xes
@@ -32,3 +31,9 @@ node_modules/
 
 figures/
 sample_figures/
+# Tooling artifacts
+.claude/
+graphify-out/
+.pytest_cache/
+frontend/dist/
+case_study/out/*.txt

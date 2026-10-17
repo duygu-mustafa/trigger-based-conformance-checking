@@ -1,7 +1,10 @@
-"""Lightweight FastAPI backend for the Clinician Studio.
+"""FastAPI backend for the Clinician Studio (frontend/).
 
-Exposes structured rule data and on-demand conformance analysis to the React
-frontend via /api/* endpoints.
+Exposes the Declare rules as structured JSON, runs on-demand conformance analyses
+on a sample of the MIMIC-IV event log (data/icu_event_log_sample.parquet), and
+runs user-defined rules on uploaded XES logs. Endpoints that query MIMIC-IV
+directly (/api/item_search, /api/query, custom events) need PostgreSQL access
+(database/client.py).
 
 Run with:
     uvicorn api:app --reload --port 8000
@@ -62,7 +65,7 @@ _jobs: dict[str, dict[str, Any]] = {}
 _job_cancel: dict[str, threading.Event] = {}
 
 # ── In-memory uploaded-log store (independent XES flow) ───────────────────────
-# ponytail: in-memory, dies on restart — fine for single-user studio; add disk cache only if reload pain shows up
+# In-memory only: uploads are lost when the server restarts (single-user studio).
 _uploaded_logs: dict[str, "pd.DataFrame"] = {}
 
 
@@ -941,7 +944,13 @@ def _fetch_condition_data(
 
 
 def _run_analysis(job_id: str, request: RunRequest) -> None:
-    """Background thread: run conformance on a sample and store result."""
+    """Background thread: run conformance on a random sample of stays and store the result.
+
+    Reads data/icu_event_log_sample.parquet. Simplified relative to main.py:
+    each episode is evaluated as a whole (no per-constraint context windows),
+    INT-COMPOSITE-01 is evaluated from its YAML definition, and the episode
+    outcome is recomputed here (re-ventilation within 48 h, no death rule).
+    """
     cancel_event = _job_cancel[job_id]
     job = _jobs[job_id]
 
@@ -1177,7 +1186,11 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
     total_failure = outcome_counts["failure"]
 
     def _compute_stats(a: int, b: int, c: int, d: int):
-        """2×2: a=viol&fail, b=viol&succ, c=noviol&fail, d=noviol&succ → p, OR, RR."""
+        """2×2: a=viol&fail, b=viol&succ, c=noviol&fail, d=noviol&succ → p, OR, RR.
+
+        OR and RR are for Failure (RR = P(fail | violated) / P(fail | not violated)),
+        the inverse orientation of statistics_R.r, which reports the RR of Success.
+        """
         try:
             _, p_raw = _fisher_exact([[a, c], [b, d]], alternative="two-sided")
         except Exception:
@@ -1356,7 +1369,7 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
 
 @app.post("/api/query")
 def run_query(req: QueryRequest) -> dict[str, Any]:
-    """Execute a read-only SQL query against MIMIC and return preview rows."""
+    """Run a SELECT query against MIMIC-IV in a read-only session and return preview rows."""
     from database.client import get_postgres_connection
 
     stripped = req.sql.strip()
@@ -1373,6 +1386,8 @@ def run_query(req: QueryRequest) -> dict[str, Any]:
     conn = None
     try:
         conn = get_postgres_connection()
+        # The SELECT prefix check alone does not stop a chained statement.
+        conn.set_session(readonly=True)
         cur = conn.cursor()
         cur.execute("SET LOCAL statement_timeout = '10s'")
         cur.execute(query)
@@ -1578,9 +1593,10 @@ def _build_generic_summary(results: list, model) -> dict[str, Any]:
 
 @app.post("/api/run_uploaded")
 def run_uploaded(request: RunUploadedRequest) -> dict[str, Any]:
-    """Run Declare conformance on an uploaded log with user-defined rules (whole-trace, synchronous).
+    """Run Declare conformance on an uploaded log with user-defined rules (synchronous).
 
-    ponytail: sync run, skipped the job/cancel plumbing of /api/run; add async only if large logs stall the request.
+    Each case is one evaluation trace, or is split into trigger episodes when
+    `trigger_event` is given. Unlike /api/run there is no background job or cancel.
     """
     import random
     import pandas as pd

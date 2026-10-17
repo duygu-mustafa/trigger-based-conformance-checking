@@ -1,4 +1,11 @@
-"""Episode construction anchored on SBT events."""
+"""SBT episode detection from ventilator-mode transitions.
+
+Each ventilator-setting row is classified as 'Full Support', 'SBT Candidate' or
+'Other' from its (Hamilton or general) ventilator mode. An SBT episode starts at
+a transition to 'SBT Candidate' and ends at a lasting return to 'Full Support'.
+Only the episode start is used downstream (derive/pipeline.py emits SBTStarted);
+the outcome is derived later by the 48 h re-ventilation rule.
+"""
 
 import pandas as pd
 from typing import Optional
@@ -18,8 +25,9 @@ def _non_missing_text_mask(series: pd.Series) -> pd.Series:
     return ~series.map(_is_missing_text_value)
 
 
-# Explicit ventilator mode to category mapping based on clinical evidence.
-# Maps from mode strings to one of: "Liberated/Non-Invasive", "Full Invasive Support", or "SBT"
+# Ventilator mode -> clinical category: "Liberated/Non-Invasive",
+# "Full Invasive Support" or "SBT". Both non-invasive and SBT modes are treated
+# as 'SBT Candidate' weaning states.
 _VENTILATOR_MODE_MAPPING = {
     # ventilator_mode column
     "Ambient": "Liberated/Non-Invasive",
@@ -121,15 +129,14 @@ def _map_category_to_state(category: str | None) -> str:
 
 
 def map_weaning_state(row: pd.Series) -> str:
-    """
-    Classifies a timepoint into a weaning state with preference for ventilator settings.
-    Uses explicit clinical mapping tables from evidence-based ventilator mode definitions.
-    
+    """Classify one ventilator-setting row into a weaning state.
+
+    The Hamilton mode takes precedence over the general ventilator mode.
+
     Returns one of:
-    - 'SBT Candidate': Patient ready for spontaneous breathing trial (includes liberated modes).
-    - 'Full Support': Patient on mandatory/controlled ventilation.
-    - 'Liberated': Confirmed extubation/liberation signal.
-    - 'Other': Unmapped or ambiguous mode.
+    - 'SBT Candidate': spontaneous/SBT or non-invasive mode.
+    - 'Full Support': mandatory/controlled ventilation.
+    - 'Other': unmapped or missing mode.
     """
     # 1. Prefer hamilton-specific mode if available (more granular)
     hamilton_mode_raw = row.get('ventilator_mode_hamilton')
@@ -155,12 +162,13 @@ def map_weaning_state(row: pd.Series) -> str:
     return 'Other'
 
 def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) -> pd.DataFrame:
-    """
-    Processes a time-series of weaning states to find SBT episodes.
-    - SBT Start: Transition to 'SBT Candidate'.
-    - SBT End: Successful liberation or return to 'Full Support' (failure).
-    - Debounce: Brief returns to 'Full Support' or state changes within `debounce_minutes` 
-      are merged into the current episode to avoid fragmented trials.
+    """Find SBT episodes in a per-stay time series of ventilator settings.
+
+    - SBT start: transition to 'SBT Candidate'.
+    - SBT end: return to 'Full Support' that is not followed by 'SBT Candidate'
+      within `debounce_minutes` (`failure_time`). A shorter dip back to Full
+      Support is merged into the current episode.
+    - An episode still open at the end of the stay is kept without end time.
     """
     if weaning_df.empty:
         return pd.DataFrame()
@@ -204,16 +212,8 @@ def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) ->
                 }
 
             elif current_episode is not None:
-                # Transition to Liberated: Mark success and close episode
-                if state == 'Liberated':
-                    current_episode['extubation_time'] = time
-                    current_episode['is_success'] = True
-                    current_episode['sbt_duration_minutes'] = (time - current_episode['sbt_start_time']).total_seconds() / 60
-                    episodes.append(current_episode)
-                    current_episode = None
-
                 # Transition back to Full Support: Check for failure vs brief fluctuation
-                elif state == 'Full Support':
+                if state == 'Full Support':
                     # Look ahead to see if they return to SBT Candidate soon (debounce)
                     is_permanent_failure = True
                     look_ahead_idx = i + 1
@@ -240,7 +240,8 @@ def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) ->
                 else:
                     current_episode['last_time'] = time
 
-        # Episode still open at end of stay — emit start anchor, outcome decided by _derive_activities
+        # Episode still open at end of stay: keep its start anchor; the outcome is
+        # decided by activity_emitter._derive_activities.
         if current_episode is not None:
             episodes.append(current_episode)
 

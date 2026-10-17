@@ -1,38 +1,33 @@
-"""Batch conformance runner for large-scale ICU event logs.
+"""DuckDB access to a large event-log file, one stay at a time.
 
-This module provides a class to process ICU events from a single large file
-(Parquet or CSV) in batches grouped by stay_id, using DuckDB for efficient
-filtering and streaming.
+BatchConformanceRunner opens a single Parquet or CSV file as a DuckDB view
+(`events`) and holds the combined Declare model. main.py and api.py query
+the view per stay (`runner.con`, keyed by `runner._batch_key_column`) and do the
+episode segmentation and constraint evaluation themselves.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import duckdb
-import pandas as pd
-from tqdm import tqdm
-
-from conformance.checker import check_log_conformance
-from conformance.results import TraceResult
-from derive import raw_to_event_log
 
 
 class BatchConformanceRunner:
-    """Processes ICU stay events in batches from a single source file."""
+    """DuckDB view over one event file plus the Declare model to evaluate.
+
+    A canonical event log (case_id/activity/timestamp columns) is keyed by
+    case_id; a raw extraction file is keyed by stay_id.
+    """
 
     def __init__(
         self,
         input_file: str | Path,
         model_builder: Any,
-        item_dictionary_path: str | Path | None = None,
-        activity_mapping_path: str | Path | None = None,
     ):
         self.input_file = Path(input_file)
         self.model = model_builder()
-        self.item_dictionary_path = item_dictionary_path
-        self.activity_mapping_path = activity_mapping_path
         self._is_event_log_input = False  
         self._batch_key_column = "stay_id"
         
@@ -64,46 +59,3 @@ class BatchConformanceRunner:
             f"WHERE {self._batch_key_column} IS NOT NULL"
         ).fetchall()
         return [str(r[0]) for r in rows]
-
-    def process_batch(self, stay_ids: Iterable[str | int]) -> list[TraceResult]:
-        """Process a specific batch of stay_ids."""
-        results = []
-        for stay_id in stay_ids:
-            try:
-                df = self.con.execute(
-                    f"SELECT * FROM events WHERE {self._batch_key_column} = ?",
-                    [str(stay_id)],
-                ).df()
-                
-                if df.empty:
-                    continue
-
-                if self._is_event_log_input:
-                    event_log = df
-                else:
-                    # Transform raw rows to canonical event-log rows.
-                    event_log = raw_to_event_log(
-                        df,
-                        item_dictionary_path=self.item_dictionary_path,
-                        activity_mapping_path=self.activity_mapping_path,
-                    )
-                
-                # 2. Run conformance checker
-                trace_results = check_log_conformance(event_log, self.model)
-                if trace_results:
-                    results.extend(trace_results)
-            except Exception as e:
-                print(f"Error processing stay_id {stay_id}: {e}")
-                
-        return results
-
-    def run_all(self, batch_size: int = 100) -> list[TraceResult]:
-        """Run conformance checking for all stay_ids in the file."""
-        all_stay_ids = self.get_stay_ids()
-        all_results = []
-        
-        for i in tqdm(range(0, len(all_stay_ids), batch_size), desc="Batch Processing"):
-            batch = all_stay_ids[i:i + batch_size]
-            all_results.extend(self.process_batch(batch))
-            
-        return all_results

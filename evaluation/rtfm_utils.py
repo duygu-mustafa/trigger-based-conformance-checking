@@ -51,9 +51,9 @@ def build_trigger_episodes(
     t_next and t_Delta are exclusive; t_phi is inclusive, so the end event
     belongs to the episode it closes. The returned end is always exclusive.
 
-    Generalised copy of ``main_per_sbt._build_trigger_episodes``
-    (main_per_sbt.py:68), which hardcodes ``InvasiveVentilationStarted`` as the
-    trigger. Copied rather than imported because importing ``main_per_sbt``
+    Generalised copy of ``main._build_trigger_episodes``
+    (main.py:68), which hardcodes ``InvasiveVentilationStarted`` as the
+    trigger. Copied rather than imported because importing ``main``
     pulls in ``derive.pipeline`` and asserts the MIMIC activity mapping, none of
     which applies here. Keep the two in sync if the segmentation semantics
     change.
