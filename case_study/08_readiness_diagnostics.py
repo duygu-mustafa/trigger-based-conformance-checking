@@ -2,14 +2,22 @@
 
 Two questions the aggregate verdicts of step 03 cannot answer.
 
-First, a readiness violation has several possible causes, which the checker now
-records per activation: the criterion was never charted in the lookback window
-(`absent`), it was charted only outside it (`stale`), the measurement event fired
-but carries none of the values the condition reads (`no_payload`), a disjunctive
-criterion was decided on readings only some of which are present
-(`partial_payload`), or the criterion was assessed on complete readings and not
-met (`unmet`). Only the last is a statement about care; the rest are statements
-about documentation.
+First, a readiness violation has several possible causes, which the checker
+records per activation: no measurement lies in the lookback window
+(`undocumented`), the measurement event fired but carries none of the values the
+condition reads (`no_payload`), a disjunctive criterion was decided on readings
+only some of which are present (`partial_payload`), or the criterion was assessed
+on complete readings and not met (`unmet`). Only the last is a statement about
+care; the rest are statements about documentation. Each cause is then related to
+the episode outcome separately, to see whether only `unmet` violations go along
+with failure.
+
+The checker distinguishes `absent` (no measurement anywhere in the evaluated
+history) from `stale` (a measurement exists, but only before the lookback). Both
+fail the guideline condition identically, and the evaluated history extends only
+24 h before the episode start, so `stale` can only occur in episodes whose trial
+starts more than 24 h after the episode begins. The split therefore mostly
+encodes episode length, and the two are merged here into `undocumented`.
 
 Second, an `unmet` violation carries the reading that failed the threshold, so
 violations can be ordered by how far past the threshold the trial went. If
@@ -45,12 +53,22 @@ from derive.statistical_analysis import _binarize_label, calculate_stats
 
 # Ordered from least to most specific, so an episode whose activations disagree is
 # reported under the most informative cause any of them produced.
-CAUSES = ["absent", "stale", "no_payload", "partial_payload", "unmet"]
-DOCUMENTATION_CAUSES = ["absent", "stale", "no_payload", "partial_payload"]
+CAUSES = ["undocumented", "no_payload", "partial_payload", "unmet"]
+DOCUMENTATION_CAUSES = ["undocumented", "no_payload", "partial_payload"]
+
+# The checker's own causes, ordered the same way, and how they fold into CAUSES.
+CHECKER_CAUSES = ["absent", "stale", "no_payload", "partial_payload", "unmet"]
+MERGED_CAUSE = {"absent": "undocumented", "stale": "undocumented"}
+
+CAUSE_COLOR = {
+    "undocumented": "#9ecae1",
+    "no_payload": "#3182bd",
+    "partial_payload": "#08519c",
+    "unmet": "#d62728",
+}
 
 CAUSE_LABEL = {
-    "absent": "never charted in window",
-    "stale": "charted outside window",
+    "undocumented": "not documented in window",
     "no_payload": "event without a value",
     "partial_payload": "criterion only partly documented",
     "unmet": "assessed and not met",
@@ -58,8 +76,9 @@ CAUSE_LABEL = {
 
 # The reading each readiness criterion is judged on, the threshold it must clear,
 # and the direction of conformance. `at_least` means the criterion is met when the
-# reading is at or above the threshold; `at_most` when it is at or below. RC-DP-06 is
-# absent because its criterion is a categorical bedside score with no graded reading.
+# reading is at or above the threshold; `at_most` when it is at or below. RC-DP-06 has
+# no graded reading because its criterion is a categorical bedside score, so it takes
+# part in the cause analysis but not in the margin analysis.
 CRITERION = {
     "RC-DP-01": {"item": "pao2fio2ratio", "threshold": 150.0, "direction": "at_least",
                  "unit": "PaO2/FiO2"},
@@ -73,12 +92,17 @@ CRITERION = {
                  "unit": "NE-equivalent (mcg/kg/min)"},
     "RC-DP-07": {"item": "224686", "threshold": 0.0, "direction": "at_least",
                  "unit": "spontaneous tidal volume (mL)"},
+    "RC-DP-06": {"item": None, "threshold": None, "direction": None,
+                 "unit": "mental status"},
 }
 
 # Margin analysis needs a graded reading. RC-DP-07 is thresholded at zero on a
 # quantity that is either charted as positive or not at all, so its margin has only
 # one violating value and no gradation to stratify.
 MARGIN_CONSTRAINTS = ["RC-DP-01", "RC-DP-02", "RC-DP-03", "RC-DP-04", "RC-DP-05"]
+
+# The criteria judged on a reading rather than a categorical score.
+GRADED_CONSTRAINTS = [cid for cid, spec in CRITERION.items() if spec["item"] is not None]
 
 
 def _results_path():
@@ -106,7 +130,7 @@ def _parse(blob) -> dict:
 
 def _reading(values: dict, item: str) -> float:
     """The value the condition read for `item`, as a float, or NaN."""
-    if not isinstance(values, dict):
+    if not isinstance(values, dict) or item is None:
         return math.nan
     raw = values.get(item, math.nan)
     try:
@@ -144,8 +168,9 @@ def _episode_records(df: pd.DataFrame) -> pd.DataFrame:
             causes = forensics.get("causes") or {}
             cause = None
             if state == "violated":
-                present = [c for c in CAUSES if causes.get(c)]
+                present = [c for c in CHECKER_CAUSES if causes.get(c)]
                 cause = present[-1] if present else None
+                cause = MERGED_CAUSE.get(cause, cause)
 
             # A violation reports its readings under "values", a satisfaction under
             # the deltas the condition extracted.
@@ -253,27 +278,113 @@ def _stratified_association(records: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _arm_stats(arm: pd.DataFrame, reference: pd.DataFrame) -> dict:
+    """Risk ratio of success in `arm` against `reference`, with counts."""
+    a = int((arm["outcome_binary"] == 1).sum())
+    b = int((arm["outcome_binary"] == 0).sum())
+    c = int((reference["outcome_binary"] == 1).sum())
+    d = int((reference["outcome_binary"] == 0).sum())
+    stats = calculate_stats(a, b, c, d)
+    return {
+        "n_exposed": a + b,
+        "n_reference": c + d,
+        "success_rate": a / (a + b) if a + b else math.nan,
+        "reference_success_rate": c / (c + d) if c + d else math.nan,
+        "rr_point": stats["rr_point"],
+        "rr_ci_low": stats["rr_ci_low"],
+        "rr_ci_high": stats["rr_ci_high"],
+        "p_raw": stats["p_raw"],
+    }
+
+
+def _cause_association(records: pd.DataFrame, min_arm: int = 30) -> pd.DataFrame:
+    """Success under a violation, split by why the constraint was violated.
+
+    Exposure is a violation with one cause; the reference arm is the episodes
+    where the same constraint was satisfied. If only `unmet` violations go along
+    with failure, the documentation causes should sit at a risk ratio near one.
+    The row `all_violations` pools the causes and reproduces the unstratified
+    association. Bonferroni runs over the per-cause tests that were performed.
+    """
+    rows: list[dict] = []
+    for cid in CRITERION:
+        subset = records[
+            (records["constraint_id"] == cid) & records["outcome_binary"].notna()
+        ]
+        satisfied = subset[subset["state"] == "satisfied"]
+        violated = subset[subset["state"] == "violated"]
+        if satisfied.empty or violated.empty:
+            continue
+        arms = [("all_violations", violated)]
+        arms += [(cause, violated[violated["cause"] == cause]) for cause in CAUSES]
+        for cause, arm in arms:
+            if len(arm) < min_arm:
+                continue
+            rows.append({"constraint_id": cid, "cause": cause, **_arm_stats(arm, satisfied)})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    per_cause = out["cause"] != "all_violations"
+    n_tests = int(per_cause.sum())
+    out["n_tests"] = n_tests
+    out["p_bonferroni"] = (out["p_raw"] * n_tests).clip(upper=1.0)
+    out["significant"] = per_cause & (out["p_raw"] < 0.05 / n_tests)
+    return out
+
+
+def _episode_cause_profile(records: pd.DataFrame) -> pd.DataFrame:
+    """Success by the worst readiness evidence an episode carries.
+
+    Only the criteria with a graded reading count. RC-DP-06 is violated in nearly
+    every episode for lack of a charted score, so including it would leave almost
+    no episode in the reference arm. Each episode is placed in one profile: every
+    activated criterion satisfied, violations that are all documentation gaps, or
+    at least one criterion assessed and not met. Comparing the latter two against
+    the first answers the cause question once per episode, without counting an
+    episode again for every criterion it violates.
+    """
+    scored = records[
+        records["outcome_binary"].notna() & records["constraint_id"].isin(GRADED_CONSTRAINTS)
+    ]
+    keys = ["stay_id", "episode_index"]
+    per_episode = scored.groupby(keys).agg(
+        outcome_binary=("outcome_binary", "first"),
+        n_violated=("state", lambda s: int((s == "violated").sum())),
+        n_unmet=("cause", lambda s: int((s == "unmet").sum())),
+    )
+    per_episode["profile"] = np.select(
+        [per_episode["n_violated"] == 0, per_episode["n_unmet"] == 0],
+        ["all_satisfied", "documentation_only"],
+        default="any_unmet",
+    )
+    reference = per_episode[per_episode["profile"] == "all_satisfied"]
+    rows = []
+    for profile in ["all_satisfied", "documentation_only", "any_unmet"]:
+        arm = per_episode[per_episode["profile"] == profile]
+        row = {"profile": profile, **_arm_stats(arm, reference)}
+        if profile == "all_satisfied":
+            for key in ("rr_point", "rr_ci_low", "rr_ci_high", "p_raw"):
+                row[key] = math.nan
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _plot_causes(causes: pd.DataFrame) -> None:
-    plot_df = causes.sort_values("share_care")
+    # The criteria with a graded reading, as in the thesis table; RC-DP-06 is in the CSV.
+    plot_df = causes[causes["constraint_id"].isin(GRADED_CONSTRAINTS)].sort_values("share_care")
+    present = [c for c in CAUSES if plot_df[f"n_{c}"].sum() > 0]
     fig, ax = plt.subplots(figsize=(7.5, max(3.0, 0.45 * len(plot_df))))
     left = np.zeros(len(plot_df))
-    palette = {
-        "absent": "#9ecae1",
-        "stale": "#6baed6",
-        "no_payload": "#3182bd",
-        "partial_payload": "#08519c",
-        "unmet": "#d62728",
-    }
-    for cause in CAUSES:
+    for cause in present:
         share = plot_df[f"share_{cause}"].astype(float).to_numpy()
         ax.barh(plot_df["constraint_id"], share, left=left,
-                color=palette[cause], label=CAUSE_LABEL[cause])
+                color=CAUSE_COLOR[cause], label=CAUSE_LABEL[cause])
         left = left + np.nan_to_num(share)
     ax.set_xlim(0, 1.0)
     ax.set_xlabel("Share of violated episodes")
     ax.set_title("Why each readiness constraint is violated")
     ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.15),
-              ncol=len(CAUSES), frameon=False)
+              ncol=len(present), frameon=False)
     save_fig(fig, "fig_readiness_causes")
 
 
@@ -336,6 +447,77 @@ def _plot_stratified(strata: pd.DataFrame) -> None:
     save_fig(fig, "fig_readiness_margin_outcome")
 
 
+CRITERION_NAME = {
+    "RC-DP-01": "Oxygenation",
+    "RC-DP-02": "Arterial pH",
+    "RC-DP-03": "Hemoglobin",
+    "RC-DP-04": "Temperature",
+    "RC-DP-05": "Hemodynamics",
+    "RC-DP-06": "Mental status",
+    "RC-DP-07": "Inspiratory effort",
+}
+
+
+def _plot_cause_association(assoc: pd.DataFrame) -> None:
+    """One row group per constraint, one point with its CI per cause.
+
+    Each constraint sits in its own shaded band with its name on the left, so a
+    point is read against the band it lies in rather than a shared tick.
+    """
+    if assoc.empty:
+        return
+    per_cause = assoc[assoc["cause"] != "all_violations"]
+    order = sorted(per_cause["constraint_id"].unique())
+    present = [c for c in CAUSES if c in set(per_cause["cause"])]
+
+    row_step = 1.0
+    band_gap = 0.8
+    fig_height = 0.8 + 0.22 * (len(per_cause) + band_gap * len(order))
+    fig, ax = plt.subplots(figsize=(7.5, fig_height))
+
+    y = 0.0
+    centers: list[float] = []
+    for k, cid in enumerate(order):
+        rows = per_cause[per_cause["constraint_id"] == cid].set_index("cause")
+        causes_here = [c for c in present if c in rows.index]
+        top = y
+        for cause in causes_here:
+            row = rows.loc[cause]
+            point = float(row["rr_point"])
+            low, high = float(row["rr_ci_low"]), float(row["rr_ci_high"])
+            ax.errorbar(point, y, xerr=[[point - low], [high - point]], fmt="o",
+                        capsize=3, color=CAUSE_COLOR[cause], markersize=5)
+            # The lightest marker colour is too pale for text, so labels use a darker tone.
+            ax.annotate(f"{point:.2f}", (high, y), xytext=(4, 0),
+                        textcoords="offset points", va="center", fontsize=7,
+                        color="#4a4a4a")
+            y += row_step
+        bottom = y - row_step
+        if k % 2 == 0:
+            ax.axhspan(top - row_step / 2, bottom + row_step / 2,
+                       color="#f0f0f0", zorder=0, linewidth=0)
+        centers.append((top + bottom) / 2)
+        y += band_gap
+
+    ax.axvline(1.0, color="black", linewidth=1)
+    x_low = float(per_cause["rr_ci_low"].min())
+    x_high = float(per_cause["rr_ci_high"].max())
+    ax.set_xlim(x_low - 0.03, x_high + 0.08)
+    ax.grid(axis="y", visible=False)
+    ax.set_yticks(centers)
+    ax.set_yticklabels([f"{CRITERION_NAME.get(c, c)} ({c})" for c in order], fontsize=8)
+    ax.tick_params(axis="y", length=0)
+    ax.set_ylim(y - band_gap - row_step / 2, -row_step / 2)
+    ax.set_xlabel("Risk ratio of success vs. satisfied")
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    handles = [plt.Line2D([], [], marker="o", linestyle="", color=CAUSE_COLOR[c],
+                          label=CAUSE_LABEL[c]) for c in present]
+    ax.legend(handles=handles, fontsize=8, loc="lower center",
+              bbox_to_anchor=(0.5, 1.0), ncol=len(present), frameon=False)
+    save_fig(fig, "fig_readiness_cause_outcome")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -348,7 +530,9 @@ def main() -> None:
         causes = pd.read_csv(OUT_DIR / "readiness_violation_causes.csv")
         records = pd.read_parquet(OUT_DIR / "readiness_records.parquet")
         strata = pd.read_csv(OUT_DIR / "readiness_margin_association.csv")
+        assoc = pd.read_csv(OUT_DIR / "readiness_cause_association.csv")
         _plot_causes(causes)
+        _plot_cause_association(assoc)
         _plot_margins(records)
         _plot_stratified(strata)
         return
@@ -376,17 +560,45 @@ def main() -> None:
     strata = _stratified_association(records)
     write_csv(strata, "readiness_margin_association.csv")
 
+    assoc = _cause_association(records)
+    write_csv(assoc, "readiness_cause_association.csv")
+
+    profile = _episode_cause_profile(records)
+    write_csv(profile, "readiness_cause_profile.csv")
+
+    # The headline shares cover the criteria with a graded reading, as the cause
+    # table in the thesis does; RC-DP-06 is reported in its own row of the CSV.
+    graded = causes[causes["constraint_id"].isin(GRADED_CONSTRAINTS)]
     overview = {
         "results_file": str(path),
         "n_episodes": int(len(df)),
         "n_activations": int(len(records)),
         "n_violated": int((records["state"] == "violated").sum()),
+        "n_violated_graded": int(graded["n_violated"].sum()),
         "share_violations_documentation": float(
-            causes["n_documentation"].sum() / max(causes["n_violated"].sum(), 1)
+            graded["n_documentation"].sum() / max(graded["n_violated"].sum(), 1)
         ),
         "share_violations_care": float(
-            causes["n_unmet"].sum() / max(causes["n_violated"].sum(), 1)
+            graded["n_unmet"].sum() / max(graded["n_violated"].sum(), 1)
         ),
+        "cause_association": {
+            f"{row.constraint_id}/{row.cause}": {
+                "n": int(row.n_exposed),
+                "rr": float(row.rr_point),
+                "ci": [float(row.rr_ci_low), float(row.rr_ci_high)],
+                "significant": bool(row.significant),
+            }
+            for row in assoc.itertuples(index=False)
+        },
+        "episode_profile": {
+            row.profile: {
+                "n": int(row.n_exposed),
+                "success_rate": float(row.success_rate),
+                "rr": float(row.rr_point),
+                "ci": [float(row.rr_ci_low), float(row.rr_ci_high)],
+            }
+            for row in profile.itertuples(index=False)
+        },
         "constraints_with_margin_strata": sorted(strata["constraint_id"].unique().tolist())
         if not strata.empty
         else [],
@@ -394,6 +606,7 @@ def main() -> None:
     write_json(overview, "readiness_diagnostics_overview.json")
 
     _plot_causes(causes)
+    _plot_cause_association(assoc)
     _plot_margins(records)
     _plot_stratified(strata)
 

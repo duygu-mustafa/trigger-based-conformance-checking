@@ -140,7 +140,7 @@ def _build_correctness_cases() -> list[CorrectnessCase]:
     # --- unary templates ---------------------------------------------------
     ex = _c(DeclareTemplate.EXISTENCE, "A")
     add("EXI-sat", ex, [("X", 0), ("A", 1)], SAT)
-    add("EXI-vac", ex, [("X", 0), ("B", 1)], VAC)
+    add("EXI-vio", ex, [("X", 0), ("B", 1)], VIO)  # activated by the trace start
 
     ab = _c(DeclareTemplate.ABSENCE, "A")
     add("ABS-vio", ab, [("X", 0), ("A", 1)], VIO)
@@ -201,41 +201,34 @@ def _build_correctness_cases() -> list[CorrectnessCase]:
     coex = _c(DeclareTemplate.CO_EXISTENCE, "A", "B")
     add("COEX-sat-both", coex, [("A", 0), ("B", 1)], SAT)
     add("COEX-vio", coex, [("A", 0), ("X", 1)], VIO)
+    add("COEX-vac", coex, [("X", 0), ("Y", 1)], VAC)
 
     ncoex = _c(DeclareTemplate.NOT_CO_EXISTENCE, "A", "B")
     add("NCOEX-vio", ncoex, [("A", 0), ("B", 1)], VIO)
     add("NCOEX-sat", ncoex, [("A", 0), ("X", 1)], SAT)
-    add("NCOEX-vac", ncoex, [("X", 0), ("Y", 1)], VAC, _NON_ACTIVATION_NOTE)
+    add("NCOEX-vac", ncoex, [("X", 0), ("Y", 1)], VAC)
+    add("NCOEX-vac-target", ncoex, [("B", 0), ("Y", 1)], VAC)  # target alone does not activate
 
     # --- succession family -------------------------------------------------
-    # Succession composes a response with a precedence, and the framework's
-    # precedence reads "the activation requires an earlier target" (the
-    # readiness constraints use it that way: SBTStarted requires a preceding
-    # criterion event). Composing both components on the same role order
-    # therefore requires the activation to be *surrounded* by the target,
-    # rather than the classical reading in which the target may occur only
-    # after the activation. These cases pin the framework's reading.
-    _SUC_NOTE = (
-        "Succession composes response with the framework's precedence, whose activation "
-        "requires an earlier target, so the activation must be both preceded and followed "
-        "by the target"
-    )
+    # Succession(A, B) = Response(A, B) AND Precedence(A, B): every A is followed
+    # by a B and every B is preceded by an A, so both A and B activate.
     succ = _c(DeclareTemplate.SUCCESSION, "A", "B")
-    add("SUC-sat", succ, [("B", 0), ("A", 1), ("B", 2)], SAT, _SUC_NOTE)
-    add("SUC-vio-prec", succ, [("A", 0), ("B", 1)], VIO, _SUC_NOTE)  # never preceded
-    add("SUC-vio-resp", succ, [("B", 0), ("A", 1)], VIO, _SUC_NOTE)  # never followed
-    add("SUC-vio-both", succ, [("A", 0), ("X", 1)], VIO)
-    add("SUC-vac", succ, [("X", 0), ("B", 1)], VAC)
-    add("SUC-multi", succ, [("B", 0), ("A", 1), ("A", 2), ("B", 3)], SAT, _SUC_NOTE)
+    add("SUC-sat", succ, [("A", 0), ("B", 1)], SAT)
+    add("SUC-vio-resp", succ, [("A", 0), ("X", 1)], VIO)  # A never followed
+    add("SUC-vio-prec", succ, [("B", 0), ("A", 1), ("B", 2)], VIO)  # first B not preceded
+    add("SUC-vio-target-only", succ, [("X", 0), ("B", 1)], VIO)  # B activates on its own
+    add("SUC-vac", succ, [("X", 0), ("Y", 1)], VAC)
+    add("SUC-multi", succ, [("A", 0), ("A", 1), ("B", 2), ("B", 3)], SAT)
 
     altsucc = _c(DeclareTemplate.ALTERNATE_SUCCESSION, "A", "B")
-    add("ALTSUC-sat", altsucc, [("B", 0), ("A", 1), ("B", 2), ("A", 3), ("B", 4)], SAT, _SUC_NOTE)
-    add("ALTSUC-vio", altsucc, [("B", 0), ("A", 1), ("A", 2), ("B", 3)], VIO, _SUC_NOTE)
+    add("ALTSUC-sat", altsucc, [("A", 0), ("B", 1), ("A", 2), ("B", 3)], SAT)
+    add("ALTSUC-vio-resp", altsucc, [("A", 0), ("A", 1), ("B", 2)], VIO)
+    add("ALTSUC-vio-prec", altsucc, [("A", 0), ("B", 1), ("B", 2)], VIO)
 
     chsucc = _c(DeclareTemplate.CHAIN_SUCCESSION, "A", "B")
-    add("CHSUC-sat", chsucc, [("B", 0), ("A", 1), ("B", 2)], SAT, _SUC_NOTE)
-    add("CHSUC-vio-resp", chsucc, [("B", 0), ("A", 1), ("X", 2)], VIO, _SUC_NOTE)
-    add("CHSUC-vio-prec", chsucc, [("A", 0), ("B", 1)], VIO, _SUC_NOTE)
+    add("CHSUC-sat", chsucc, [("A", 0), ("B", 1), ("X", 2)], SAT)
+    add("CHSUC-vio-resp", chsucc, [("A", 0), ("X", 1), ("B", 2)], VIO)
+    add("CHSUC-vio-prec", chsucc, [("X", 0), ("B", 1)], VIO)
 
     # --- negative binary ---------------------------------------------------
     nresp = _c(DeclareTemplate.NOT_RESPONSE, "A", "B")
@@ -262,10 +255,13 @@ def _build_correctness_cases() -> list[CorrectnessCase]:
     nsucc = _c(DeclareTemplate.NOT_SUCCESSION, "A", "B")
     add("NSUC-vio", nsucc, [("A", 0), ("B", 1)], VIO)
     add("NSUC-sat", nsucc, [("A", 0), ("X", 1)], SAT)
+    add("NSUC-sat-reverse", nsucc, [("B", 0), ("A", 1)], SAT)  # B before A is allowed
+    add("NSUC-sat-target-only", nsucc, [("X", 0), ("B", 1)], SAT)  # B activates, no earlier A
 
     nchsucc = _c(DeclareTemplate.NOT_CHAIN_SUCCESSION, "A", "B")
     add("NCHSUC-vio", nchsucc, [("A", 0), ("B", 1)], VIO)
     add("NCHSUC-sat", nchsucc, [("A", 0), ("X", 1), ("B", 2)], SAT)
+    add("NCHSUC-sat-reverse", nchsucc, [("B", 0), ("A", 1)], SAT)  # pair <B, A> is allowed
 
     # --- time conditions ---------------------------------------------------
     win = _c(DeclareTemplate.RESPONSE, "A", "B", time_condition=TimeCondition(max_seconds=3600))
@@ -309,20 +305,14 @@ def _build_correctness_cases() -> list[CorrectnessCase]:
     add("TIME-prec-outside", backwin, [("A", 0), ("B", 120)], VIO)
 
     # --- Existence with an activation condition ----------------------------
-    # The clinical model's MP_EXISTENCE rules read the condition as a violation
-    # condition: the criterion event fires when the criterion is *unmet*, so an
-    # event satisfying the condition is the deviation, not the compliance.
+    # The condition restricts which occurrences of A count towards AtLeastOne.
     exi_cond = _c(
         DeclareTemplate.EXISTENCE, "A",
         activation_cond=DataCondition("items['amount'] > 50"),
     )
-    _EXI_NOTE = (
-        "Existence with a condition is read as a violation condition: an event "
-        "satisfying it marks the deviation, per the MP_EXISTENCE rules of the clinical model"
-    )
-    add("EXICOND-vio", exi_cond, [("A", 0, {"amount": 100})], VIO, _EXI_NOTE)
-    add("EXICOND-sat", exi_cond, [("A", 0, {"amount": 10})], SAT, _EXI_NOTE)
-    add("EXICOND-vac", exi_cond, [("X", 0)], VAC)
+    add("EXICOND-sat", exi_cond, [("A", 0, {"amount": 100})], SAT)
+    add("EXICOND-vio", exi_cond, [("A", 0, {"amount": 10})], VIO)
+    add("EXICOND-vio-absent", exi_cond, [("X", 0)], VIO)
 
     # --- correlation conditions -------------------------------------------
     corrcond = _c(
@@ -350,7 +340,7 @@ def _build_correctness_cases() -> list[CorrectnessCase]:
     latest = _c(
         DeclareTemplate.PRECEDENCE, "B", "A",
         correlation_cond=DataCondition("items['amount'] > 50"),
-        target_selection="last",
+        target_selection="latest",
     )
     add("SEL-latest-vio", latest,
         [("A", 0, {"amount": 100}), ("A", 1, {"amount": 10}), ("B", 2)], VIO,

@@ -31,6 +31,7 @@ from conformance.checker import (
     evaluate_constraint
 )
 from derive.pipeline import raw_to_event_log
+from derive.death_outcomes import apply_death_rule, load_stay_deaths
 import json
 import math
 
@@ -76,6 +77,11 @@ def _build_trigger_episodes(
     always applies), fixed window t_Delta (if window_hours set), end-event
     t_phi (first `end_event` strictly after the trigger, if set). Both
     optional boundaries default off -> fallback-only behavior unchanged.
+    All three bounds are exclusive, so the end event closes the episode
+    without belonging to it.
+
+    Returns (start, t_end) per episode: each episode holds the events in
+    [start, t_end).
     """
     triggers = (
         df_full[df_full["activity"] == "InvasiveVentilationStarted"]
@@ -355,6 +361,7 @@ _WORKER_LOOKUP = None
 _WORKER_EPISODE_WINDOW_HOURS: float | None = None
 _WORKER_EPISODE_END_EVENT: str | None = None
 _WORKER_NO_SEGMENTATION: bool = False
+_WORKER_DEATHS: dict[str, pd.Timestamp] = {}
 
 
 def _init_worker(
@@ -366,11 +373,13 @@ def _init_worker(
 ) -> None:
     global _WORKER_RUNNER, _WORKER_LOOKUP
     global _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT, _WORKER_NO_SEGMENTATION
+    global _WORKER_DEATHS
     _WORKER_RUNNER = BatchConformanceRunner(input_file=input_file, model_builder=_build_combined_model)
     _WORKER_LOOKUP = _load_combined_constraint_id_lookup(model_paths)
     _WORKER_EPISODE_WINDOW_HOURS = episode_window_hours
     _WORKER_EPISODE_END_EVENT = episode_end_event
     _WORKER_NO_SEGMENTATION = no_segmentation
+    _WORKER_DEATHS = load_stay_deaths()
 
 
 def _process_stay(stay_id: str) -> list[dict]:
@@ -402,10 +411,8 @@ def _process_stay(stay_id: str) -> list[dict]:
         # Ablation: one evaluation trace per stay, i.e. the trace-global reading the
         # method replaces. Everything downstream is unchanged, so the resulting
         # verdicts differ only through the loss of segmentation.
-        episodes = [(
-            event_log.iloc[0]["timestamp"],
-            event_log.iloc[-1]["timestamp"] + pd.Timedelta(seconds=1),
-        )]
+        trace_end = event_log.iloc[-1]["timestamp"] + pd.Timedelta(seconds=1)
+        episodes = [(event_log.iloc[0]["timestamp"], trace_end)]
     else:
         episodes = _build_trigger_episodes(
             event_log, _WORKER_EPISODE_WINDOW_HOURS, _WORKER_EPISODE_END_EVENT
@@ -429,8 +436,12 @@ def _process_stay(stay_id: str) -> list[dict]:
 
         # Per-constraint context windows set in YAML via
         # context_window_pre_hours / context_window_post_hours.
+        # Outer bounds are closed, inner bounds adjoin the episode without overlap:
         # Pre: all events in [episode_start - W_pre, episode_end).
-        # Post: only target-label events in [episode_end, episode_end + W_post).
+        # Post: only target-label events outside the episode with
+        #       t_end <= t <= t_end + W_post, with t_end = episode_end the
+        #       exclusive episode bound, so ">= episode_end" is "not in the
+        #       episode". W_post = 0 (or unset) forms no post-context.
 
         sbt_in_episode = sbt_starts[
             (sbt_starts["timestamp"] >= episode_start)
@@ -467,6 +478,9 @@ def _process_stay(stay_id: str) -> list[dict]:
                 # treat as right-censored at episode end.
                 outcome_val = "Success (Right-Censored: Stay Ended)"
                 sbt_end = episode_end
+            # Extra failure condition on top of the re-ventilation rule: death
+            # within 48h of SBTStarted turns a success into a failure.
+            outcome_val = apply_death_rule(outcome_val, sbt_start, _WORKER_DEATHS.get(str(stay_id)))
         else:
             outcome_val = "No SBT Attempt"
 
@@ -517,7 +531,7 @@ def _process_stay(stay_id: str) -> list[dict]:
             if post_hours is not None and post_hours > 0 and constraint.target is not None:
                 post_df = event_log[
                     (event_log["timestamp"] >= episode_end)
-                    & (event_log["timestamp"] < episode_end + pd.Timedelta(hours=post_hours))
+                    & (event_log["timestamp"] <= episode_end + pd.Timedelta(hours=post_hours))
                     & (event_log["activity"] == constraint.target)
                 ]
                 trace_parts.append(post_df)
@@ -658,6 +672,13 @@ def main() -> None:
         help="Stop after writing the conformance CSV, skipping the R statistics, "
         "frontend export and summary generation.",
     )
+    parser.add_argument(
+        "--postprocess-only",
+        action="store_true",
+        help="Skip conformance checking and rerun only the R statistics, frontend "
+        "export and summary on the existing --output CSV (e.g. after relabelling "
+        "outcomes with derive/death_outcomes.py).",
+    )
     args = parser.parse_args()
 
     runner = BatchConformanceRunner(input_file=args.input, model_builder=_build_combined_model)
@@ -687,55 +708,56 @@ def main() -> None:
     if args.no_segmentation:
         print("Segmentation disabled: one evaluation trace per stay.")
 
-    done_ids: set[str] = set()
-    if args.resume and args.output.exists():
-        existing = pd.read_csv(args.output, usecols=["stay_id"])
-        done_ids = set(existing["stay_id"].astype(str))
-        print(f"Resuming: {len(done_ids)} stays already done, {len(stay_ids) - len(done_ids)} remaining.")
-    else:
-        print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
+    if not args.postprocess_only:
+        done_ids: set[str] = set()
+        if args.resume and args.output.exists():
+            existing = pd.read_csv(args.output, usecols=["stay_id"])
+            done_ids = set(existing["stay_id"].astype(str))
+            print(f"Resuming: {len(done_ids)} stays already done, {len(stay_ids) - len(done_ids)} remaining.")
+        else:
+            print(f"Processing {len(stay_ids)} stays for trigger-episode analysis...")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    open_mode = "a" if args.resume and args.output.exists() else "w"
-    csv_handle = args.output.open(open_mode, newline="", encoding="utf-8")
-    writer = csv.DictWriter(csv_handle, fieldnames=_OUTPUT_COLUMNS)
-    if open_mode == "w":
-        writer.writeheader()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        open_mode = "a" if args.resume and args.output.exists() else "w"
+        csv_handle = args.output.open(open_mode, newline="", encoding="utf-8")
+        writer = csv.DictWriter(csv_handle, fieldnames=_OUTPUT_COLUMNS)
+        if open_mode == "w":
+            writer.writeheader()
 
-    remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
-    _conformance_start = time.time()
+        remaining_ids = [s for s in stay_ids if str(s) not in done_ids]
+        _conformance_start = time.time()
 
-    if args.workers <= 1:
-        _init_worker(
-            args.input, model_paths, args.episode_window_hours, args.episode_end_event,
-            args.no_segmentation,
-        )
-        for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
-            for row in _process_stay(stay_id):
-                writer.writerow(row)
-            csv_handle.flush()
-    else:
-        import concurrent.futures as cf
-
-        with cf.ProcessPoolExecutor(
-            max_workers=args.workers,
-            initializer=_init_worker,
-            initargs=(
+        if args.workers <= 1:
+            _init_worker(
                 args.input, model_paths, args.episode_window_hours, args.episode_end_event,
                 args.no_segmentation,
-            ),
-        ) as pool:
-            for rows in tqdm(
-                pool.map(_process_stay, remaining_ids, chunksize=8),
-                initial=len(done_ids),
-                total=len(stay_ids),
-            ):
-                for row in rows:
+            )
+            for stay_id in tqdm(remaining_ids, initial=len(done_ids), total=len(stay_ids)):
+                for row in _process_stay(stay_id):
                     writer.writerow(row)
                 csv_handle.flush()
+        else:
+            import concurrent.futures as cf
 
-    csv_handle.close()
-    log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
+            with cf.ProcessPoolExecutor(
+                max_workers=args.workers,
+                initializer=_init_worker,
+                initargs=(
+                    args.input, model_paths, args.episode_window_hours, args.episode_end_event,
+                    args.no_segmentation,
+                ),
+            ) as pool:
+                for rows in tqdm(
+                    pool.map(_process_stay, remaining_ids, chunksize=8),
+                    initial=len(done_ids),
+                    total=len(stay_ids),
+                ):
+                    for row in rows:
+                        writer.writerow(row)
+                    csv_handle.flush()
+
+        csv_handle.close()
+        log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
     output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
 

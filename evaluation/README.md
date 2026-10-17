@@ -46,7 +46,7 @@ The fine log records no correct verdict and no reason an episode ended as it did
 say whether the checker is *right* — only that it runs. `synthetic_log.py` generates logs where
 both are known by construction, and `benchmark_synthetic.py` runs three experiments on them:
 
-* **SE1 (verdict correctness)** — 85 hand-written micro-traces, one per template and variant,
+* **SE1 (verdict correctness)** — 95 hand-written micro-traces, one per template and variant,
   each paired with the verdict the activation semantics prescribe. Covers all 24 implemented
   templates plus activation/correlation conditions, forward and backward time windows, and the
   target-selection modes. Found and fixed a role-reversal defect in the succession decomposition.

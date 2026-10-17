@@ -138,18 +138,17 @@ def generate_contingency_table(df_cases: pd.DataFrame, rule_id: str, outcome_col
     """
     Generate 2x2 table for a specific rule vs outcome.
     Outcome = 1 (Success - No Revent <48h) | Outcome = 0 (Failure)
-    
-    Interpretations:
-    - Adherence (RC-DP): Rule=1 (Satisfied), Rule=0 (Violated)
-        OR > 1: Adherence associated with Success
-    - Safety (SBT-DP, INT): Rule=1 (Violated/Exposed), Rule=0 (Satisfied/Vacuous)
-        OR > 1: Violation associated with Success (unlikely)
-        OR < 1: Violation associated with Failure
-        
+
+    Rule encoding is uniform across ALL rule types (see get_rule_binary):
+    Rule=1 (Violated/Exposed), Rule=0 (Satisfied/Unexposed).
+
+    OR/RR < 1: Violation associated with Failure (expected direction).
+    OR/RR > 1: Violation associated with Success (unexpected direction).
+
     Contingency Table Structure:
-                          Outcome=1 (Success) | Outcome=0 (Failure)
-    Rule=1 (Satisfied/Exposed) | a                  | b
-    Rule=0 (Violated/Unexposed)| c                  | d
+                                Outcome=1 (Success) | Outcome=0 (Failure)
+    Rule=1 (Violated/Exposed)   | a                  | b
+    Rule=0 (Satisfied/Unexposed)| c                  | d
     """
     # Drop rows where either rule or outcome is NaN. For inter-episode rules
     # (outcome_col="next_outcome") the NaN-drop is the censoring step: episodes

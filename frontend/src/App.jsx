@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import SummaryView from './components/SummaryView'
@@ -8,6 +8,9 @@ import RuleBuilder from './components/StudioView/RuleBuilder'
 import AnalysisRunner from './components/StudioView/AnalysisRunner'
 import XESUploadView from './components/UploadView/XESUploadView'
 import { loadRules, rulesKey } from './datasetRules'
+
+// Plotly is large; only fetch it when the Insights page opens.
+const InsightsView = lazy(() => import('./components/InsightsView'))
 
 const BUILTIN_DATASET = { kind: 'builtin', id: 'builtin', name: 'ICU Weaning (built-in)' }
 
@@ -47,6 +50,11 @@ const PAGE_META = {
     title: 'Patient Explorer',
     lead: 'Browse, filter, and sort stays by violation profile. Open any patient timeline with one click.',
   },
+  'results-insights': {
+    eyebrow: 'Results',
+    title: 'Case-Study Insights',
+    lead: 'Magnitude and breadth of deviation: how far adherence moves the outcome, how wide the deviation space is, and how much of it is a charting gap rather than a care gap.',
+  },
 }
 
 function ApiErrorState({ error }) {
@@ -78,6 +86,11 @@ export default function App() {
   const [summaryData, setSummaryData] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [summaryError, setSummaryError] = useState(null)
+
+  // Case-study insight tables (static, exported by case_study/10)
+  const [insightsData, setInsightsData] = useState(null)
+  const [insightsLoading, setInsightsLoading] = useState(true)
+  const [insightsError, setInsightsError] = useState(null)
 
   // Studio API data
   const [rules, setRules] = useState([])
@@ -172,6 +185,14 @@ export default function App() {
       .catch(err => { setSummaryError(err.message); setSummaryLoading(false) })
   }, [])
 
+  // Load case-study insights
+  useEffect(() => {
+    fetch('/data/insights.json')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then(d => { setInsightsData(d); setInsightsLoading(false) })
+      .catch(err => { setInsightsError(err.message); setInsightsLoading(false) })
+  }, [])
+
   // Load Studio API data
   useEffect(() => {
     let cancelled = false
@@ -262,6 +283,23 @@ export default function App() {
           datasetId={activeDatasetId}
           onUploadStale={isUpload ? () => handleDeleteDataset(activeDataset.id) : undefined}
         />
+      )
+    }
+
+    if (activePage === 'results-insights') {
+      if (insightsLoading) return <div className="loading-spinner">Loading insights…</div>
+      if (insightsError) {
+        return (
+          <div className="error-message">
+            Could not load <code>/data/insights.json</code> ({insightsError}). Generate it with{' '}
+            <code>python case_study/10_frontend_insights.py</code>.
+          </div>
+        )
+      }
+      return (
+        <Suspense fallback={<p className="summary-empty">Loading charts…</p>}>
+          <InsightsView insights={insightsData} />
+        </Suspense>
       )
     }
 

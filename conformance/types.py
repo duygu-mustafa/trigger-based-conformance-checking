@@ -61,6 +61,43 @@ NEGATIVE_TEMPLATES = {
 }
 
 
+# Target selection (method.tex, Def. "Target selection"): which candidate target
+# the correlation condition is evaluated on. "any" is standard existential
+# MP-Declare semantics; "earliest"/"latest" evaluate only the chronologically
+# first/last candidate within the time condition.
+TARGET_SELECTION_MODES = ("any", "earliest", "latest")
+_TARGET_SELECTION_ALIASES = {"last": "latest", "first": "earliest"}
+
+# Templates whose target has the form F b or O b. All other templates
+# (alternate, chain, negative, responded existence, ...) admit only "any".
+TARGET_SELECTION_TEMPLATES = {
+    DeclareTemplate.RESPONSE,
+    DeclareTemplate.PRECEDENCE,
+}
+
+
+def normalize_target_selection(value: Optional[str], template: DeclareTemplate) -> str:
+    """Return the canonical target-selection mode, or raise ValueError.
+
+    None/empty maps to "any"; the legacy spellings "last"/"first" map to
+    "latest"/"earliest".
+    """
+    if value is None or str(value).strip() == "":
+        return "any"
+    mode = str(value).strip().lower()
+    mode = _TARGET_SELECTION_ALIASES.get(mode, mode)
+    if mode not in TARGET_SELECTION_MODES:
+        raise ValueError(
+            f"Unknown target_selection '{value}'; expected one of {', '.join(TARGET_SELECTION_MODES)}."
+        )
+    if mode != "any" and template not in TARGET_SELECTION_TEMPLATES:
+        raise ValueError(
+            f"target_selection '{mode}' is not admitted for template '{template.value}'; "
+            "only Response and Precedence support earliest/latest."
+        )
+    return mode
+
+
 @dataclass
 class TimeCondition:
     min_seconds: Optional[float] = None
@@ -86,7 +123,7 @@ class DeclareConstraint:
     label: Optional[str] = None
     activation_condition_title: Optional[str] = None
     target_condition_title: Optional[str] = None
-    target_selection: Optional[str] = None
+    target_selection: Optional[str] = "any"
     context_window_pre_hours: Optional[float] = None
     context_window_post_hours: Optional[float] = None
     # "episode" (default): outcome = same episode's sbt_outcome.
@@ -104,6 +141,7 @@ class DeclareConstraint:
             raise ValueError(
                 f"Template '{self.template.value}' is unary and must not have a target."
             )
+        self.target_selection = normalize_target_selection(self.target_selection, self.template)
         if self.label is None:
             if self.target:
                 self.label = f"{self.template.value}[{self.activation}, {self.target}]"

@@ -76,12 +76,19 @@ def cmp(case_id, trace_df, constraint, label=""):
     )
 
 
+def expect(trace_df, constraint, outcome, label=""):
+    """Assert the current checker's outcome where it intentionally departs from the old one."""
+    res = new_impl("c1", trace_df, constraint)
+    assert res.outcome.value == outcome, f"{label}: got {res.outcome}"
+
+
 class TestAutomataEquivalence(unittest.TestCase):
 
     def test_existence(self):
         c = con(DeclareTemplate.EXISTENCE, "A")
         cmp("c1", make_trace([("A", 0)]), c, "EXISTENCE satisfied")
-        cmp("c1", make_trace([("B", 0)]), c, "EXISTENCE vacuous")
+        # AtLeastOne is activated by the trace start, so a missing A is a violation.
+        expect(make_trace([("B", 0)]), c, "violated", "EXISTENCE violated")
 
     def test_absence(self):
         c = con(DeclareTemplate.ABSENCE, "A")
@@ -146,22 +153,29 @@ class TestAutomataEquivalence(unittest.TestCase):
         c = con(DeclareTemplate.CO_EXISTENCE, "A", "B")
         cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "CO_EXISTENCE satisfied")
         cmp("c1", make_trace([("A", 0)]), c, "CO_EXISTENCE violated")
-        cmp("c1", make_trace([("C", 0)]), c, "CO_EXISTENCE vacuous")
+        expect(make_trace([("C", 0)]), c, "vacuous", "CO_EXISTENCE vacuous")
+        cmp("c1", make_trace([("B", 0)]), c, "CO_EXISTENCE violated by target")
 
     def test_succession(self):
         c = con(DeclareTemplate.SUCCESSION, "A", "B")
-        cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "SUCCESSION satisfied")
+        # The old checker required A to be surrounded by B; the thesis reading
+        # requires every A to be followed by B and every B to be preceded by A.
+        expect(make_trace([("A", 0), ("B", 1)]), c, "satisfied", "SUCCESSION satisfied")
+        expect(make_trace([("B", 0), ("A", 1), ("B", 2)]), c, "violated", "SUCCESSION first B unpreceded")
+        expect(make_trace([("B", 0)]), c, "violated", "SUCCESSION target only")
         cmp("c1", make_trace([("A", 0)]), c, "SUCCESSION violated")
         cmp("c1", make_trace([("C", 0)]), c, "SUCCESSION vacuous")
 
     def test_alternate_succession(self):
         c = con(DeclareTemplate.ALTERNATE_SUCCESSION, "A", "B")
-        cmp("c1", make_trace([("A", 0), ("B", 1), ("A", 2), ("B", 3)]), c, "ALT_SUCCESSION satisfied")
+        expect(make_trace([("A", 0), ("B", 1), ("A", 2), ("B", 3)]), c, "satisfied", "ALT_SUCCESSION satisfied")
+        expect(make_trace([("A", 0), ("B", 1), ("B", 2)]), c, "violated", "ALT_SUCCESSION double B")
         cmp("c1", make_trace([("A", 0), ("A", 1), ("B", 2)]), c, "ALT_SUCCESSION violated")
 
     def test_chain_succession(self):
         c = con(DeclareTemplate.CHAIN_SUCCESSION, "A", "B")
-        cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "CHAIN_SUCCESSION satisfied")
+        expect(make_trace([("A", 0), ("B", 1)]), c, "satisfied", "CHAIN_SUCCESSION satisfied")
+        expect(make_trace([("C", 0), ("B", 1)]), c, "violated", "CHAIN_SUCCESSION B not after A")
         cmp("c1", make_trace([("A", 0), ("C", 1), ("B", 2)]), c, "CHAIN_SUCCESSION violated")
 
     def test_not_responded_existence(self):
@@ -193,16 +207,21 @@ class TestAutomataEquivalence(unittest.TestCase):
         c = con(DeclareTemplate.NOT_CO_EXISTENCE, "A", "B")
         cmp("c1", make_trace([("A", 0)]), c, "NOT_CO_EXISTENCE satisfied")
         cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "NOT_CO_EXISTENCE violated")
+        expect(make_trace([("C", 0)]), c, "vacuous", "NOT_CO_EXISTENCE vacuous")
+        expect(make_trace([("B", 0)]), c, "vacuous", "NOT_CO_EXISTENCE target only vacuous")
 
     def test_not_succession(self):
         c = con(DeclareTemplate.NOT_SUCCESSION, "A", "B")
         cmp("c1", make_trace([("A", 0)]), c, "NOT_SUCCESSION satisfied")
         cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "NOT_SUCCESSION violated")
+        expect(make_trace([("B", 0), ("A", 1)]), c, "satisfied", "NOT_SUCCESSION reverse order")
+        expect(make_trace([("B", 0)]), c, "satisfied", "NOT_SUCCESSION target only")
 
     def test_not_chain_succession(self):
         c = con(DeclareTemplate.NOT_CHAIN_SUCCESSION, "A", "B")
         cmp("c1", make_trace([("A", 0), ("C", 1), ("B", 2)]), c, "NOT_CHAIN_SUCCESSION satisfied")
         cmp("c1", make_trace([("A", 0), ("B", 1)]), c, "NOT_CHAIN_SUCCESSION violated")
+        expect(make_trace([("B", 0), ("A", 1)]), c, "satisfied", "NOT_CHAIN_SUCCESSION reverse pair")
 
 
 if __name__ == "__main__":

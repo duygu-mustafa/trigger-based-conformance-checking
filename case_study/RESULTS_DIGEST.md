@@ -8,14 +8,14 @@ Cohort-restricted view of `data/final/icu_event_log_full.parquet`: only the stay
 
 **Numbers for prose**
 
-- 348,335,961 events across 35,692 ICU stays (30,713 distinct patients); one case = one ICU stay.
+- 348,514,716 events across 35,692 ICU stays (30,713 distinct patients); one case = one ICU stay.
 - 3,027 distinct activity labels drawn from 3,068 MIMIC-IV item ids across 16 source tables.
-- 16,223,682 events (4.7%) carry one of the 24 activity labels the Declare models reason over; the remainder is clinical context.
+- 16,402,437 events (4.7%) carry one of the 24 activity labels the Declare models reason over; the remainder is clinical context.
 - All 24 model activities occur in the log (none missing).
 - Timestamps span 2109-07-25 00:00:00 to 2214-05-07 12:34:00 (104.8 years of *shifted* dates — MIMIC-IV date-shifts each patient, so this is not a real observation window and should not be reported as a study period).
-- Events per stay: median 4,757.5 (IQR 2,444.0–11,101.2, mean 9,759.5, max 418,222.0).
-- Model-activity events per stay: median 244.0 (IQR 140.0–517.0, mean 454.5, max 17,128.0).
-- Distinct activities per stay: median 433.0 (IQR 382.0–487.0, mean 439.1, max 1,018.0).
+- Events per stay: median 4,760.5 (IQR 2,446.0–11,102.2, mean 9,764.5, max 418,222.0).
+- Model-activity events per stay: median 247.0 (IQR 141.0–522.0, mean 459.6, max 17,128.0).
+- Distinct activities per stay: median 433.0 (IQR 382.0–487.0, mean 439.2, max 1,018.0).
 - Observed stay span (h): median 98.5 (IQR 45.0–258.6, mean 297.9, max 52,966.0).
 
 
@@ -28,7 +28,7 @@ Cohort-restricted view of `data/final/icu_event_log_full.parquet`: only the stay
 | ingredientevents | 11,082,611 | 0.032 | 16 |
 | inputevents | 9,522,757 | 0.027 | 321 |
 | labevents | 9,235,803 | 0.027 | 8 |
-| derived_criterion | 7,903,547 | 0.023 | 0 |
+| derived_criterion | 8,082,302 | 0.023 | 0 |
 | datetimeevents | 7,595,098 | 0.022 | 174 |
 | outputevents | 3,943,717 | 0.011 | 71 |
 | ventilator_setting | 3,063,203 | 0.009 | 6 |
@@ -50,6 +50,7 @@ Cohort-restricted view of `data/final/icu_event_log_full.parquet`: only the stay
 | pHMeasured | 554,552 | 33,686 | 0.944 | 9 |
 | InspiratoryEffortMeasured | 409,773 | 28,314 | 0.793 | 4 |
 | TemperatureMeasured | 343,947 | 8,440 | 0.236 | 25 |
+| MentalStatusMeasured | 179,452 | 3,465 | 0.097 | 28 |
 | CuffLeakTest_Performed | 174,360 | 24,723 | 0.693 | 3 |
 | ElectrolyteCorrection_Admin | 167,901 | 20,616 | 0.578 | 3 |
 | AfterloadReduction_Admin | 132,586 | 12,388 | 0.347 | 6 |
@@ -64,7 +65,6 @@ Cohort-restricted view of `data/final/icu_event_log_full.parquet`: only the stay
 | HormonalLab_Test | 10,257 | 5,801 | 0.163 | 1 |
 | HormonalReplacement_Admin | 9,522 | 5,195 | 0.146 | 1 |
 | NIF_Measured | 1,839 | 630 | 0.018 | 1 |
-| MentalStatusMeasured | 697 | 235 | 0.007 | 2 |
 
 
 **Most frequent activities overall (top 10)**
@@ -93,12 +93,12 @@ Stays are split into episodes bounded by `InvasiveVentilationStarted`; conforman
 - 66,848 episodes derived from 35,692 stays (mean 1.87 episodes/stay, median 1, max 49).
 - 23,902 stays (67.0%) produce exactly one episode; the remainder are re-ventilated at least once.
 - 54,988 episodes (82.3%) contain an SBT attempt and enter the statistical analysis; 30,199 stays contribute at least one such episode.
-- Outcomes among evaluable episodes: 31,343 success, 23,645 failure (failure rate 43.0%); 11,428 of the successes are right-censored (the stay ended while the patient was still off invasive ventilation).
+- Outcomes among evaluable episodes: 30,366 success, 24,622 failure (failure rate 44.8%); 10,464 of the successes are right-censored (the stay ended while the patient was still off invasive ventilation).
 - Inter-episode rules lose 62.8% of episodes to censoring: only 24,883 episodes have a subsequent episode with an evaluable outcome.
 - Episode duration (h): median 48.0 (IQR 23.7–99.8, p95 295.2).
 - Invasive ventilation duration (h): median 11.3 (IQR 4.0–28.0, p95 107.0).
 - SBT outcome-observation window (h; capped at 48 h, ends with the episode on failure — not the duration of the breathing trial): median 28.0 (IQR 8.0–48.0, p95 48.0).
-- Mandatory violations per episode: median 4.0 (mean 4.04, IQR 3.0–6.0, max 10).
+- Mandatory violations per episode: median 4.0 (mean 3.98, IQR 3.0–6.0, max 10).
 
 
 **Episodes per stay**
@@ -121,10 +121,10 @@ Stays are split into episodes bounded by `InvasiveVentilationStarted`; conforman
 
 | Outcome | Episodes | Share of all episodes | Share of SBT episodes |
 | --- | --- | --- | --- |
-| failure | 23,645 | 0.354 | 0.430 |
-| success | 19,915 | 0.298 | 0.362 |
+| failure | 24,622 | 0.368 | 0.448 |
+| success | 19,902 | 0.298 | 0.362 |
 | no evaluable outcome | 11,860 | 0.177 |  |
-| success (right-censored) | 11,428 | 0.171 | 0.208 |
+| success (right-censored) | 10,464 | 0.157 | 0.190 |
 
 
 ## 2b. Mixed outcomes within a stay
@@ -157,7 +157,7 @@ Same clinical model, same stays, evaluated a second time with segmentation disab
 
 **Numbers for prose**
 
-- 24,984 stay-level violations at episode level collapse to 25,992 at trace level across 20 comparable constraints (1 excluded as not comparable — see below).
+- 24,866 stay-level violations at episode level collapse to 25,880 at trace level across 20 comparable constraints (1 excluded as not comparable — see below).
 - 434 stays are flagged violated at episode level but not at trace level: an overall masking rate of 1.7% — a violation in one trial discharged or hidden once all trials are pooled into a single trace.
 - 1,745 of 2,000 stays disagree between the two levels on at least one constraint.
 - Mean activation loss under pooling: 47.2% across comparable constraints — activations from separate trials merge into a single per-stay activation, which is also why vacuity rates drop at trace level.
@@ -183,7 +183,7 @@ Same clinical model, same stays, evaluated a second time with segmentation disab
 | RC-DP-03 | 1,768 | 1,771 | 0 | 0 | 0.677 | 3.81 |
 | RC-DP-04 | 1,876 | 1,882 | 0 | 0 | 0.677 | 3.7 |
 | RC-DP-05 | 1,728 | 1,744 | 0 | 0 | 0.677 | 3.81 |
-| RC-DP-06 | 1,999 | 2,000 | 0 | 0 | 0.677 | 3.62 |
+| RC-DP-06 | 1,881 | 1,888 | 0 | 0 | 0.677 | 3.66 |
 | RC-DP-07 | 1,744 | 1,810 | 0 | 0 | 0.677 | 3.72 |
 | SBT-TM-01 | 1,345 | 1,368 | 0 | 0 | 0.534 | 4.03 |
 | SBT-TM-01-early | 689 | 709 | 0 | 0 | 0.534 | 4.94 |
@@ -203,10 +203,10 @@ Same clinical model, same stays, evaluated a second time with segmentation disab
 
 **Numbers for prose**
 
-- 21 constraints evaluated over 66,848 episodes; mean violation rate among activations 58.5%.
-- Most-violated constraints (activation-conditional): RC-DP-06 100.0%, INT-DX-05 96.9%, INT-TR-05 95.4%.
+- 21 constraints evaluated over 66,848 episodes; mean violation rate among activations 58.1%.
+- Most-violated constraints (activation-conditional): INT-DX-05 96.9%, INT-TR-05 95.4%, RC-DP-06 92.6%.
 - Least-violated: INT-SEQ-01 8.6%, INT-COMPOSITE-01 15.7%, RC-DP-02 20.7%.
-- Largest outcome gap: RC-DP-03 is violated in 85.2% of failing vs 63.2% of succeeding episodes (difference 22.0%).
+- Largest outcome gap: RC-DP-03 is violated in 85.3% of failing vs 62.4% of succeeding episodes (difference 23.0%).
 - Vacuity varies strongly by model group: Failure correction 64.2%; Readiness assessment 17.7%; SBT execution 72.1%.
 
 
@@ -215,27 +215,27 @@ Same clinical model, same stays, evaluated a second time with segmentation disab
 
 | ID | Group | Severity | Outcome used | Activations | Vacuous | Activation rate | Violation rate | Viol. rate (success) | Viol. rate (failure) | Difference |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| INT-DX-05 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.969 | 0.972 | 0.966 | -0.006 |
-| INT-TR-05 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.954 | 0.949 | 0.960 | 0.011 |
+| INT-DX-05 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.969 | 0.973 | 0.966 | -0.006 |
+| INT-TR-05 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.954 | 0.948 | 0.960 | 0.012 |
 | INT-SEQ-02 | Failure correction | info | same episode | 5,472 | 61,376 | 0.082 | 0.888 | 0.889 | 0.875 | -0.014 |
-| INT-TR-03 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.880 | 0.867 | 0.892 | 0.025 |
-| INT-TR-04 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.740 | 0.736 | 0.739 | 0.003 |
-| INT-TR-02 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.739 | 0.718 | 0.743 | 0.025 |
-| INT-TR-01 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.712 | 0.730 | 0.673 | -0.056 |
+| INT-TR-03 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.880 | 0.866 | 0.892 | 0.027 |
+| INT-TR-04 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.740 | 0.735 | 0.739 | 0.004 |
+| INT-TR-02 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.739 | 0.713 | 0.746 | 0.033 |
+| INT-TR-01 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.712 | 0.731 | 0.674 | -0.056 |
 | INT-DX-04 | Failure correction | info | next episode | 23,645 | 43,203 | 0.354 | 0.338 | 0.327 | 0.336 | 0.009 |
-| INT-COMPOSITE-01 | Failure correction | mandatory | next episode | 24,789 | 0 | 1.000 | 0.157 | 0.166 | 0.132 | -0.034 |
-| INT-SEQ-01 | Failure correction | info | same episode | 28,339 | 38,509 | 0.424 | 0.086 | 0.060 | 0.126 | 0.066 |
-| RC-DP-06 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 1.000 | 1.000 | 1.000 | 0.000 |
-| RC-DP-04 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.869 | 0.849 | 0.896 | 0.047 |
-| RC-DP-03 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.727 | 0.632 | 0.852 | 0.220 |
-| RC-DP-05 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.692 | 0.665 | 0.728 | 0.063 |
-| RC-DP-07 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.587 | 0.643 | 0.514 | -0.128 |
-| RC-DP-01 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.279 | 0.263 | 0.300 | 0.037 |
-| RC-DP-02 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.207 | 0.190 | 0.230 | 0.040 |
-| SBT-TM-01 | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.502 | 0.493 | 0.353 | -0.140 |
-| SBT-TM-02 | SBT execution | mandatory | same episode | 3,741 | 63,107 | 0.056 | 0.392 | 1.000 | 0.000 | -1.000 |
-| SBT-TM-01-late | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.332 | 0.179 | 0.224 | 0.045 |
-| SBT-TM-01-early | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.232 | 0.314 | 0.258 | -0.056 |
+| INT-COMPOSITE-01 | Failure correction | mandatory | next episode | 24,789 | 0 | 1.000 | 0.157 | 0.167 | 0.133 | -0.034 |
+| INT-SEQ-01 | Failure correction | info | same episode | 28,339 | 38,509 | 0.424 | 0.086 | 0.058 | 0.126 | 0.068 |
+| RC-DP-06 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.926 | 0.924 | 0.927 | 0.003 |
+| RC-DP-04 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.869 | 0.848 | 0.896 | 0.048 |
+| RC-DP-03 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.727 | 0.624 | 0.853 | 0.230 |
+| RC-DP-05 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.692 | 0.661 | 0.731 | 0.070 |
+| RC-DP-07 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.587 | 0.641 | 0.521 | -0.121 |
+| RC-DP-01 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.279 | 0.259 | 0.304 | 0.045 |
+| RC-DP-02 | Readiness assessment | mandatory | same episode | 54,988 | 11,860 | 0.823 | 0.207 | 0.183 | 0.237 | 0.055 |
+| SBT-TM-01 | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.502 | 0.488 | 0.361 | -0.127 |
+| SBT-TM-02 | SBT execution | mandatory | same episode | 3,741 | 63,107 | 0.056 | 0.392 | 1.000 | 0.058 | -0.942 |
+| SBT-TM-01-late | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.332 | 0.171 | 0.228 | 0.057 |
+| SBT-TM-01-early | SBT execution | mandatory | next episode | 23,645 | 43,203 | 0.354 | 0.232 | 0.316 | 0.258 | -0.058 |
 
 
 **By model group**
@@ -244,7 +244,7 @@ Same clinical model, same stays, evaluated a second time with segmentation disab
 | Group | Constraints | Violated | Satisfied | Vacuous | Violation rate | Vacuity rate |
 | --- | --- | --- | --- | --- | --- | --- |
 | Failure correction | 10 | 137,260 | 86,855 | 402,306 | 0.612 | 0.642 |
-| Readiness assessment | 7 | 239,806 | 145,110 | 83,020 | 0.623 | 0.177 |
+| Readiness assessment | 7 | 235,742 | 149,174 | 83,020 | 0.612 | 0.177 |
 | SBT execution | 4 | 26,662 | 48,014 | 192,716 | 0.357 | 0.721 |
 
 
@@ -293,22 +293,22 @@ Fisher's exact test per constraint on the 2x2 table of **exposure = constraint v
 
 | ID | Clinical rule | Outcome | Violated (n) | Satisfied (n) | OR | CI low | CI high | p (FDR) | Relevance |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| RC-DP-03 | Hemoglobin criterion must be met at SBT start | same_episode | 39,950 | 15,038 | 0.299 | 0.286 | 0.312 | 0.000 | useful |
-| INT-SEQ-01 | Electrolyte correction must be preceded by electrolyte or blood gas testing | same_episode | 1,983 | 22,209 | 0.441 | 0.402 | 0.484 | 0.000 | useful |
-| SBT-TM-01 | After SBT failure, the next SBT attempt must occur on the following calendar day | next_episode | 7,860 | 11,175 | 1.785 | 1.683 | 1.892 | 0.000 | harmful |
-| RC-DP-07 | Inspiratory effort criterion must be met at SBT start | same_episode | 32,296 | 22,692 | 1.699 | 1.642 | 1.759 | 0.000 | harmful |
-| RC-DP-04 | Temperature criterion must be met at SBT start | same_episode | 47,799 | 7,189 | 0.650 | 0.617 | 0.685 | 0.000 | useful |
-| RC-DP-05 | Vasopressor criterion must be met at SBT start | same_episode | 38,074 | 16,914 | 0.742 | 0.715 | 0.770 | 0.000 | useful |
-| SBT-TM-01-late | After SBT failure, the next SBT attempt must occur no later than the following calendar day | next_episode | 3,898 | 15,137 | 0.753 | 0.701 | 0.810 | 0.000 | useful |
-| SBT-TM-01-early | After SBT failure, the next SBT attempt must not occur on the same calendar day | next_episode | 5,371 | 13,664 | 1.316 | 1.235 | 1.402 | 0.000 | harmful |
-| INT-TR-01 | Bronchodilator present in post-failure intervention window | next_episode | 13,277 | 5,758 | 1.309 | 1.229 | 1.395 | 0.000 | harmful |
-| INT-COMPOSITE-01 | At least one failure intervention must occur after SBT failure | next_episode | 2,028 | 11,911 | 1.306 | 1.188 | 1.436 | 0.000 | harmful |
-| INT-TR-05 | Hormonal replacement present in post-failure intervention window | next_episode | 18,186 | 849 | 0.772 | 0.673 | 0.886 | 0.000 | useful |
-| RC-DP-02 | pH criterion must be met at SBT start | same_episode | 11,381 | 43,607 | 0.787 | 0.755 | 0.820 | 0.000 | useful |
-| INT-TR-03 | Afterload reduction present in post-failure intervention window | next_episode | 16,774 | 2,261 | 0.787 | 0.721 | 0.860 | 0.000 | useful |
-| INT-DX-05 | Cortisol and thyroid function labs drawn after SBT failure | next_episode | 18,441 | 594 | 1.227 | 1.037 | 1.452 | 0.023 | harmful |
-| RC-DP-01 | Oxygenation criterion must be met at SBT start | same_episode | 15,334 | 39,654 | 0.832 | 0.802 | 0.864 | 0.000 | useful |
-| INT-TR-02 | Diuretic present in post-failure intervention window | next_episode | 13,939 | 5,096 | 0.882 | 0.827 | 0.941 | 0.000 | useful |
+| RC-DP-03 | Hemoglobin criterion must be met at SBT start | same_episode | 39,950 | 15,038 | 0.285 | 0.273 | 0.297 | 0.000 | useful |
+| INT-SEQ-01 | Electrolyte correction must be preceded by electrolyte or blood gas testing | same_episode | 1,983 | 22,209 | 0.427 | 0.389 | 0.468 | 0.000 | useful |
+| SBT-TM-01 | After SBT failure, the next SBT attempt must occur on the following calendar day | next_episode | 7,860 | 11,175 | 1.687 | 1.591 | 1.789 | 0.000 | harmful |
+| RC-DP-07 | Inspiratory effort criterion must be met at SBT start | same_episode | 32,296 | 22,692 | 1.647 | 1.592 | 1.705 | 0.000 | harmful |
+| RC-DP-04 | Temperature criterion must be met at SBT start | same_episode | 47,799 | 7,189 | 0.651 | 0.618 | 0.685 | 0.000 | useful |
+| SBT-TM-01-late | After SBT failure, the next SBT attempt must occur no later than the following calendar day | next_episode | 3,898 | 15,137 | 0.699 | 0.649 | 0.752 | 0.000 | useful |
+| RC-DP-05 | Vasopressor criterion must be met at SBT start | same_episode | 38,074 | 16,914 | 0.718 | 0.692 | 0.745 | 0.000 | useful |
+| RC-DP-02 | pH criterion must be met at SBT start | same_episode | 11,381 | 43,607 | 0.718 | 0.689 | 0.749 | 0.000 | useful |
+| SBT-TM-01-early | After SBT failure, the next SBT attempt must not occur on the same calendar day | next_episode | 5,371 | 13,664 | 1.329 | 1.247 | 1.416 | 0.000 | harmful |
+| INT-TR-05 | Hormonal replacement present in post-failure intervention window | next_episode | 18,186 | 849 | 0.758 | 0.661 | 0.870 | 0.000 | useful |
+| INT-TR-01 | Bronchodilator present in post-failure intervention window | next_episode | 13,277 | 5,758 | 1.310 | 1.229 | 1.396 | 0.000 | harmful |
+| INT-COMPOSITE-01 | At least one failure intervention must occur after SBT failure | next_episode | 2,028 | 11,911 | 1.308 | 1.189 | 1.439 | 0.000 | harmful |
+| INT-TR-03 | Afterload reduction present in post-failure intervention window | next_episode | 16,774 | 2,261 | 0.778 | 0.713 | 0.850 | 0.000 | useful |
+| RC-DP-01 | Oxygenation criterion must be met at SBT start | same_episode | 15,334 | 39,654 | 0.798 | 0.769 | 0.829 | 0.000 | useful |
+| INT-DX-05 | Cortisol and thyroid function labs drawn after SBT failure | next_episode | 18,441 | 594 | 1.243 | 1.049 | 1.473 | 0.015 | harmful |
+| INT-TR-02 | Diuretic present in post-failure intervention window | next_episode | 13,939 | 5,096 | 0.845 | 0.792 | 0.902 | 0.000 | useful |
 
 
 **All constraints**
@@ -316,27 +316,27 @@ Fisher's exact test per constraint on the 2x2 table of **exposure = constraint v
 
 | ID | Outcome | Censored | a | b | c | d | OR | CI low | CI high | RR | p (raw) | p (FDR) | Sig. FDR | Degenerate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| RC-DP-03 | same_episode | 0 | 19,809 | 20,141 | 11,534 | 3,504 | 0.299 | 0.286 | 0.312 | 0.646 | 0 | 0 | True | False |
-| SBT-TM-02 | same_episode | 0 | 1,467 | 0 | 0 | 2,274 | 1.34e+07 | 2.65e+05 | 6.73e+08 | 4.55e+03 | 0 | 0 | True | True |
-| RC-DP-07 | same_episode | 0 | 20,140 | 12,156 | 11,203 | 11,489 | 1.7 | 1.64 | 1.76 | 1.26 | 2.42e-201 | 1.69e-200 | True | False |
-| SBT-TM-01 | next_episode | 4,610 | 4,034 | 3,826 | 4,150 | 7,025 | 1.78 | 1.68 | 1.89 | 1.38 | 2.65e-84 | 1.39e-83 | True | False |
-| INT-SEQ-01 | same_episode | 0 | 963 | 1,020 | 15,137 | 7,072 | 0.441 | 0.402 | 0.484 | 0.713 | 1.84e-66 | 7.74e-66 | True | False |
-| RC-DP-04 | same_episode | 0 | 26,606 | 21,193 | 4,737 | 2,452 | 0.65 | 0.617 | 0.685 | 0.845 | 4.87e-61 | 1.71e-60 | True | False |
-| RC-DP-05 | same_episode | 0 | 20,854 | 17,220 | 10,489 | 6,425 | 0.742 | 0.715 | 0.77 | 0.883 | 9.32e-57 | 2.8e-56 | True | False |
-| RC-DP-02 | same_episode | 0 | 5,952 | 5,429 | 25,391 | 18,216 | 0.787 | 0.755 | 0.82 | 0.898 | 8.37e-30 | 2.2e-29 | True | False |
-| RC-DP-01 | same_episode | 0 | 8,241 | 7,093 | 23,102 | 16,552 | 0.832 | 0.802 | 0.864 | 0.922 | 1.08e-21 | 2.53e-21 | True | False |
-| SBT-TM-01-early | next_episode | 4,610 | 2,570 | 2,801 | 5,614 | 8,050 | 1.32 | 1.23 | 1.4 | 1.16 | 2.62e-17 | 5.5e-17 | True | False |
-| INT-TR-01 | next_episode | 4,610 | 5,971 | 7,306 | 2,213 | 3,545 | 1.31 | 1.23 | 1.39 | 1.17 | 4.99e-17 | 9.52e-17 | True | False |
-| SBT-TM-01-late | next_episode | 4,610 | 1,464 | 2,434 | 6,720 | 8,417 | 0.753 | 0.701 | 0.81 | 0.846 | 1.2e-14 | 2.11e-14 | True | False |
-| INT-COMPOSITE-01 | next_episode | 10,850 | 921 | 1,107 | 4,634 | 7,277 | 1.31 | 1.19 | 1.44 | 1.17 | 3.81e-08 | 6.15e-08 | True | False |
-| INT-TR-03 | next_episode | 4,610 | 7,094 | 9,680 | 1,090 | 1,171 | 0.787 | 0.721 | 0.86 | 0.877 | 1.17e-07 | 1.75e-07 | True | False |
-| INT-TR-02 | next_episode | 4,610 | 5,878 | 8,061 | 2,306 | 2,790 | 0.882 | 0.827 | 0.941 | 0.932 | 0.000153 | 0.000214 | True | False |
-| INT-TR-05 | next_episode | 4,610 | 7,767 | 10,419 | 417 | 432 | 0.772 | 0.673 | 0.886 | 0.87 | 0.000256 | 0.000336 | True | False |
-| INT-DX-05 | next_episode | 4,610 | 7,957 | 10,484 | 227 | 367 | 1.23 | 1.04 | 1.45 | 1.13 | 0.0183 | 0.0226 | True | False |
-| INT-SEQ-02 | same_episode | 0 | 2,872 | 1,186 | 360 | 170 | 1.14 | 0.941 | 1.39 | 1.04 | 0.188 | 0.219 | False | False |
-| INT-DX-04 | next_episode | 4,610 | 2,679 | 3,648 | 5,505 | 7,203 | 0.961 | 0.904 | 1.02 | 0.977 | 0.203 | 0.224 | False | False |
-| RC-DP-06 | same_episode | 0 | 31,332 | 23,640 | 11 | 5 | 0.602 | 0.209 | 1.73 | 0.829 | 0.452 | 0.474 | False | False |
-| INT-TR-04 | next_episode | 4,610 | 6,020 | 8,016 | 2,164 | 2,835 | 0.984 | 0.922 | 1.05 | 0.991 | 0.63 | 0.63 | False | False |
+| RC-DP-03 | same_episode | 0 | 18,941 | 21,009 | 11,425 | 3,613 | 0.285 | 0.273 | 0.297 | 0.624 | 0 | 0 | True | False |
+| SBT-TM-02 | same_episode | 0 | 1,328 | 139 | 0 | 2,274 | 4.33e+04 | 2.69e+03 | 6.97e+05 | 4.12e+03 | 0 | 0 | True | True |
+| RC-DP-07 | same_episode | 0 | 19,478 | 12,818 | 10,888 | 11,804 | 1.65 | 1.59 | 1.7 | 1.26 | 4.02e-180 | 2.82e-179 | True | False |
+| INT-SEQ-01 | same_episode | 0 | 914 | 1,069 | 14,815 | 7,394 | 0.427 | 0.389 | 0.468 | 0.691 | 2.21e-72 | 1.16e-71 | True | False |
+| RC-DP-05 | same_episode | 0 | 20,076 | 17,998 | 10,290 | 6,624 | 0.718 | 0.692 | 0.745 | 0.867 | 4.52e-70 | 1.9e-69 | True | False |
+| SBT-TM-01 | next_episode | 4,610 | 3,823 | 4,037 | 4,018 | 7,157 | 1.69 | 1.59 | 1.79 | 1.35 | 1.99e-68 | 6.98e-68 | True | False |
+| RC-DP-04 | same_episode | 0 | 25,749 | 22,050 | 4,617 | 2,572 | 0.651 | 0.618 | 0.685 | 0.839 | 8.54e-62 | 2.56e-61 | True | False |
+| RC-DP-02 | same_episode | 0 | 5,543 | 5,838 | 24,823 | 18,784 | 0.718 | 0.689 | 0.749 | 0.856 | 2.78e-55 | 7.29e-55 | True | False |
+| RC-DP-01 | same_episode | 0 | 7,850 | 7,484 | 22,516 | 17,138 | 0.798 | 0.769 | 0.829 | 0.902 | 4.15e-32 | 9.69e-32 | True | False |
+| SBT-TM-01-late | next_episode | 4,610 | 1,343 | 2,555 | 6,498 | 8,639 | 0.699 | 0.649 | 0.752 | 0.803 | 5.08e-22 | 1.07e-21 | True | False |
+| SBT-TM-01-early | next_episode | 4,610 | 2,480 | 2,891 | 5,361 | 8,303 | 1.33 | 1.25 | 1.42 | 1.18 | 2.65e-18 | 5.05e-18 | True | False |
+| INT-TR-01 | next_episode | 4,610 | 5,729 | 7,548 | 2,112 | 3,646 | 1.31 | 1.23 | 1.4 | 1.18 | 6.5e-17 | 1.14e-16 | True | False |
+| INT-TR-03 | next_episode | 4,610 | 6,787 | 9,987 | 1,054 | 1,207 | 0.778 | 0.713 | 0.85 | 0.868 | 2.75e-08 | 4.44e-08 | True | False |
+| INT-COMPOSITE-01 | next_episode | 10,850 | 880 | 1,148 | 4,401 | 7,510 | 1.31 | 1.19 | 1.44 | 1.17 | 4.33e-08 | 6.49e-08 | True | False |
+| INT-TR-02 | next_episode | 4,610 | 5,589 | 8,350 | 2,252 | 2,844 | 0.845 | 0.792 | 0.902 | 0.907 | 3.92e-07 | 5.49e-07 | True | False |
+| INT-TR-05 | next_episode | 4,610 | 7,436 | 10,750 | 405 | 444 | 0.758 | 0.661 | 0.87 | 0.857 | 9.9e-05 | 0.00013 | True | False |
+| INT-DX-05 | next_episode | 4,610 | 7,626 | 10,815 | 215 | 379 | 1.24 | 1.05 | 1.47 | 1.14 | 0.0124 | 0.0153 | True | False |
+| INT-SEQ-02 | same_episode | 0 | 2,814 | 1,244 | 352 | 178 | 1.14 | 0.944 | 1.39 | 1.04 | 0.178 | 0.207 | False | False |
+| RC-DP-06 | same_episode | 0 | 28,073 | 22,835 | 2,293 | 1,787 | 0.958 | 0.898 | 1.02 | 0.981 | 0.196 | 0.217 | False | False |
+| INT-DX-04 | next_episode | 4,610 | 2,566 | 3,761 | 5,275 | 7,433 | 0.961 | 0.904 | 1.02 | 0.977 | 0.211 | 0.222 | False | False |
+| INT-TR-04 | next_episode | 4,610 | 5,765 | 8,271 | 2,076 | 2,923 | 0.981 | 0.919 | 1.05 | 0.989 | 0.581 | 0.581 | False | False |
 
 
 ## 5. Sensitivity to vacuous-satisfaction handling
@@ -345,33 +345,33 @@ Two encodings of the exposure variable: *activations-only* (vacuous episodes dro
 
 **Numbers for prose**
 
-- 1 constraints reverse the direction of association between encodings (INT-DX-05); 5 change relevance class.
+- 1 constraints reverse the direction of association between encodings (INT-DX-05); 4 change relevance class.
 
 
 
 | ID | Outcome | Violated (act.-only) | OR (act.-only) | Violated (pooled) | OR (pooled) | Direction flips | Relevance changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| RC-DP-03 | same_episode | 39,950 | 0.299 | 39,950 | 0.299 | False | False |
-| INT-SEQ-01 | same_episode | 1,983 | 0.441 | 1,983 | 0.703 | False | False |
-| RC-DP-06 | same_episode | 54,972 | 0.602 | 54,972 | 0.602 | False | False |
-| RC-DP-04 | same_episode | 47,799 | 0.65 | 47,799 | 0.65 | False | False |
-| RC-DP-05 | same_episode | 38,074 | 0.742 | 38,074 | 0.742 | False | False |
-| SBT-TM-01-late | next_episode | 3,898 | 0.753 | 3,898 | 0.708 | False | False |
-| INT-TR-05 | next_episode | 18,186 | 0.772 | 18,186 | 0.707 | False | False |
-| RC-DP-02 | same_episode | 11,381 | 0.787 | 11,381 | 0.787 | False | False |
-| INT-TR-03 | next_episode | 16,774 | 0.787 | 16,774 | 0.718 | False | False |
-| RC-DP-01 | same_episode | 15,334 | 0.832 | 15,334 | 0.832 | False | False |
-| INT-TR-02 | next_episode | 13,939 | 0.882 | 13,939 | 0.786 | False | False |
-| INT-DX-04 | next_episode | 6,327 | 0.961 | 6,327 | 0.885 | False | True |
-| INT-TR-04 | next_episode | 14,036 | 0.984 | 14,036 | 0.845 | False | True |
-| INT-SEQ-02 | same_episode | 4,058 | 1.14 | 4,058 | 1.91 | False | True |
-| INT-DX-05 | next_episode | 18,441 | 1.23 | 18,441 | 0.758 | True | True |
+| RC-DP-03 | same_episode | 39,950 | 0.285 | 39,950 | 0.285 | False | False |
+| INT-SEQ-01 | same_episode | 1,983 | 0.427 | 1,983 | 0.684 | False | False |
+| RC-DP-04 | same_episode | 47,799 | 0.651 | 47,799 | 0.651 | False | False |
+| SBT-TM-01-late | next_episode | 3,898 | 0.699 | 3,898 | 0.662 | False | False |
+| RC-DP-05 | same_episode | 38,074 | 0.718 | 38,074 | 0.718 | False | False |
+| RC-DP-02 | same_episode | 11,381 | 0.718 | 11,381 | 0.718 | False | False |
+| INT-TR-05 | next_episode | 18,186 | 0.758 | 18,186 | 0.719 | False | False |
+| INT-TR-03 | next_episode | 16,774 | 0.778 | 16,774 | 0.726 | False | False |
+| RC-DP-01 | same_episode | 15,334 | 0.798 | 15,334 | 0.798 | False | False |
+| INT-TR-02 | next_episode | 13,939 | 0.845 | 13,939 | 0.772 | False | False |
+| RC-DP-06 | same_episode | 50,908 | 0.958 | 50,908 | 0.958 | False | False |
+| INT-DX-04 | next_episode | 6,327 | 0.961 | 6,327 | 0.891 | False | True |
+| INT-TR-04 | next_episode | 14,036 | 0.981 | 14,036 | 0.852 | False | True |
+| INT-SEQ-02 | same_episode | 4,058 | 1.14 | 4,058 | 1.92 | False | True |
+| INT-DX-05 | next_episode | 18,441 | 1.24 | 18,441 | 0.775 | True | True |
 | INT-COMPOSITE-01 | next_episode | 2,028 | 1.31 | 2,028 | 1.31 | False | False |
-| INT-TR-01 | next_episode | 13,277 | 1.31 | 13,277 | 1.04 | False | True |
-| SBT-TM-01-early | next_episode | 5,371 | 1.32 | 5,371 | 1.19 | False | False |
-| RC-DP-07 | same_episode | 32,296 | 1.7 | 32,296 | 1.7 | False | False |
-| SBT-TM-01 | next_episode | 7,860 | 1.78 | 7,860 | 1.52 | False | False |
-| SBT-TM-02 | same_episode | 1,467 | 1.34e+07 | 1,467 | 2.32e+03 | False | False |
+| INT-TR-01 | next_episode | 13,277 | 1.31 | 13,277 | 1.05 | False | False |
+| SBT-TM-01-early | next_episode | 5,371 | 1.33 | 5,371 | 1.21 | False | False |
+| RC-DP-07 | same_episode | 32,296 | 1.65 | 32,296 | 1.65 | False | False |
+| SBT-TM-01 | next_episode | 7,860 | 1.69 | 7,860 | 1.45 | False | False |
+| SBT-TM-02 | same_episode | 1,467 | 4.33e+04 | 1,467 | 8.06 | False | False |
 
 
 ## 6. Figures

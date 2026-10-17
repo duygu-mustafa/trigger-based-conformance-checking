@@ -41,6 +41,7 @@ export default function UploadedLogRunner({ uploadInfo, datasetId, onStale }) {
       target: r.target || null,
       min_gap_hours: r.min_gap_hours || null,
       max_gap_hours: r.max_gap_hours || null,
+      target_selection: r.target_selection || 'any',
       activation_condition_expr: r.activation_condition_expr || null,
       correlation_condition_expr: r.correlation_condition_expr || null,
       rationale: r.rationale || '',

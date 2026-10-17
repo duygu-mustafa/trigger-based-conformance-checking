@@ -266,6 +266,7 @@ def _parse_constraint(
         activation_condition_title=activation_title,
         target_condition_title=correlation_title,
         outcome_scope=str(raw.get("outcome_scope") or "episode"),
+        target_selection=raw.get("target_selection"),
     )
 
     # Attach additional metadata used by downstream exporters/UI.
@@ -273,7 +274,6 @@ def _parse_constraint(
     constraint.description = str(raw.get("description") or "")
     constraint.rationale = str(raw.get("rationale") or "")
     constraint.semantics = raw.get("semantics")
-    constraint.target_selection = raw.get("target_selection")
     constraint.activation_condition_raw = activation_cond
     constraint.target_condition_raw = correlation_cond
     obs_window = raw.get("observation_window_hours")

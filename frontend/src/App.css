@@ -5818,3 +5818,431 @@
   gap: 1rem;
 }
 
+
+/* ============================================================
+   CASE-STUDY INSIGHTS VIEW
+   ============================================================ */
+
+.insights-view .insight-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.insight-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.insight-tab {
+  padding: 0.55rem 1.1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.insight-tab:hover {
+  color: var(--color-text-main);
+}
+
+.insight-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.insight-note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border-light);
+  padding-top: 0.7rem;
+}
+
+.insight-footer {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.insight-chart {
+  width: 100%;
+  min-height: 300px;
+}
+
+.insight-chart-loading {
+  padding: 2rem 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* ── Row lists (bars with a label and a metric) ─────────────── */
+
+.insight-rowlist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.insight-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.insight-row.compact {
+  gap: 0.15rem;
+}
+
+.insight-row-button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.insight-row-button:hover {
+  background: var(--color-neutral-bg);
+}
+
+.insight-row-button.selected {
+  border-color: var(--color-primary);
+  background: var(--color-neutral-bg);
+}
+
+.insight-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.insight-row-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.insight-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-main);
+}
+
+.insight-row-meta {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.insight-chip {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.insight-chip.good {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.insight-chip.bad {
+  background: var(--color-violation-bg);
+  color: var(--color-violation);
+}
+
+.insight-chip.neutral {
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral);
+}
+
+/* ── Horizontal tracks ──────────────────────────────────────── */
+
+.insight-track {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--color-neutral-bg);
+  overflow: hidden;
+}
+
+.insight-track.thin {
+  height: 10px;
+}
+
+.insight-track-fill {
+  height: 100%;
+  border-radius: 4px;
+  opacity: 0.85;
+}
+
+.insight-track-ref {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dashed var(--color-neutral);
+  z-index: 2;
+}
+
+.insight-track-value {
+  position: absolute;
+  top: 0;
+  right: 0.4rem;
+  line-height: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+/* ── Stacked composition bars ───────────────────────────────── */
+
+.insight-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.insight-stack {
+  display: flex;
+  height: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.insight-stack-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(15, 31, 46, 0.35);
+  min-width: 0;
+}
+
+.insight-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.insight-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.insight-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ── Profile chips ──────────────────────────────────────────── */
+
+.insight-profile-chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.insight-mini-chip {
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: var(--color-neutral-bg);
+  border: 1px solid var(--color-border-light);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.insight-detail {
+  border-top: 1px solid var(--color-border-light);
+  padding-top: 0.8rem;
+}
+
+.insight-detail h4 {
+  margin: 0 0 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--color-accent);
+}
+
+.insight-detail-head {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.insight-detail-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--color-text-main);
+}
+
+.insight-detail-list.bad::marker,
+.insight-detail-list.bad li::marker {
+  color: var(--color-violation);
+}
+
+.insight-detail-list.good::marker,
+.insight-detail-list.good li::marker {
+  color: var(--color-success);
+}
+
+/* ── Inline KPI strip inside a card ─────────────────────────── */
+
+.insight-inline-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.insight-inline-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.insight-inline-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  line-height: 1.1;
+}
+
+.insight-inline-label {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+/* ── Co-violation heatmap ───────────────────────────────────── */
+
+.insight-heatmap-wrapper {
+  overflow-x: auto;
+}
+
+.insight-heatmap {
+  border-collapse: collapse;
+  font-size: 0.74rem;
+}
+
+.insight-heatmap th,
+.insight-heatmap td {
+  padding: 0.35rem 0.5rem;
+  text-align: center;
+  border: 1px solid var(--color-border-light);
+}
+
+.insight-heatmap thead th {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+
+.insight-heatmap-corner {
+  font-family: inherit !important;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--color-text-muted) !important;
+  text-align: left !important;
+}
+
+.insight-heatmap tbody th {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--color-accent);
+}
+
+.insight-heatmap-n {
+  display: block;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.insight-heatmap-cell {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-main);
+}
+
+.insight-heatmap-cell.diag {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--color-neutral-bg),
+    var(--color-neutral-bg) 4px,
+    #fff 4px,
+    #fff 8px
+  );
+  color: var(--color-text-muted);
+}
+
+/* ── Constraint picker (attempt trend) ──────────────────────── */
+
+.insight-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.insight-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-light);
+  background: var(--color-bg-card);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.insight-pick:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text-main);
+}
+
+.insight-pick.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.insight-pick-delta {
+  font-weight: 500;
+  opacity: 0.8;
+}

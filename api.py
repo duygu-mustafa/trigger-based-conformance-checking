@@ -289,6 +289,7 @@ def _constraint_to_dict(c: Any) -> dict[str, Any]:
         "correlation_logic": _detect_logic(str(correlation_expr)) if correlation_chips else "AND",
         "target_condition_title": getattr(c, "target_condition_title", None),
         "semantics": getattr(c, "semantics", None),
+        "target_selection": getattr(c, "target_selection", None) or "any",
         "severity": _severity_for(str(rule_id)),
     }
 
@@ -416,6 +417,7 @@ class CustomRuleInput(BaseModel):
     target: Optional[str] = None
     min_gap_hours: Optional[float] = None
     max_gap_hours: Optional[float] = None
+    target_selection: Optional[str] = "any"
     activation_conditions: list[DataConditionInput] = []
     activation_logic: str = "AND"
     correlation_conditions: list[DataConditionInput] = []
@@ -561,6 +563,7 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
         correlation_cond=DataCondition(correlation_expr) if correlation_expr else None,
         time_condition=time_cond,
         label=rule.label,
+        target_selection=rule.target_selection,
     )
     c.id = rule.id or rule.label
     c.description = ""
@@ -585,6 +588,8 @@ def _split_into_episodes(
     trigger (fallback, always applies), fixed window t_Delta (if window_hours
     set), and first `end_event` strictly after the trigger (t_phi, if set).
     Both optional boundaries default off -> fallback-only behavior unchanged.
+    All three bounds are exclusive, so the end event closes the episode
+    without belonging to it.
     Returns one DataFrame per episode. Falls back to [df] when no triggers.
     """
     import pandas as pd

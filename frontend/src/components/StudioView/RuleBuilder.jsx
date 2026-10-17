@@ -63,6 +63,15 @@ const TEMPLATE_OPTIONS = [
 
 const UNARY_TEMPLATES = ['EXISTENCE', 'ABSENCE', 'AT_MOST_ONE', 'INIT', 'END']
 
+// Target selection (method.tex, Def. "Target selection"): admitted only for
+// templates whose target is F b or O b.
+const TARGET_SELECTION_TEMPLATES = ['RESPONSE', 'PRECEDENCE']
+const TARGET_SELECTION_OPTIONS = [
+  { id: 'any', label: 'Any', hint: 'Fulfilled if at least one target in the window satisfies the target condition.' },
+  { id: 'earliest', label: 'Earliest', hint: 'Only the chronologically first target in the window is evaluated.' },
+  { id: 'latest', label: 'Latest', hint: 'Only the chronologically last target in the window is evaluated.' },
+]
+
 const TEMPLATE_MAP = Object.fromEntries(
   TEMPLATE_OPTIONS.flatMap(g => g.items.map(t => [t.id, t]))
 )
@@ -107,6 +116,7 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
     target: '',
     min_gap_hours: '',
     max_gap_hours: '',
+    target_selection: 'any',
     activation_tokens: [emptyCondToken()],
     correlation_tokens: [emptyCondToken()],
     label: '',
@@ -194,7 +204,7 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
     setEditingRuleId(null)
     setRule({
       template: '', activation: '', target: '',
-      min_gap_hours: '', max_gap_hours: '',
+      min_gap_hours: '', max_gap_hours: '', target_selection: 'any',
       activation_tokens: [emptyCondToken()],
       correlation_tokens: [emptyCondToken()],
       label: '', rationale: '',
@@ -218,6 +228,7 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
       target: r.target,
       min_gap_hours: r.min_gap_hours ?? '',
       max_gap_hours: r.max_gap_hours ?? '',
+      target_selection: r.target_selection ?? 'any',
       activation_tokens: r.activation_tokens || treeToTokens(r.activation_condition_tree ?? null),
       correlation_tokens: r.correlation_tokens || treeToTokens(r.correlation_condition_tree ?? null),
       label: r.label ?? '',
@@ -241,7 +252,7 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
     switch (step) {
       case 'template': updateRule({ template: '' }); break
       case 'activities': updateRule({ activation: '', target: '' }); break
-      case 'time': updateRule({ min_gap_hours: '', max_gap_hours: '' }); break
+      case 'time': updateRule({ min_gap_hours: '', max_gap_hours: '', target_selection: 'any' }); break
       case 'conditions': updateRule({ activation_tokens: [emptyCondToken()], correlation_tokens: [emptyCondToken()] }); setCondError(''); break
       case 'metadata': updateRule({ label: '', rationale: '', severity: { clinical_consequence: 0.7, must_not_vs_should: 0.7 } }); break
     }
@@ -251,7 +262,7 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
     setEditingRuleId(null)
     setRule({
       template: '', activation: '', target: '',
-      min_gap_hours: '', max_gap_hours: '',
+      min_gap_hours: '', max_gap_hours: '', target_selection: 'any',
       activation_tokens: [emptyCondToken()],
       correlation_tokens: [emptyCondToken()],
       label: '', rationale: '',
@@ -292,7 +303,13 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
                           key={t.id}
                           type="button"
                           className={`template-card ${rule.template === t.id ? 'selected' : ''}`}
-                          onClick={() => { updateRule({ template: t.id }); nextStep() }}
+                          onClick={() => {
+                            updateRule({
+                              template: t.id,
+                              ...(TARGET_SELECTION_TEMPLATES.includes(t.id) ? {} : { target_selection: 'any' }),
+                            })
+                            nextStep()
+                          }}
                         >
                           <span className="template-card-icon">{t.icon}</span>
                           <span className="template-card-name">{t.label}</span>
@@ -434,6 +451,28 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
                     />
                   </div>
                 </div>
+                {TARGET_SELECTION_TEMPLATES.includes(rule.template) && (
+                  <div className="field-group">
+                    <label className="field-label">Target selection</label>
+                    <div className="mode-toggle" role="radiogroup" aria-label="Target selection">
+                      {TARGET_SELECTION_OPTIONS.map(opt => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={rule.target_selection === opt.id}
+                          className={`mode-toggle-btn${rule.target_selection === opt.id ? ' mode-toggle-btn--active' : ''}`}
+                          onClick={() => updateRule({ target_selection: opt.id })}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="wizard-step-hint">
+                      {TARGET_SELECTION_OPTIONS.find(o => o.id === rule.target_selection)?.hint}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -684,6 +723,12 @@ export default function RuleBuilder({ activities = {}, datasetId = 'builtin', it
                     {rule.min_gap_hours && rule.max_gap_hours && ' · '}
                     {rule.max_gap_hours && `max ${rule.max_gap_hours}h`}
                   </span>
+                </div>
+              )}
+              {rule.target_selection && rule.target_selection !== 'any' && (
+                <div className="preview-field">
+                  <span className="preview-field-key">Target selection</span>
+                  <span className="preview-field-val">{rule.target_selection}</span>
                 </div>
               )}
               {(() => {

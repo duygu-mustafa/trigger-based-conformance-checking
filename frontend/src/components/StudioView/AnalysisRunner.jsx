@@ -140,6 +140,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline, uploa
         target: r.target || null,
         min_gap_hours: r.min_gap_hours || null,
         max_gap_hours: r.max_gap_hours || null,
+        target_selection: r.target_selection || 'any',
         activation_conditions: r.activation_conditions || [],
         activation_logic: r.activation_logic || 'AND',
         correlation_conditions: r.correlation_conditions || [],

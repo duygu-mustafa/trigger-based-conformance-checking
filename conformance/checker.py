@@ -19,7 +19,7 @@ import re
 import pandas as pd
 
 from conformance.results import ConformanceOutcome, ConstraintResult, TraceResult
-from conformance.types import DeclareConstraint, DeclareModel, DeclareTemplate
+from conformance.types import DeclareConstraint, DeclareModel, DeclareTemplate, TimeCondition
 
 
 def _within_time_window(delta_seconds: float, constraint: DeclareConstraint) -> bool:
@@ -668,82 +668,79 @@ def _evaluate_constraint_impl(
 
         return True, None, time_delta, {}, None
 
+    target_selection = getattr(constraint, "target_selection", None) or "any"
+
+    def _select_candidates(
+        candidates: pd.DataFrame,
+        activation_ts: pd.Timestamp,
+        *,
+        directional_time: bool,
+    ) -> pd.DataFrame:
+        """Apply the target-selection mode (method.tex, Def. "Target selection").
+
+        Under "earliest"/"latest" the candidate sequence M_i is the target rows
+        whose timestamp differs from the activation's and whose delta lies in
+        the time condition, in trace order; only its first (m_1) or last (m_k)
+        element is kept. Ties among simultaneous candidates follow trace order.
+        Under "any" the candidates are returned unchanged.
+        """
+        if target_selection == "any" or candidates.empty:
+            return candidates
+        deltas = (candidates["timestamp"] - activation_ts).dt.total_seconds()
+        if not directional_time:
+            deltas = deltas.abs()
+        in_window = (candidates["timestamp"] != activation_ts) & deltas.map(
+            lambda d: _within_time_window(float(d), constraint)
+        ).astype(bool)
+        in_window_rows = candidates[in_window]
+        if target_selection == "earliest":
+            return in_window_rows.head(1)
+        return in_window_rows.tail(1)
+
     # ============ EXISTENCE / ABSENCE / EXACTLY / INIT / END (unary) ============
     if constraint.template == DeclareTemplate.EXISTENCE:
-        act_rows = _rows_for(constraint.activation)
-        if act_rows.empty:
+        # AtLeastOne(x) = G(start -> F x): activated once, at the start of the
+        # trace, and fulfilled by any occurrence of x. An activation condition
+        # restricts which occurrences of x count; without one, every x counts.
+        if trace_df.empty:
             return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
+        start_ts = str(trace_df.iloc[0]["timestamp"])
+        act_rows = _rows_for(constraint.activation)
 
-        if constraint.activation_cond is not None:
-            expr = constraint.activation_cond.expression
-            violated = 0
-            first_eval_error = None
-            saw_vacuous = False
-            evaluable_rows = 0
-            violation_deltas = {}
-            satisfaction_deltas = {}
-
-            for _, row in act_rows.iterrows():
-                cond_true, is_vacuous, eval_err, vals = _evaluate_data_condition_status(
+        first_eval_error = None
+        satisfaction_deltas = {}
+        qualifying = act_rows
+        if constraint.activation_cond is not None and not act_rows.empty:
+            keep_idx: list[int] = []
+            for idx, row in act_rows.iterrows():
+                cond_true, _is_vacuous, eval_err, vals = _evaluate_data_condition_status(
                     trace_df,
                     row,
-                    expr,
+                    constraint.activation_cond.expression,
                     observation_window_hours=observation_window_hours,
                 )
                 if eval_err is not None and first_eval_error is None:
                     first_eval_error = eval_err
-                if is_vacuous:
-                    saw_vacuous = True
-                    continue
-                evaluable_rows += 1
                 if cond_true:
-                    violated += 1
-                    violation_deltas = vals
-                else:
-                    # Capture satisfying values for distribution analysis
-                    satisfaction_deltas = vals
+                    keep_idx.append(idx)
+                    if not satisfaction_deltas:
+                        satisfaction_deltas = vals
+            qualifying = act_rows.loc[keep_idx] if keep_idx else act_rows.iloc[0:0]
 
-            if violated > 0:
-                ok = False
-            elif evaluable_rows == 0 and saw_vacuous:
-                return ConstraintResult(
-                    case_id=case_id,
-                    constraint_id=cid,
-                    outcome=ConformanceOutcome.VACUOUS,
-                    num_activations=int(len(act_rows)),
-                    num_fulfilled=0,
-                    num_violated=0,
-                    activation_ts=str(act_rows.iloc[0]["timestamp"]),
-                    violation_reason=first_eval_error or "No data in observation window",
-                )
-            else:
-                ok = True
-
-            return ConstraintResult(
-                case_id=case_id,
-                constraint_id=cid,
-                outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
-                num_activations=int(len(act_rows)),
-                num_fulfilled=int(len(act_rows) - violated),
-                num_violated=int(violated),
-                activation_ts=str(act_rows.iloc[0]["timestamp"]),
-                violation_deltas=violation_deltas if not ok else {},
-                satisfaction_deltas=satisfaction_deltas if ok else {},
-                violation_reason=(
-                    None if ok else "Activation condition evaluated to true for one or more events"
-                )
-                if first_eval_error is None
-                else first_eval_error,
-            )
-
+        ok = not qualifying.empty
         return ConstraintResult(
             case_id=case_id,
             constraint_id=cid,
-            outcome=ConformanceOutcome.SATISFIED,
-            num_activations=int(len(act_rows)),
-            num_fulfilled=1,
-            num_violated=0,
-            activation_ts=str(act_rows.iloc[0]["timestamp"]),
+            outcome=ConformanceOutcome.SATISFIED if ok else ConformanceOutcome.VIOLATED,
+            num_activations=1,
+            num_fulfilled=1 if ok else 0,
+            num_violated=0 if ok else 1,
+            activation_ts=start_ts,
+            target_ts=str(qualifying.iloc[0]["timestamp"]) if ok else None,
+            satisfaction_deltas=satisfaction_deltas if ok else {},
+            violation_reason=(None if ok else "Activity never occurs in the trace")
+            if first_eval_error is None
+            else first_eval_error,
         )
 
     if constraint.template == DeclareTemplate.ABSENCE:
@@ -849,7 +846,6 @@ def _evaluate_constraint_impl(
         DeclareTemplate.CHAIN_RESPONSE,
         DeclareTemplate.NOT_RESPONSE,
         DeclareTemplate.NOT_CHAIN_RESPONSE,
-        DeclareTemplate.NOT_SUCCESSION,
     }:
         act_rows, activation_eval_error = _candidate_activations()
         if act_rows.empty:
@@ -884,6 +880,7 @@ def _evaluate_constraint_impl(
                 candidates = target_rows[target_rows["timestamp"] > act_ts]
                 if next_act_ts is not None:
                     candidates = candidates[candidates["timestamp"] < next_act_ts]
+                candidates = _select_candidates(candidates, act_ts, directional_time=True)
 
             matched = False
             best_effort_forensics = None
@@ -919,7 +916,6 @@ def _evaluate_constraint_impl(
             is_negative = constraint.template in {
                 DeclareTemplate.NOT_RESPONSE,
                 DeclareTemplate.NOT_CHAIN_RESPONSE,
-                DeclareTemplate.NOT_SUCCESSION,
             }
 
             if (matched and not is_negative) or ((not matched) and is_negative):
@@ -1103,14 +1099,18 @@ def _evaluate_constraint_impl(
                         prev_act_ts = prev_act.iloc[0]["timestamp"]
                         candidates = candidates[candidates["timestamp"] > prev_act_ts]
 
-            if getattr(constraint, 'target_selection', None) == 'last' and not candidates.empty:
-                candidates = candidates.sort_values('timestamp', kind="stable").tail(1)
+            had_targets = not candidates.empty
+            candidates = _select_candidates(candidates, act_ts, directional_time=True)
 
             matched = False
             # Why this activation was not discharged, if it was not: "absent" when
-            # no candidate target exists at all, otherwise the cause reported by the
-            # last candidate examined.
-            cause = "absent" if candidates.empty else None
+            # no candidate target exists at all, "stale" when targets exist but
+            # target selection found none inside the time condition, otherwise the
+            # cause reported by the last candidate examined.
+            if candidates.empty:
+                cause = "stale" if had_targets else "absent"
+            else:
+                cause = None
             cause_values: dict[str, float] = {}
             for _, cand_row in candidates.iterrows():
                 ok_match, corr_error, delta, vals, cand_cause = _target_matches(
@@ -1216,6 +1216,13 @@ def _evaluate_constraint_impl(
                     violation_deltas = corr_vals # Last matched
             target_rows = target_rows.loc[keep_target_idx] if keep_target_idx else target_rows.iloc[0:0]
 
+        # NotCoExistence is activated only by the activation activity; CoExistence
+        # by either activity. Without an activation the constraint holds vacuously.
+        if act_rows.empty and (
+            constraint.template == DeclareTemplate.NOT_CO_EXISTENCE or target_rows.empty
+        ):
+            return ConstraintResult(case_id=case_id, constraint_id=cid, outcome=ConformanceOutcome.VACUOUS)
+
         if constraint.template == DeclareTemplate.CO_EXISTENCE:
             ok = (act_rows.empty and target_rows.empty) or ((not act_rows.empty) and (not target_rows.empty))
             violated = 0 if ok else max(int(len(act_rows)), int(len(target_rows)), 1)
@@ -1254,8 +1261,12 @@ def _evaluate_constraint_impl(
         DeclareTemplate.SUCCESSION,
         DeclareTemplate.ALTERNATE_SUCCESSION,
         DeclareTemplate.CHAIN_SUCCESSION,
+        DeclareTemplate.NOT_SUCCESSION,
         DeclareTemplate.NOT_CHAIN_SUCCESSION,
     }:
+        # k(x, y) = k_response(x, y) AND k_precedence(x, y), where the precedence
+        # component is activated by y and looks back for x (tab:declare_templates),
+        # so its roles are swapped relative to the constraint's.
         mapped = {
             DeclareTemplate.SUCCESSION: (DeclareTemplate.RESPONSE, DeclareTemplate.PRECEDENCE),
             DeclareTemplate.ALTERNATE_SUCCESSION: (
@@ -1263,6 +1274,7 @@ def _evaluate_constraint_impl(
                 DeclareTemplate.ALTERNATE_PRECEDENCE,
             ),
             DeclareTemplate.CHAIN_SUCCESSION: (DeclareTemplate.CHAIN_RESPONSE, DeclareTemplate.CHAIN_PRECEDENCE),
+            DeclareTemplate.NOT_SUCCESSION: (DeclareTemplate.NOT_RESPONSE, DeclareTemplate.NOT_PRECEDENCE),
             DeclareTemplate.NOT_CHAIN_SUCCESSION: (
                 DeclareTemplate.NOT_CHAIN_RESPONSE,
                 DeclareTemplate.NOT_CHAIN_PRECEDENCE,
@@ -1283,16 +1295,26 @@ def _evaluate_constraint_impl(
                 label=f"{cid}::response_component",
             ),
         )
+        # The activation and correlation conditions are stated over the x -> y
+        # direction and apply to the response component only. The time window
+        # is mirrored, since the precedence component measures from y back to x.
+        tc = constraint.time_condition
+        mirrored_tc = (
+            TimeCondition(
+                min_seconds=-tc.max_seconds if tc.max_seconds is not None else None,
+                max_seconds=-tc.min_seconds if tc.min_seconds is not None else None,
+            )
+            if tc is not None
+            else None
+        )
         precedence_result = _evaluate_constraint_impl(
             case_id=case_id,
             trace_df=trace_df,
             constraint=DeclareConstraint(
                 template=precedence_t,
-                activation=constraint.activation,
-                target=constraint.target,
-                activation_cond=constraint.activation_cond,
-                correlation_cond=constraint.correlation_cond,
-                time_condition=constraint.time_condition,
+                activation=constraint.target,
+                target=constraint.activation,
+                time_condition=mirrored_tc,
                 label=f"{cid}::precedence_component",
             ),
         )

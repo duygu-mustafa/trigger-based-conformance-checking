@@ -41,7 +41,7 @@ class Obligation:
     activation_index: int
     activation_ts: pd.Timestamp
     activation_context: dict = field(default_factory=dict)
-    last_candidate_index: int | None = None  # LAST target-selection bookkeeping
+    last_candidate_index: int | None = None  # LATEST target-selection bookkeeping
     is_fulfilled: bool = False
     is_violated: bool = False
 
@@ -424,15 +424,25 @@ class ResponseAutomaton(ConstraintAutomaton):
                     continue
                 if not _within_time_window(delta, self.constraint):
                     continue
+
+                # Events arrive in trace order, so every in-window target seen
+                # here is the next element of the candidate sequence M_i.
+                if self.constraint.target_selection == 'latest':
+                    obl.last_candidate_index = event.row_index
+                    continue  # defer to close_trace: only m_k is evaluated
+
                 corr_ok, corr_vals = self._eval_correlation(
                     trace_df, event.row_index, event.timestamp, obl.activation_ts
                 )
                 if not corr_ok:
+                    if self.constraint.target_selection == 'earliest':
+                        # m_1 fails the correlation condition: violation.
+                        obl.is_violated = True
+                        self.num_violated += 1
+                        if not self._first_violation_ts:
+                            self._first_violation_ts = str(obl.activation_ts)
+                        self._violation_deltas = corr_vals
                     continue
-
-                if self.constraint.target_selection == 'last':
-                    obl.last_candidate_index = event.row_index
-                    continue  # defer to close_trace
 
                 if not self._is_negative:
                     obl.is_fulfilled = True
@@ -495,7 +505,7 @@ class ResponseAutomaton(ConstraintAutomaton):
             if obl.is_fulfilled or obl.is_violated:
                 continue
 
-            if self.constraint.target_selection == 'last':
+            if self.constraint.target_selection == 'latest':
                 if obl.last_candidate_index is None:
                     if not self._is_negative:
                         obl.is_violated = True
@@ -647,9 +657,18 @@ class PrecedenceAutomaton(ConstraintAutomaton):
             else:
                 candidates = [t for t in self._seen_targets if t.timestamp < event.timestamp]
 
-            # target_selection='last': only evaluate the latest candidate
-            if getattr(self.constraint, 'target_selection', None) == 'last' and candidates:
-                candidates = [max(candidates, key=lambda e: e.timestamp)]
+            # earliest/latest: restrict to in-window candidates (in trace order)
+            # and evaluate only the first (m_1) or last (m_k) one.
+            selection = self.constraint.target_selection
+            if selection in ('earliest', 'latest'):
+                candidates = [
+                    t for t in candidates
+                    if _within_time_window(
+                        (t.timestamp - event.timestamp).total_seconds(), self.constraint
+                    )
+                ]
+                if candidates:
+                    candidates = [candidates[0] if selection == 'earliest' else candidates[-1]]
 
             matched = False
             match_vals: dict = {}
@@ -827,7 +846,7 @@ class CoExistenceAutomaton(ConstraintAutomaton):
             neither = not self._saw_activation and not self._saw_target
             ok = both or neither
             self.num_activations = 1 if self._saw_activation else 0
-            self.num_fulfilled = 1 if ok else 0
+            self.num_fulfilled = 1 if both else 0  # neither -> vacuous
             self.num_violated = 0 if ok else 1
             if not ok and self._saw_activation:
                 self._first_violation_ts = self._activation_ts_str

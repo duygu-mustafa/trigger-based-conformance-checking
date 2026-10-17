@@ -48,6 +48,8 @@ def build_trigger_episodes(
     always applies), fixed window t_Delta (if window_hours set), end-event
     t_phi (first `end_event` strictly after the trigger, if set). Both
     optional boundaries default off -> fallback-only behavior.
+    t_next and t_Delta are exclusive; t_phi is inclusive, so the end event
+    belongs to the episode it closes. The returned end is always exclusive.
 
     Generalised copy of ``main_per_sbt._build_trigger_episodes``
     (main_per_sbt.py:68), which hardcodes ``InvasiveVentilationStarted`` as the
@@ -82,7 +84,8 @@ def build_trigger_episodes(
                 (df_full["activity"] == end_event) & (df_full["timestamp"] > start_ts)
             ]["timestamp"]
             if not ev.empty:
-                candidates.append(ev.min())
+                # Inclusive t_phi as an exclusive bound; t_next still wins a tie.
+                candidates.append(ev.min() + pd.Timedelta(1, "ns"))
         windows.append((start_ts, min(candidates)))
     return windows
 

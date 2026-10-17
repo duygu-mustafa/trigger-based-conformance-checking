@@ -19,6 +19,7 @@ const NAV_GROUPS = [
       { id: 'results-frequencies', label: 'Frequencies', builtinOnly: true },
       { id: 'results-statistics', label: 'Statistics', builtinOnly: true },
       { id: 'results-patients', label: 'Patients', builtinOnly: true },
+      { id: 'results-insights', label: 'Insights', builtinOnly: true },
     ],
   },
 ]
@@ -92,6 +93,15 @@ function IconPatients() {
   )
 }
 
+function IconInsights() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 13l3.5-4L8 11l5.5-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M10.5 4H14v3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  )
+}
+
 function IconCollapse() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
@@ -116,6 +126,7 @@ const ICON_MAP = {
   'results-frequencies': IconFrequencies,
   'results-statistics': IconStatistics,
   'results-patients': IconPatients,
+  'results-insights': IconInsights,
 }
 
 function NavItem({ item, activePage, onNavigate }) {

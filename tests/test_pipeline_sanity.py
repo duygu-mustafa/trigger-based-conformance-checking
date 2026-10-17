@@ -21,6 +21,7 @@ from derive.pipeline import raw_to_event_log
 from conformance.checker import evaluate_constraint
 from conformance.results import ConformanceOutcome
 from conformance.rules import build_readiness_assessment_model
+from derive.death_outcomes import DEATH_FAILURE_LABEL, apply_death_rule
 
 
 def _row(stay_id, event_time, source_table, itemid, value_text=None, value_num=None):
@@ -400,6 +401,22 @@ def test_int_response_post_episode_lookahead():
     print("PASS: test_int_response_post_episode_lookahead")
 
 
+def test_death_within_48h_turns_success_into_failure():
+    """Death <=48h after SBTStarted relabels a success; re-vent failures untouched."""
+    start = "2150-01-01 08:00:00"
+    censored = "Success (Right-Censored: Stay Ended)"
+    revent = "Failure (Reventilated <48h)"
+
+    assert apply_death_rule(censored, start, pd.Timestamp("2150-01-01 20:00")) == DEATH_FAILURE_LABEL
+    assert apply_death_rule("Success", start, pd.Timestamp("2150-01-03 08:00")) == DEATH_FAILURE_LABEL  # exactly 48h
+    assert apply_death_rule("Success", start, pd.Timestamp("2150-01-03 08:01")) == "Success"  # past window
+    assert apply_death_rule("Success", start, None) == "Success"  # survived
+    assert apply_death_rule(revent, start, pd.Timestamp("2150-01-01 20:00")) == revent
+    assert apply_death_rule("No SBT Attempt", "", pd.Timestamp("2150-01-01 20:00")) == "No SBT Attempt"
+
+    print("PASS: test_death_within_48h_turns_success_into_failure")
+
+
 def main():
     failures = []
     for test_fn in (
@@ -411,6 +428,7 @@ def main():
         test_sbt_outcome_single_source_of_truth,
         test_other_ventilator_rows_do_not_fragment_episode,
         test_int_response_post_episode_lookahead,
+        test_death_within_48h_turns_success_into_failure,
     ):
         try:
             test_fn()
