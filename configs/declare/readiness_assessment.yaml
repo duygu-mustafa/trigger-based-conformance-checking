@@ -100,11 +100,15 @@ model:
     mental_status_ok:
       title: "Mental status criterion met"
       description: >
-        Patient is awake and easily arousable.
-        Satisfied if CAM-ICU RASS LOC (228302) = 'Yes'
+        Patient is awake and easily arousable. Satisfied if CAM-ICU RASS LOC
+        (228302) = 'No', or via the SAS fallback instrument (223753) in
+        [3, 4] (Sedated/Calm-Cooperative). RASS LOC is documented in only a
+        small fraction of stays; SAS is the far more common instrument in
+        this cohort, so the fallback is required for adequate coverage.
       logic: OR
       expressions:
-        - "items[228302] == 'Yes'"
+        - "items[228302] == 'No'"
+        - "items[223753] in [3, 4]"
 
     inspiratory_effort_ok:
       title: "Inspiratory effort criterion met"
@@ -120,19 +124,19 @@ model:
 
     # ── Control-Flow ──────────────────────────────────────────────────────────
 
-    - id: RC-CF-01
-      label: "Invasive ventilation must precede SBT start"
-      template: PRECEDENCE
-      # Burattin et al. Table 2 — precedence:
-      #   G(∀x.((B ∧ ϕ_a(x)) → O_I(A ∧ ∃y.ϕ_c(x,y))))
-      # B (activation) = SBTStarted — the event whose occurrence fires the check.
-      # A (target)     = InvasiveVentilationStarted — must have occurred before B.
-      activation: SBTStarted
-      target: InvasiveVentilationStarted
-      rationale: >
-        An SBT can only be initiated on a patient who is currently on invasive
-        mechanical ventilation. Enforces that InvasiveVentilationStarted
-        has occurred prior to SBTStarted.
+    # - id: RC-CF-01
+    #   label: "Invasive ventilation must precede SBT start"
+    #   template: PRECEDENCE
+    #   # Burattin et al. Table 2 — precedence:
+    #   #   G(∀x.((B ∧ ϕ_a(x)) → O_I(A ∧ ∃y.ϕ_c(x,y))))
+    #   # B (activation) = SBTStarted — the event whose occurrence fires the check.
+    #   # A (target)     = InvasiveVentilationStarted — must have occurred before B.
+    #   activation: SBTStarted
+    #   target: InvasiveVentilationStarted
+    #   rationale: >
+    #     An SBT can only be initiated on a patient who is currently on invasive
+    #     mechanical ventilation. Enforces that InvasiveVentilationStarted
+    #     has occurred prior to SBTStarted.
 
     # ════════════════════════════════════════════════════════════════════════
     # RC-DP-01 — Oxygenation
@@ -141,6 +145,7 @@ model:
     - id: RC-DP-01
       label: "Oxygenation criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: OxygenationMeasured
       target_selection: last
@@ -152,10 +157,12 @@ model:
       rationale: >
         SBTStarted must be preceded within 24h by an OxygenationMeasured event.
         Only the most recent OxygenationMeasured before SBTStarted is evaluated
-        (target_selection: last). OxygenationMeasured is emitted only when the
-        criterion IS satisfied (threshold enforced in emitter due to ±2h concurrent
-        FiO2/PEEP window for SpO2 arm): PaO2/FiO2 >= 150 OR (SpO2 >= 90% on
-        FiO2 <= 40% and PEEP <= 5 cmH2O). Akella Table 2, criterion 2.
+        (target_selection: last). OxygenationMeasured is emitted for every
+        PaO2/FiO2 or SpO2 measurement, unconditionally; threshold enforced solely
+        by the oxygenation_ok correlation_condition: PaO2/FiO2 >= 150 OR
+        (SpO2 >= 90% on FiO2 <= 40% and PEEP <= 5 cmH2O). FiO2/PEEP/SpO2 are
+        evaluated independently (latest value per item), not required concurrent.
+        Akella Table 2, criterion 2.
 
     # - id: RC-DP-01a
     #   label: "Oxygenation criterion must be met at SBT start (not_responded_existence)"
@@ -187,6 +194,7 @@ model:
     - id: RC-DP-02
       label: "pH criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: pHMeasured
       target_selection: last
@@ -231,6 +239,7 @@ model:
     - id: RC-DP-03
       label: "Hemoglobin criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: HemoglobinMeasured
       target_selection: last
@@ -275,6 +284,7 @@ model:
     - id: RC-DP-04
       label: "Temperature criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: TemperatureMeasured
       target_selection: last
@@ -321,6 +331,7 @@ model:
     - id: RC-DP-05
       label: "Vasopressor criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: VasopressorMeasured
       target_selection: last
@@ -367,21 +378,22 @@ model:
     - id: RC-DP-06
       label: "Mental status criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: MentalStatusMeasured
       correlation_condition: mental_status_ok
-      correlation_condition_display: "RASS LOC 'Yes'"
+      correlation_condition_display: "RASS LOC 'No' OR SAS in [3, 4]"
       target_selection: last
       time_condition:
         min_hours: -24
         max_hours: 0
       rationale: >
-        SBTStarted must be preceded within 24h by a MentalStatusMeasured event.
-        Only the most recent MentalStatusMeasured before SBTStarted is evaluated
-        (target_selection: last). MentalStatusMeasured is emitted only when the
-        criterion IS satisfied (threshold enforced in emitter due to OR across two
-        instruments): RASS LOC = 'Yes' (itemid 228302) OR SAS in {3, 4} (itemid 223753).
-        Akella Table 2, criterion 8.
+        SBTStarted must be preceded within 24h by a MentalStatusMeasured event
+        whose most recent reading satisfies RASS LOC (228302) = 'No' or, via
+        the SAS fallback (223753), is in [3, 4]. MentalStatusMeasured is
+        emitted for every RASS LOC and SAS measurement; the threshold is
+        enforced via correlation_condition on the most recent preceding
+        event (target_selection: last). Akella Table 2, criterion 8.
 
     # - id: RC-DP-06a
     #   label: "Mental status criterion must be met at SBT start (not_responded_existence)"
@@ -414,6 +426,7 @@ model:
     - id: RC-DP-07
       label: "Inspiratory effort criterion must be met at SBT start"
       template: PRECEDENCE
+      context_window_pre_hours: 24
       activation: SBTStarted
       target: InspiratoryEffortMeasured
       target_selection: last

@@ -1,0 +1,160 @@
+version: 1
+
+model:
+  name: rtfm
+  description: >
+    Declare rules for the Road Traffic Fine Management Process (Italian local
+    police fine collection). Activity names follow the concept:name values of
+    the public XES log. The `severity` key is not part of the Declare schema --
+    conformance.rules ignores it -- and is read by evaluation/rtfm_utils.py to
+    split constraints across the mandatory_/info_ result columns.
+
+    Deliberately omitted: a link from Notify Result Appeal to Offender to
+    Appeal to Judge. Only 164 of 896 notified prefecture results are followed
+    by a judge appeal, and 391 of 555 judge appeals occur without a preceding
+    prefecture notification, so neither RESPONSE nor PRECEDENCE reflects a
+    normative obligation in this log.
+
+  data_conditions:
+    large_fine:
+      title: "Fine amount above 50 EUR"
+      description: "Base fine amount recorded at Create Fine exceeds 50 EUR."
+      expression: "items['amount'] > 50"
+
+  constraints:
+    - id: RTF-01
+      label: "Every case starts with fine creation"
+      template: INIT
+      activation: Create Fine
+      severity: mandatory
+      rationale: >
+        The fine record is the origin of the process; nothing may precede it.
+        Structurally satisfied in this log (every one of the 150,370 cases
+        starts with exactly one Create Fine, 0 violations): retained as a
+        wiring check for the INIT template and as the documented segmentation
+        trigger, not as a deviation detector.
+
+    - id: RTF-02
+      label: "A fine must be created before it is sent"
+      template: PRECEDENCE
+      activation: Send Fine
+      target: Create Fine
+      severity: mandatory
+      rationale: >
+        Dispatch to the offender presupposes a registered fine.
+
+    - id: RTF-03
+      label: "A fine must be notified within 90 days of creation"
+      template: RESPONSE
+      activation: Create Fine
+      target: Insert Fine Notification
+      time_condition:
+        min_hours: 0
+        max_hours: 2160
+      severity: mandatory
+      rationale: >
+        The statutory deadline runs from the moment the fine is recorded, not
+        from dispatch: notification must reach the offender within 90 days of
+        fine creation. Anchoring the window at Create Fine therefore tests the
+        legal obligation itself. Dispatch alone consumes a median of 86 days
+        and creation-to-notification a median of 104 days, so the deadline is
+        genuinely contested: 78.7% of the 150,370 cases either miss the window
+        or are never notified at all.
+
+    - id: RTF-03b
+      label: "A sent fine should be notified within 30 days"
+      template: RESPONSE
+      activation: Send Fine
+      target: Insert Fine Notification
+      time_condition:
+        min_hours: 0
+        max_hours: 720
+      severity: informational
+      rationale: >
+        Internal office SLA for the dispatch-to-notification leg, distinct from
+        the statutory deadline in RTF-03. The 30-day threshold is the observed
+        90th percentile of the Send Fine -> Insert Fine Notification delay
+        (median 15 days). A 90-day threshold on this leg carries almost no
+        timing signal: among the cases that are notified at all, only 0.5%
+        exceed 90 days, so the constraint would collapse into a test of whether
+        notification happens. At 30 days the rule separates the two effects
+        (30.9% violated versus 23.6% at 90 days, i.e. roughly 7 percentage
+        points attributable to lateness rather than absence).
+
+    - id: RTF-04
+      label: "Penalty may only be added after notification"
+      template: PRECEDENCE
+      activation: Add penalty
+      target: Insert Fine Notification
+      severity: mandatory
+      rationale: >
+        The penalty doubles the amount owed for missing the payment deadline.
+        The deadline only runs once the offender has been notified.
+
+    - id: RTF-05
+      label: "Credit collection only after a penalty was added"
+      template: PRECEDENCE
+      activation: Send for Credit Collection
+      target: Add penalty
+      severity: mandatory
+      rationale: >
+        Handover to the collection agency is the final escalation step and
+        follows the penalty stage.
+
+    - id: RTF-06
+      label: "Penalty is added at most once"
+      template: AT_MOST_ONE
+      activation: Add penalty
+      severity: informational
+      rationale: >
+        A single penalty per fine; repeated penalties indicate duplicate
+        processing. Structurally satisfied in this log (no case carries more
+        than one Add penalty event, 0 violations): retained as a wiring check
+        for the AT_MOST_ONE template rather than as a deviation detector, hence
+        informational.
+
+    - id: RTF-07
+      label: "A prefecture appeal must be sent after it is registered"
+      template: RESPONSE
+      activation: Insert Date Appeal to Prefecture
+      target: Send Appeal to Prefecture
+      severity: mandatory
+      rationale: >
+        The appeal date is registered when the offender files the appeal at the
+        local office; forwarding it to the prefecture is the office's
+        subsequent obligation. The log confirms this order: of the 4,141 cases
+        containing both events, 4,130 register the date before the appeal is
+        sent, and 47 further cases register a date that is never forwarded --
+        the deviation this constraint is meant to surface.
+
+    - id: RTF-08
+      label: "A prefecture result must be notified to the offender"
+      template: RESPONSE
+      activation: Receive Result Appeal from Prefecture
+      target: Notify Result Appeal to Offender
+      severity: mandatory
+      rationale: >
+        The offender must learn the outcome of their own appeal.
+
+    - id: RTF-09
+      label: "Large fines must be sent to the offender"
+      template: RESPONSE
+      activation: Create Fine
+      activation_condition: large_fine
+      activation_condition_display: "Fine amount above 50 EUR"
+      target: Send Fine
+      severity: informational
+      rationale: >
+        Data-aware rule: fines above the 50 EUR threshold are expected to be
+        dispatched rather than settled on the spot. Exercises the wide-log
+        attribute path in the checker (items['amount']).
+
+    - id: RTF-10
+      label: "A case sent for credit collection is not also paid"
+      template: NOT_CO_EXISTENCE
+      activation: Send for Credit Collection
+      target: Payment
+      severity: informational
+      rationale: >
+        Credit collection and payment are alternative endings; their
+        co-occurrence signals a payment that arrived after handover.

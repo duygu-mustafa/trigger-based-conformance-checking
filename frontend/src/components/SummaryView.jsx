@@ -46,7 +46,11 @@ const SummaryView = ({ summaryData, section = 'frequencies', onSelectStay }) => 
     return chips;
   }, [query, ruleFilterMode, sortBy]);
 
-  const ruleOptions = summaryData?.violation_frequency || [];
+  // Temporarily hidden from the frontend (not deleted from configs).
+  const DISABLED_RULE_IDS = new Set(['SBT-TM-02']);
+  const ruleOptions = (summaryData?.violation_frequency || []).filter(
+    r => !DISABLED_RULE_IDS.has(r.constraint_id)
+  );
 
   const selectedRuleDetails = useMemo(() => {
     if (selectedRules.length === 0) return [];
@@ -132,8 +136,8 @@ const SummaryView = ({ summaryData, section = 'frequencies', onSelectStay }) => 
   };
 
   const topViolations = useMemo(() =>
-    (summaryData?.violation_frequency || []).filter(v => v.count > 0).sort((a, b) => b.count - a.count),
-    [summaryData]
+    ruleOptions.filter(v => v.count > 0).sort((a, b) => b.count - a.count),
+    [ruleOptions]
   );
 
   const selectedConstraint = useMemo(
@@ -142,7 +146,7 @@ const SummaryView = ({ summaryData, section = 'frequencies', onSelectStay }) => 
   );
 
   const allCorrelationData = useMemo(() => {
-    const data = [...(summaryData?.violation_frequency || [])];
+    const data = [...ruleOptions];
     const isViolation = analysisMode === 'violation';
     return data.sort((a, b) => {
       const aCount = isViolation ? (a.count_success + a.count_failure) : a.count_satisfied;
@@ -153,10 +157,21 @@ const SummaryView = ({ summaryData, section = 'frequencies', onSelectStay }) => 
       const liftB = isViolation ? (b.lift_failure || 1) : (b.lift_success || 1);
       return Math.abs(liftB - 1) - Math.abs(liftA - 1);
     });
-  }, [summaryData, analysisMode]);
+  }, [ruleOptions, analysisMode]);
 
   const allFilteredStays = useMemo(() => {
-    const rows = [...(summaryData?.stay_summaries || [])];
+    const rows = (summaryData?.stay_summaries || []).map(row => {
+      const v = (row.violated_constraints || []).filter(cid => !DISABLED_RULE_IDS.has(cid));
+      const s = (row.satisfied_constraints || []).filter(cid => !DISABLED_RULE_IDS.has(cid));
+      const removedViolations = (row.violated_constraints || []).length - v.length;
+      return {
+        ...row,
+        violated_constraints: v,
+        satisfied_constraints: s,
+        violated_constraints_count: v.length,
+        total_mandatory_violations: Math.max(0, (row.total_mandatory_violations || 0) - removedViolations),
+      };
+    });
     const normalizedQuery = query.trim().toLowerCase();
     let filtered = normalizedQuery
       ? rows.filter(row => String(row.stay_id).toLowerCase().includes(normalizedQuery))

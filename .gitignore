@@ -16,14 +16,19 @@ data/
 *.txt
 *.csv.gz
 *.decl
+*.xes
+*.tex
 
 pycache__/
 __pycache__/
 
-*.ipynb
 *.log
+misc/
 
 node_modules/
 
 *.duckdb
 *.wal
+
+figures/
+sample_figures/

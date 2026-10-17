@@ -9,8 +9,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
-INPUT="data/icu_event_level_sbt.parquet"
-OUTPUT="data/icu_event_log_full.parquet"
+INPUT="data/final/mimic_raw_data.parquet"
+OUTPUT="data/final/icu_event_log_full.parquet"
 BACKUP_EVERY=200
 SESSION_NAME="eventlog"
 STATE_FILE=""
@@ -29,8 +29,8 @@ Usage:
   ./run_event_log_safe.sh [options]
 
 Options:
-  --input PATH            Input raw events file (default: data/icu_event_level_sbt.parquet)
-  --output PATH           Output event log file (default: data/icu_event_log_full.parquet)
+  --input PATH            Input raw events file (default: data/final/mimic_raw_data.parquet)
+  --output PATH           Output event log file (default: data/final/icu_event_log_full.parquet)
   --backup-every N        Backup checkpoint interval (default: 200)
   --resume                Resume from existing state/temp DB
   --state-file PATH       Custom state file path
@@ -47,8 +47,8 @@ Options:
 Examples:
   ./run_event_log_safe.sh
   ./run_event_log_safe.sh --resume
-  ./run_event_log_safe.sh --output data/icu_event_log_full.parquet --backup-every 100
-  ./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+  ./run_event_log_safe.sh --output data/final/icu_event_log_full.parquet --backup-every 100
+  ./run_event_log_safe.sh --seed-checkpoint data/final/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
 EOF
 }
 

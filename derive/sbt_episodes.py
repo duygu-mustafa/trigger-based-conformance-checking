@@ -86,6 +86,28 @@ _VENTILATOR_MODE_HAMILTON_MAPPING = {
 }
 
 
+# Direct mode→state lookups (skip intermediate category for vectorized path)
+_HAMILTON_TO_STATE = {
+    k: ("Full Support" if v == "Full Invasive Support" else "SBT Candidate")
+    for k, v in _VENTILATOR_MODE_HAMILTON_MAPPING.items()
+}
+_MODE_TO_STATE = {
+    k: ("Full Support" if v == "Full Invasive Support" else "SBT Candidate")
+    for k, v in _VENTILATOR_MODE_MAPPING.items()
+}
+
+
+def vectorized_weaning_states(df: pd.DataFrame) -> pd.Series:
+    """Vectorized equivalent of apply(map_weaning_state, axis=1) over a DataFrame."""
+    def _clean(col: str) -> pd.Series:
+        s = df[col].astype(str).str.strip()
+        return s.where(~df[col].isna() & ~s.str.lower().isin(_MISSING_TEXT_TOKENS))
+
+    hamilton_state = _clean("ventilator_mode_hamilton").map(_HAMILTON_TO_STATE)
+    general_state = _clean("ventilator_mode").map(_MODE_TO_STATE)
+    return hamilton_state.fillna(general_state).fillna("Other")
+
+
 def _map_category_to_state(category: str | None) -> str:
     """Convert clinical category to weaning state for SBT detection."""
     if category == "SBT":
@@ -130,18 +152,6 @@ def map_weaning_state(row: pd.Series) -> str:
         if state != "Other":
             return state
 
-    # 2. Fallback to ventilation_status only if settings are completely missing
-    status = row.get('ventilation_status')
-    if status == 'None':
-        return 'Liberated'
-        
-    # Only use status for mode classification if modes weren't found above
-    if not hamilton_mode and not general_mode:
-        if status == 'InvasiveVent':
-            return 'Full Support'
-        if status in ['SupplementalOxygen', 'HFNC', 'NonInvasiveVent']:
-            return 'SBT Candidate'
-            
     return 'Other'
 
 def build_sbt_episodes(weaning_df: pd.DataFrame, debounce_minutes: int = 120) -> pd.DataFrame:

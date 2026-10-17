@@ -181,6 +181,16 @@ function RuleCard({ rule }) {
               </div>
             )}
 
+            {/* Target selection */}
+            {rule.target_selection && rule.target_selection !== 'any' && (
+              <div className="rule-detail-section">
+                <h4 className="rule-detail-heading">Target selection</h4>
+                <span className="rule-template-badge">
+                  {rule.target_selection === 'latest' ? 'Latest target only' : 'Earliest target only'}
+                </span>
+              </div>
+            )}
+
             {/* Rationale */}
             {rule.rationale && (
               <div className="rule-detail-section">

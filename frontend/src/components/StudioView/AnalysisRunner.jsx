@@ -4,6 +4,8 @@ import StatsDeepDive from '../SummaryView/StatsDeepDive'
 import ContrastBarChart from '../SummaryView/ContrastBarChart'
 import OutcomeScatterPlot from '../SummaryView/OutcomeScatterPlot'
 import ConstraintDetailView from '../SummaryView/ConstraintDetailView'
+import UploadedLogRunner from '../UploadView/UploadedLogRunner'
+import { rulesKey } from '../../datasetRules'
 
 const SAMPLE_PRESETS = [10, 25, 50, 100, 200]
 const RESULT_TABS = ['Frequencies', 'Statistics', 'Patients']
@@ -51,12 +53,18 @@ function loadPersistedResult() {
   } catch { return null }
 }
 
-export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
+export default function AnalysisRunner({ customRules = [], onOpenTimeline, uploadInfo = null, datasetId = 'builtin', onUploadStale }) {
+  if (uploadInfo) {
+    return <UploadedLogRunner uploadInfo={uploadInfo} datasetId={datasetId} onStale={onUploadStale} />
+  }
+
   const [sampleSize, setSampleSize] = useState(() => {
     try { return JSON.parse(localStorage.getItem('analysis_runner_sample_size') || '50') } catch { return 50 }
   })
   const [seed, setSeed] = useState(42)
   const [triggerEvent, setTriggerEvent] = useState('InvasiveVentilationStarted')
+  const [episodeWindowHours, setEpisodeWindowHours] = useState('')
+  const [episodeEndEvent, setEpisodeEndEvent] = useState('')
   const [includePredefined, setIncludePredefined] = useState(true)
   const [includeCustom, setIncludeCustom] = useState(true)
   const [jobId, setJobId] = useState(null)
@@ -78,7 +86,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
   }, [jobState?.status])
 
   const savedRules = (() => {
-    try { return JSON.parse(localStorage.getItem('studio_custom_rules') || '[]') }
+    try { return JSON.parse(localStorage.getItem(rulesKey(datasetId)) || '[]') }
     catch { return [] }
   })()
   const allCustomRules = [...new Map([...customRules, ...savedRules].map(r => [r.id, r])).values()]
@@ -121,6 +129,8 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
       sample_size: sampleSize,
       seed,
       trigger_event: triggerEvent,
+      episode_window_hours: episodeWindowHours === '' ? null : parseFloat(episodeWindowHours),
+      episode_end_event: episodeEndEvent || null,
       include_predefined: includePredefined,
       custom_rules: includeCustom ? allCustomRules.map(r => ({
         id: r.id,
@@ -130,6 +140,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
         target: r.target || null,
         min_gap_hours: r.min_gap_hours || null,
         max_gap_hours: r.max_gap_hours || null,
+        target_selection: r.target_selection || 'any',
         activation_conditions: r.activation_conditions || [],
         activation_logic: r.activation_logic || 'AND',
         correlation_conditions: r.correlation_conditions || [],
@@ -249,6 +260,35 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline }) {
               onChange={e => setTriggerEvent(e.target.value)}
             >
               <option value="InvasiveVentilationStarted">Invasive Ventilation Started</option>
+              <option value="SBTStarted">SBT Started</option>
+              <option value="SBTCompleted">SBT Completed</option>
+              <option value="SBTFailed">SBT Failed</option>
+              <option value="SBTSucceeded">SBT Succeeded</option>
+            </select>
+          </div>
+
+          <div className="runner-field">
+            <label className="field-label">Episode window (hours)</label>
+            <input
+              className="studio-input"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="unbounded"
+              value={episodeWindowHours}
+              onChange={e => setEpisodeWindowHours(e.target.value)}
+            />
+          </div>
+
+          <div className="runner-field">
+            <label className="field-label">Episode end event</label>
+            <select
+              className="studio-input"
+              value={episodeEndEvent}
+              onChange={e => setEpisodeEndEvent(e.target.value)}
+            >
+              <option value="">None</option>
+              <option value="InvasiveVentilationEnded">Invasive Ventilation Ended</option>
               <option value="SBTStarted">SBT Started</option>
               <option value="SBTCompleted">SBT Completed</option>
               <option value="SBTFailed">SBT Failed</option>

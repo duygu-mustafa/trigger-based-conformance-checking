@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 import numpy as _np
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -46,6 +46,9 @@ def _sanitize(obj):
 
 app = FastAPI(title="Clinician Studio API")
 
+# Rules temporarily hidden from the frontend (not deleted from configs).
+DISABLED_RULE_IDS = {"SBT-TM-02"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:4173", "http://127.0.0.1:5173"],
@@ -57,6 +60,10 @@ app.add_middleware(
 
 _jobs: dict[str, dict[str, Any]] = {}
 _job_cancel: dict[str, threading.Event] = {}
+
+# ── In-memory uploaded-log store (independent XES flow) ───────────────────────
+# ponytail: in-memory, dies on restart — fine for single-user studio; add disk cache only if reload pain shows up
+_uploaded_logs: dict[str, "pd.DataFrame"] = {}
 
 
 # ── Item label lookup ─────────────────────────────────────────────────────────
@@ -282,6 +289,7 @@ def _constraint_to_dict(c: Any) -> dict[str, Any]:
         "correlation_logic": _detect_logic(str(correlation_expr)) if correlation_chips else "AND",
         "target_condition_title": getattr(c, "target_condition_title", None),
         "semantics": getattr(c, "semantics", None),
+        "target_selection": getattr(c, "target_selection", None) or "any",
         "severity": _severity_for(str(rule_id)),
     }
 
@@ -304,6 +312,8 @@ def get_rules() -> list[dict[str, Any]]:
     ):
         model = builder()
         for c in model.constraints:
+            if getattr(c, "id", None) in DISABLED_RULE_IDS:
+                continue
             rules.append(_constraint_to_dict(c))
     return rules
 
@@ -407,6 +417,7 @@ class CustomRuleInput(BaseModel):
     target: Optional[str] = None
     min_gap_hours: Optional[float] = None
     max_gap_hours: Optional[float] = None
+    target_selection: Optional[str] = "any"
     activation_conditions: list[DataConditionInput] = []
     activation_logic: str = "AND"
     correlation_conditions: list[DataConditionInput] = []
@@ -461,6 +472,8 @@ class RunRequest(BaseModel):
     custom_event_types: list[CustomEventType] = []
     custom_data_items: list[CustomDataItem] = []
     trigger_event: str = "InvasiveVentilationStarted"
+    episode_window_hours: float | None = None
+    episode_end_event: str | None = None
 
 
 # ── Custom rule → DeclareConstraint ──────────────────────────────────────────
@@ -550,6 +563,7 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
         correlation_cond=DataCondition(correlation_expr) if correlation_expr else None,
         time_condition=time_cond,
         label=rule.label,
+        target_selection=rule.target_selection,
     )
     c.id = rule.id or rule.label
     c.description = ""
@@ -562,17 +576,28 @@ def _custom_rule_to_constraint(rule: CustomRuleInput):
 
 # ── Analysis runner ───────────────────────────────────────────────────────────
 
-def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.DataFrame"]:
+def _split_into_episodes(
+    df: "pd.DataFrame",
+    trigger_activity: str,
+    window_hours: float | None = None,
+    end_event: str | None = None,
+) -> list["pd.DataFrame"]:
     """Split a stay DataFrame into episode sub-frames using trigger_activity boundaries.
 
-    Returns one DataFrame per episode. Falls back to [df] when no triggers are found.
+    Per method.tex Definition (episode), the horizon is the earliest of: next
+    trigger (fallback, always applies), fixed window t_Delta (if window_hours
+    set), and first `end_event` strictly after the trigger (t_phi, if set).
+    Both optional boundaries default off -> fallback-only behavior unchanged.
+    All three bounds are exclusive, so the end event closes the episode
+    without belonging to it.
+    Returns one DataFrame per episode. Falls back to [df] when no triggers.
     """
     import pandas as pd
 
     triggers = (
         df[df["activity"] == trigger_activity]
         .drop_duplicates(subset=["timestamp"])
-        .sort_values("timestamp")
+        .sort_values("timestamp", kind="stable")
         .reset_index(drop=True)
     )
     if triggers.empty:
@@ -582,7 +607,15 @@ def _split_into_episodes(df: "pd.DataFrame", trigger_activity: str) -> list["pd.
     episodes = []
     for idx, row in triggers.iterrows():
         start_ts = row["timestamp"]
-        end_ts = triggers.iloc[idx + 1]["timestamp"] if idx + 1 < len(triggers) else trace_end
+        t_next = triggers.iloc[idx + 1]["timestamp"] if idx + 1 < len(triggers) else trace_end
+        candidates = [t_next]
+        if window_hours is not None:
+            candidates.append(start_ts + pd.Timedelta(hours=window_hours))
+        if end_event is not None:
+            ev = df[(df["activity"] == end_event) & (df["timestamp"] > start_ts)]["timestamp"]
+            if not ev.empty:
+                candidates.append(ev.min())
+        end_ts = min(candidates)
         episode_df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
         if not episode_df.empty:
             episodes.append(episode_df)
@@ -1015,10 +1048,13 @@ def _run_analysis(job_id: str, request: RunRequest) -> None:
                 df = pd.concat([df, cond_df], ignore_index=True)
 
             if custom_df is not None or cond_df is not None:
-                df = df.sort_values("timestamp").reset_index(drop=True)
+                df = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
             if not df.empty:
-                episodes = list(_split_into_episodes(df, request.trigger_event))
+                episodes = list(_split_into_episodes(
+                    df, request.trigger_event,
+                    request.episode_window_hours, request.episode_end_event,
+                ))
                 for ep_idx, episode_df in enumerate(episodes):
                     activities = set(episode_df["activity"].dropna().tolist()) if "activity" in episode_df.columns else set()
                     if "SBTStarted" not in activities:
@@ -1184,6 +1220,8 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
     violation_frequency = []
     for c in model.constraints:
         cid = c.id
+        if cid in DISABLED_RULE_IDS:
+            continue
         counts = cid_counts.get(cid, {"total": 0, "success": 0, "failure": 0, "satisfied": 0, "vacuous": 0})
 
         a = counts.get("failure", 0)
@@ -1250,6 +1288,22 @@ def _build_rich_summary(episode_data: list, model) -> dict[str, Any]:
                 "satisfaction": {"delays": [], "delay_outcomes": [], "delta_distributions": {}},
             }),
         })
+
+    # Multiple testing corrections over all constraints with a valid p-value
+    try:
+        from statsmodels.stats.multitest import multipletests as _multipletests
+        _idxs = [i for i, v in enumerate(violation_frequency) if v["p_value_raw"] is not None]
+        if _idxs:
+            _pvals = [violation_frequency[i]["p_value_raw"] for i in _idxs]
+            _, _p_bonf, _, _ = _multipletests(_pvals, method="bonferroni")
+            _, _p_fdr, _, _ = _multipletests(_pvals, method="fdr_bh")
+            for j, i in enumerate(_idxs):
+                violation_frequency[i]["p_value_bonferroni"] = float(_p_bonf[j])
+                violation_frequency[i]["p_value_fdr"] = float(_p_fdr[j])
+                violation_frequency[i]["is_significant_bonferroni"] = bool(_p_bonf[j] < 0.05)
+                violation_frequency[i]["is_significant_fdr"] = bool(_p_fdr[j] < 0.05)
+    except Exception:
+        pass
 
     violation_frequency.sort(key=lambda x: -x["count"])
 
@@ -1384,6 +1438,197 @@ def cancel_job(job_id: str) -> dict[str, str]:
     return {"status": "cancellation_requested"}
 
 
+# ── Independent XES upload + conformance flow ────────────────────────────────
+
+class RunUploadedRequest(BaseModel):
+    upload_id: str
+    custom_rules: list[CustomRuleInput] = []
+    sample_size: int | None = None
+    seed: int = 42
+    trigger_event: str | None = None
+    episode_window_hours: float | None = None
+    episode_end_event: str | None = None
+
+
+@app.post("/api/upload_log")
+async def upload_log(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Parse an uploaded XES log (Rust4PM/rustxes) into a canonical DataFrame and cache it."""
+    import tempfile
+    import rustxes
+    import pandas as pd
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+
+    suffix = ".xes.gz" if file.filename and file.filename.endswith(".gz") else ".xes"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        try:
+            log_df, _log_attrs = rustxes.import_xes(tmp.name)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not parse XES: {e}")
+
+    df = log_df.to_pandas()
+    rename = {
+        "case:concept:name": "case_id",
+        "concept:name": "activity",
+        "time:timestamp": "timestamp",
+    }
+    missing = [k for k in rename if k not in df.columns]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"XES missing standard fields: {missing}")
+
+    df = df.rename(columns=rename)
+    df["case_id"] = df["case_id"].astype(str)
+    df["activity"] = df["activity"].astype(str)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    df = df.dropna(subset=["case_id", "activity", "timestamp"])
+    if df.empty:
+        raise HTTPException(status_code=400, detail="No usable events after parsing.")
+
+    upload_id = uuid.uuid4().hex
+    _uploaded_logs[upload_id] = df
+
+    # Surface event + case attribute columns so the Rule Builder can offer them
+    # as data conditions. rustxes broadcasts case-level attrs (prefixed "case:")
+    # to every row, so they're usable as plain per-event values once un-prefixed.
+    _skip = {"case_id", "activity", "timestamp"}
+    data_attributes = [
+        {
+            "key": col,
+            "label": col.removeprefix("case:"),
+            "numeric": bool(pd.api.types.is_numeric_dtype(df[col])),
+        }
+        for col in df.columns
+        if col not in _skip
+        and not col.startswith(("lifecycle:", "@@"))
+    ]
+
+    preview = df.head(50).copy()
+    for col in preview.columns:
+        if pd.api.types.is_datetime64_any_dtype(preview[col]):
+            preview[col] = preview[col].astype(str)
+    preview = preview.astype(object).where(pd.notnull(preview), None)
+
+    return {
+        "upload_id": upload_id,
+        "num_cases": int(df["case_id"].nunique()),
+        "num_events": int(len(df)),
+        "activities": sorted(df["activity"].unique().tolist()),
+        "data_attributes": data_attributes,
+        "preview_columns": df.columns.tolist(),
+        "preview_rows": preview.to_dict(orient="records"),
+    }
+
+
+@app.delete("/api/upload_log/{upload_id}")
+def delete_uploaded_log(upload_id: str) -> dict[str, Any]:
+    """Drop a cached uploaded log so it stops counting against server memory."""
+    if _uploaded_logs.pop(upload_id, None) is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    return {"status": "deleted", "upload_id": upload_id}
+
+
+def _build_generic_summary(results: list, model) -> dict[str, Any]:
+    """Per-constraint satisfied/violated/vacuous counts + violating case IDs. No group stats."""
+    from conformance.results import ConformanceOutcome
+
+    meta = {
+        c.id: {
+            "id": c.id,
+            "label": c.label,
+            "template": c.template.value,
+            "activation": c.activation,
+            "target": c.target,
+            "satisfied": 0,
+            "violated": 0,
+            "vacuous": 0,
+            "not_evaluated": 0,
+            "violating_case_ids": [],
+        }
+        for c in model.constraints
+    }
+
+    for trace in results:
+        for cr in trace.constraint_results:
+            entry = meta.get(cr.constraint_id)
+            if entry is None:
+                continue
+            if cr.outcome == ConformanceOutcome.SATISFIED:
+                entry["satisfied"] += 1
+            elif cr.outcome == ConformanceOutcome.VIOLATED:
+                entry["violated"] += 1
+                if len(entry["violating_case_ids"]) < 200:
+                    entry["violating_case_ids"].append(cr.case_id)
+            elif cr.outcome == ConformanceOutcome.VACUOUS:
+                entry["vacuous"] += 1
+            else:
+                entry["not_evaluated"] += 1
+
+    constraints = []
+    for entry in meta.values():
+        evaluated = entry["satisfied"] + entry["violated"]
+        entry["violation_rate"] = (entry["violated"] / evaluated) if evaluated else 0.0
+        constraints.append(entry)
+
+    return {"num_cases": len(results), "constraints": constraints}
+
+
+@app.post("/api/run_uploaded")
+def run_uploaded(request: RunUploadedRequest) -> dict[str, Any]:
+    """Run Declare conformance on an uploaded log with user-defined rules (whole-trace, synchronous).
+
+    ponytail: sync run, skipped the job/cancel plumbing of /api/run; add async only if large logs stall the request.
+    """
+    import random
+    import pandas as pd
+    from conformance.checker import check_log_conformance
+    from conformance.types import DeclareModel
+
+    df = _uploaded_logs.get(request.upload_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="Upload not found. Re-upload the log.")
+
+    model = DeclareModel(name="uploaded_run")
+    warnings = []
+    for cr in request.custom_rules:
+        try:
+            model.add(_custom_rule_to_constraint(cr))
+        except Exception as e:
+            warnings.append(f"Skipped rule '{cr.label}': {e}")
+
+    if not model.constraints:
+        raise HTTPException(status_code=400, detail="No valid rules to check.")
+
+    if request.sample_size:
+        all_ids = df["case_id"].unique().tolist()
+        rng = random.Random(request.seed)
+        sample_ids = set(rng.sample(all_ids, min(request.sample_size, len(all_ids))))
+        df = df[df["case_id"].isin(sample_ids)]
+
+    if request.trigger_event:
+        segments = []
+        for case_id, trace in df.groupby("case_id"):
+            episodes = _split_into_episodes(
+                trace.sort_values("timestamp", kind="stable"), request.trigger_event,
+                request.episode_window_hours, request.episode_end_event,
+            )
+            for idx, ep_df in enumerate(episodes):
+                ep_df = ep_df.copy()
+                ep_df["case_id"] = f"{case_id}::ep{idx}"
+                segments.append(ep_df)
+        df = pd.concat(segments, ignore_index=True) if segments else df
+
+    results = check_log_conformance(df, model)
+    summary = _build_generic_summary(results, model)
+    summary["num_events"] = int(len(df))
+    summary["num_cases_sampled"] = int(df["case_id"].nunique())
+    summary["warnings"] = warnings
+    return _sanitize(summary)
+
+
 @app.get("/api/case/{stay_id}")
 def get_case_data(stay_id: str):
     """Serve case event data on demand from the event log parquet."""
@@ -1403,7 +1648,7 @@ def get_case_data(stay_id: str):
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No data for case {stay_id}")
 
-    df = df.sort_values("timestamp")
+    df = df.sort_values("timestamp", kind="stable")
     events = []
     for row in df.to_dict(orient="records"):
         cleaned = {}

@@ -265,6 +265,8 @@ def _parse_constraint(
         ),
         activation_condition_title=activation_title,
         target_condition_title=correlation_title,
+        outcome_scope=str(raw.get("outcome_scope") or "episode"),
+        target_selection=raw.get("target_selection"),
     )
 
     # Attach additional metadata used by downstream exporters/UI.
@@ -272,7 +274,6 @@ def _parse_constraint(
     constraint.description = str(raw.get("description") or "")
     constraint.rationale = str(raw.get("rationale") or "")
     constraint.semantics = raw.get("semantics")
-    constraint.target_selection = raw.get("target_selection")
     constraint.activation_condition_raw = activation_cond
     constraint.target_condition_raw = correlation_cond
     obs_window = raw.get("observation_window_hours")
@@ -281,6 +282,20 @@ def _parse_constraint(
             constraint.observation_window_hours = float(obs_window)
         except (TypeError, ValueError):
             constraint.observation_window_hours = obs_window
+
+    ctx_pre = raw.get("context_window_pre_hours")
+    if ctx_pre is not None:
+        try:
+            constraint.context_window_pre_hours = float(ctx_pre)
+        except (TypeError, ValueError):
+            constraint.context_window_pre_hours = ctx_pre
+
+    ctx_post = raw.get("context_window_post_hours")
+    if ctx_post is not None:
+        try:
+            constraint.context_window_post_hours = float(ctx_post)
+        except (TypeError, ValueError):
+            constraint.context_window_post_hours = ctx_post
 
     return constraint
 
