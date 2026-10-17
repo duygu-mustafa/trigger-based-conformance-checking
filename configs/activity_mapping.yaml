@@ -29,16 +29,18 @@ mappings:
     derived: true
     logic: >
       Fired when InvasiveVentilationStarted occurs within 48h after SBTStarted
-      (window bounded by next SBTStarted if present). Timestamp = re-vent time.
+      (window bounded by next SBTStarted if present). Timestamp = re-vent time
+      minus 1 s, so the event stays in the SBT's own episode.
 
   SBTSucceeded:
     derived: true
     logic: >
       Fired when no InvasiveVentilationStarted occurs within 48h after SBTStarted.
-      Timestamp = min(start + 48h, stay_end).
+      Timestamp = min(start + 48h, stay_end), and before the next SBTStarted;
+      right-censored if the stay ends within 48h.
   
   # ── Post-SBT-Failure Intervention Activities ──────────────────────────────
-  # Real mapped activities backing INT-* rules and AnyFailureIntervention below.
+  # Real mapped activities backing INT-* rules and AnyFailureIntervention.
 
   Bronchodilator_Admin:
     source: chartevents
@@ -78,8 +80,8 @@ mappings:
   AnyFailureIntervention:
     derived: true
     description: >
-      Synthetic activity fired when at least one of the seven post-SBT-failure
-      intervention activities above is recorded. Used as the target of
+      Synthetic activity: one copy of every event of the seven post-SBT-failure
+      intervention activities above. Used as the target of
       INT-COMPOSITE-01 to enforce that at least one intervention pathway was
       addressed after a failed SBT. Resolved in
       activity_emitter._derive_activities by copying/renaming the source event;

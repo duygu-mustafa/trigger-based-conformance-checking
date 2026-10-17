@@ -1,14 +1,18 @@
-"""Declare Constraint Conformance Checking Module.
+"""MP-Declare constraint evaluation.
 
-This module provides functionality to evaluate Declare process model constraints
-against event logs. It supports multiple constraint templates (EXISTENCE, RESPONSE,
-PRECEDENCE, NOT_CO_EXISTENCE) and evaluates them with support for temporal
-conditions, data conditions, and correlation conditions.
+Evaluates MP-Declare constraints against a single evaluation trace (a pandas
+DataFrame sorted by timestamp). All 24 templates of DeclareTemplate are supported
+(unary, response, precedence, responded-existence, co-existence and succession
+families, and their negative variants), with activation conditions, correlation
+conditions, time windows and the target-selection mode (any / earliest / latest).
+Each activation is classified as fulfilled or violated; a constraint that is
+never activated is reported as VACUOUS. For violated precedence activations the
+checker also records why (absent / stale / no_payload / partial_payload / unmet).
 
 Key Functions:
     - evaluate_constraint: Evaluate a single constraint against a trace
-    - check_log_conformance: Check an entire event log against a model
-    - _evaluate_data_condition: Parse and evaluate data-based conditions
+    - check_log_conformance: Check every case of an event log against a model
+    - _evaluate_data_condition_status: Evaluate a data condition at an event
 """
 
 from __future__ import annotations
@@ -98,9 +102,11 @@ def _build_items_snapshot(
     Args:
         trace_df: Event log DataFrame with columns: timestamp, itemid, value_num, value_raw.
         ts: The timestamp cutoff; only events at or before this time are included.
+        observation_window_hours: If set, only events in [ts - window, ts] are included.
 
     Returns:
-        Dictionary mapping item IDs (int) to their latest values as of timestamp ts.
+        Dictionary mapping item IDs to their latest values as of timestamp ts. Keys are
+        the original item IDs; numeric IDs are additionally exposed as int.
         Empty dict if no items found or itemid column missing.
     """
     # Filter events up to the specified timestamp.
@@ -250,17 +256,19 @@ def _build_eval_context(
     context is used when evaluating data-dependent conditions in constraints.
 
     Args:
-        trace_df: Event log DataFrame containing all events for a patient stay.
+        trace_df: Evaluation trace (sorted by timestamp).
         eval_ts: The timestamp at which to evaluate the context (point-in-time snapshot).
         activation_ts: Optional explicit timestamp for SBT activation; used in SBT duration calculation.
+        observation_window_hours: Optional lookback window for the item snapshot.
 
     Returns:
         Dictionary with keys:
             - items: Dict of medical item ID -> latest value pairs
-            - hours_since_intubation: Float hours since intubation event (0 if not intubated)
-            - ventilation_duration_hours: Float hours on invasive ventilation
-            - previous_SBT_failed: Bool indicating if previous SBT attempts failed
-            - is_chronic: Bool for chronic ventilation dependency
+            - hours_since_stay_start: Float hours since the first event of the trace
+            - hours_since_intubation: Float hours since the first InvasiveVentilationStarted (0 if none)
+            - ventilation_duration_hours: Same, or the derived ventilation duration if longer
+            - previous_SBT_failed: Bool, an SBTFailed or SBTStopped occurs before eval_ts
+            - is_chronic: Bool, an earlier SBTDeferred with reason "chronic vent dependent"
             - high_risk_flag: Bool for high-risk status (currently always False)
             - vent_mode: String mode identifier from item 223848
             - sbt_duration_min: Float minutes of current SBT duration
@@ -272,7 +280,7 @@ def _build_eval_context(
         observation_window_hours=observation_window_hours,
     )
 
-    # Find key clinical milestones (using derived start instead of intubation item)
+    # Intubation time = first (derived) InvasiveVentilationStarted in the trace.
     intubation_ts = _first_ts(trace_df, "InvasiveVentilationStarted", eval_ts)
     invasive_vent_ts = intubation_ts
 
@@ -385,12 +393,12 @@ def _evaluate_data_condition_status(
 ) -> tuple[bool, bool, str | None, dict[str, float]]:
     """Evaluate a data condition expression against event log state at a point in time.
 
-    Parses and executes a Declare data condition (e.g., "items[225792] > 10") in the
+    Parses and executes a Declare data condition (e.g., "items[220210] > 35") in the
     context of a specific event. Variables available in conditions include medical
     items, time durations, SBT history flags, and temporal references.
 
     Args:
-        trace_df: Full event log DataFrame for building evaluation context.
+        trace_df: Evaluation trace used to build the evaluation context.
         row: The event row at which to evaluate the condition.
         expression: Declare data condition expression string (e.g., "items[12345] == 'value'").
         activation_ts: Optional explicit timestamp for SBT activation tracking.
@@ -524,9 +532,10 @@ def _filter_activation_rows(
     the activation events to only those satisfying the guard condition.
 
     Args:
-        trace_df: Full event log for context when evaluating conditions.
+        trace_df: Evaluation trace used as context when evaluating conditions.
         activation_rows: DataFrame of candidate activation events.
         constraint: Declare constraint with optional activation_cond.
+        observation_window_hours: Optional lookback window for the item snapshot.
 
     Returns:
         Tuple of (filtered_rows, eval_error):
@@ -567,11 +576,10 @@ def _evaluate_constraint_impl(
 ) -> ConstraintResult:
     """Evaluate a single Declare constraint against a patient's event trace.
 
-    Supports multiple constraint templates:
-        - EXISTENCE: Required activity must occur (optionally satisfying a condition)
-        - RESPONSE: When activation occurs, target must follow (within time window)
-        - PRECEDENCE: When activation occurs, target must have occurred before it
-        - NOT_CO_EXISTENCE: Activation and target cannot both occur
+    Handles all 24 DeclareTemplate values, grouped by family below:
+    unary (EXISTENCE, ABSENCE, AT_MOST_ONE, INIT, END), response, responded
+    existence, precedence, co-existence and succession (evaluated as a response
+    and a precedence component), each with its negative variants.
 
     Args:
         case_id: Patient/case identifier for result tracking.
@@ -598,7 +606,7 @@ def _evaluate_constraint_impl(
             except (TypeError, ValueError):
                 pass
 
-        # Backward-compatible fallback for readiness data rules.
+        # Readiness rules (RC-DP-*) default to a 24 h observation window.
         if isinstance(cid, str) and cid.startswith("RC-DP-"):
             return 24.0
         return None
@@ -1048,7 +1056,7 @@ def _evaluate_constraint_impl(
 
     # ============ PRECEDENCE FAMILY ============
     # Semantics: for each activation (the trigger, e.g. SBTStarted), check that
-    # target (the precondition, e.g. InvasiveVentilationStarted) occurred before it.
+    # target (the precondition, e.g. OxygenationMeasured) occurred before it.
     # Activation iterates; candidates are drawn from target rows before activation_ts.
     if constraint.template in {
         DeclareTemplate.PRECEDENCE,

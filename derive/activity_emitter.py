@@ -3,6 +3,11 @@
 This module reads:
 - configs/item_dictionary.yaml (itemid -> canonical signal labels)
 - configs/activity_mapping.yaml (itemid/value -> modeled activities)
+
+Every raw row becomes a measurement event labelled via the item dictionary;
+rows matching an activity mapping additionally become a mapped-activity event.
+_derive_activities() then adds the derived activities (SBT outcomes, readiness
+criterion activities, AnyFailureIntervention).
 """
 
 from __future__ import annotations
@@ -146,32 +151,23 @@ def _normalize_raw_input(raw_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _measurement_activity_label(row: pd.Series, labels: dict[tuple[str, Any], str]) -> str:
-    source = str(row.get("source_table") or "")
-    itemid = row["itemid"]
-    mapped = labels.get((source, itemid))
-    if mapped:
-        return mapped
-
-    label = row.get("label")
-    if label is not None and str(label).strip():
-        return str(label).strip()
-
-    return f"item_{itemid}"
-
-
 def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     """Generate derived activities from mapped activities.
 
-    Currently implements:
-    - SBTFailed: Fired when InvasiveVentilationStarted occurs within 48h after SBTStarted.
-    - SBTSucceeded: Fired when no re-ventilation occurs within 48h after SBTStarted.
+    Implements:
+    - AnyFailureIntervention: a copy of every post-failure intervention event.
+    - SBTFailed: InvasiveVentilationStarted within 48 h after SBTStarted (and
+      before the next SBTStarted); emitted 1 s before the re-ventilation.
+    - SBTSucceeded: no such re-ventilation; emitted at the end of the 48 h window
+      (or earlier at stay end, marked right-censored, or before the next SBTStarted).
+    - Readiness criterion activities (OxygenationMeasured, pHMeasured, ...):
+      one event per measurement of the underlying item.
     """
     derived_frames: list[pd.DataFrame] = []
 
-    # ── AnyFailureIntervention (Phase 1) ──────────────────────────────────────
+    # ── AnyFailureIntervention ────────────────────────────────────────────────
     # One event per occurrence of any of the seven post-SBT-failure intervention
-    # activities, so INT-COMPOSITE-01 has a real target instead of a phantom one.
+    # activities: the target activity of INT-COMPOSITE-01.
     FAILURE_INTERVENTION_ACTIVITIES = {
         "Bronchodilator_Admin",
         "Diuretic_Admin",
@@ -188,9 +184,9 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
 
     # ── SBT Outcomes (48h window / re-ventilation rule) ──────────────────────
     # For each SBTStarted: if InvasiveVentilationStarted occurs within the
-    # episode window (bounded by next SBTStarted and 48h), emit SBTFailed at
-    # that timestamp. Otherwise emit SBTSucceeded at min(start+48h, stay_end).
-    # One outcome per start, mutual exclusivity guaranteed by the if/else.
+    # window (bounded by next SBTStarted and 48h), emit SBTFailed 1 s before
+    # it. Otherwise emit SBTSucceeded at min(start+48h, stay_end), and before
+    # the next SBTStarted. One outcome per start (if/else).
     failure_window = pd.Timedelta(hours=48)
     sbt_started = activity_df[activity_df["activity"] == "SBTStarted"].copy()
     vent_starts = activity_df[activity_df["activity"] == "InvasiveVentilationStarted"].copy()
@@ -267,9 +263,9 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
         derived_frames.append(pd.DataFrame(outcome_rows))
 
     # ── Readiness Criterion Activities ────────────────────────────────────────
-    # Emit a named event only when the criterion IS satisfied so PRECEDENCE rules
-    # can check "SBTStarted must be preceded by [CriterionMeasured] within 24h"
-    # without needing a correlation_condition.
+    # Emit a named event for every measurement of the criterion's item(s),
+    # regardless of value. The threshold is enforced by the correlation_condition
+    # of the corresponding RC-DP PRECEDENCE rule (configs/declare/readiness_assessment.yaml).
 
     def _criterion_row(src: pd.Series, activity_name: str, trigger: str) -> dict:
         return {
@@ -286,7 +282,7 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
             "stay_id": src.get("stay_id"),
         }
 
-    # ponytail: one pass instead of 8+ full-column filter scans
+    # Group once by itemid instead of filtering the full frame per criterion.
     _itemid_groups = {str(k): v for k, v in activity_df.groupby(activity_df["itemid"].astype(str), sort=False)}
     _empty_frame = activity_df.iloc[0:0]
 
@@ -294,9 +290,9 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
         return _itemid_groups.get(itemid_str, _empty_frame)
 
     # ── OxygenationMeasured ───────────────────────────────────────────────────
-    # ponytail: unconditional emission, oxygenation_ok correlation_condition is
-    # sole authority (matches pH/Hgb/Temp/Vasopressor pattern below); no
-    # cross-item time-proximity check between SpO2/FiO2/PEEP, accepted tradeoff.
+    # Emitted for every PaO2/FiO2 and SpO2 value. The oxygenation_ok condition
+    # reads the latest SpO2/FiO2/PEEP independently; there is no check that
+    # they were recorded close together.
     oxy_rows = [
         _criterion_row(r, "OxygenationMeasured", "pao2fio2ratio")
         for _, r in _by_itemid("pao2fio2ratio").iterrows()
@@ -349,8 +345,8 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
     # ── MentalStatusMeasured ──────────────────────────────────────────────────
     # RASS LOC (228302) is the primary instrument, but it is documented in
     # only a small fraction of stays. SAS (223753) is the fallback instrument
-    # used far more often and must also emit MentalStatusMeasured, or the
-    # readiness/failure criteria are starved of a target event for most cases.
+    # used far more often and must also emit MentalStatusMeasured, or RC-DP-06
+    # has no target event for most stays.
     mental_rows = [
         _criterion_row(r, "MentalStatusMeasured", "228302")
         for _, r in _by_itemid("228302").iterrows()  # RASS LOC
@@ -377,7 +373,7 @@ def _derive_activities(activity_df: pd.DataFrame) -> list[pd.DataFrame]:
 
 
 def _vectorized_activity_labels(raw: pd.DataFrame, labels: dict[tuple[str, Any], str]) -> pd.Series:
-    """Vectorized replacement for apply(_measurement_activity_label, axis=1)."""
+    """Activity label per raw row: item dictionary label, else raw `label`, else item_<itemid>."""
     sources = raw["source_table"].astype(str)
     itemids = raw["itemid"]
     primary = pd.Series(
@@ -407,7 +403,8 @@ def emit_activities(
     """
     raw = _normalize_raw_input(raw_df)
     
-    # HARD FILTER: Remove legacy SBT/Vent IDs from raw input entirely
+    # Drop raw SBT items (224715-224717) and the invasive-ventilation procedure
+    # (225792): SBT and ventilation events are derived from ventilator settings.
     legacy_blacklist = {224715, 224716, 224717, 225792, "224715", "224716", "224717", "225792"}
     raw = raw[~raw["itemid"].isin(legacy_blacklist)].copy()
 
@@ -513,8 +510,8 @@ def emit_activities(
         out = out.dropna(subset=["case_id", "activity", "timestamp"]).copy()
         out = out.sort_values(["case_id", "timestamp", "activity"]).reset_index(drop=True)
 
-    # DEDUPLICATION: Remove identical rows (ignoring patient_id if it causes duplicates)
-    # We prioritize rows that HAVE a patient_id if duplicates exist
+    # Deduplicate on (case_id, activity, timestamp, itemid, value_raw),
+    # preferring the row that has a patient_id.
     if not out.empty:
         out = out.sort_values(["case_id", "timestamp", "activity", "patient_id"], na_position='last')
         out = out.drop_duplicates(subset=["case_id", "activity", "timestamp", "itemid", "value_raw"], keep="first")

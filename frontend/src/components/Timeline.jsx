@@ -309,7 +309,7 @@ const Timeline = ({ data }) => {
       const actual = ratio
         ? `PaO2/FiO2=${formatMeasurement(ratio)}`
         : `SpO2=${formatMeasurement(spo2)}, FiO2=${formatMeasurement(fio2)}, PEEP=${formatMeasurement(peep)}`;
-      return { actual, expected: 'PaO2/FiO2 >= 150 OR (SpO2 >= 90 AND FiO2 <= 0.40 AND PEEP <= 5)', observedAt: ratio?.timestamp || spo2?.timestamp || fio2?.timestamp || peep?.timestamp || null };
+      return { actual, expected: 'PaO2/FiO2 >= 150 OR (SpO2 >= 90% AND FiO2 <= 40% AND PEEP <= 5)', observedAt: ratio?.timestamp || spo2?.timestamp || fio2?.timestamp || peep?.timestamp || null };
     }
     if (cid === 'RC-DP-02') {
       const latest = latestItemBefore(['ph_bg'], episode.sbt_start, 24);
@@ -331,8 +331,8 @@ const Timeline = ({ data }) => {
       const cam = latestItemBefore([228302], episode.sbt_start, 24);
       const sas = latestItemBefore([223753], episode.sbt_start, 24);
       return {
-        actual: `CAM-ICU LOC=${formatMeasurement(cam)}, SAS=${formatMeasurement(sas)}`,
-        expected: "CAM-ICU LOC = 'Yes' OR SAS in [3, 4]",
+        actual: `RASS LOC=${formatMeasurement(cam)}, SAS=${formatMeasurement(sas)}`,
+        expected: "RASS LOC = 'No' OR SAS in [3, 4]",
         observedAt: cam?.timestamp || sas?.timestamp || null,
       };
     }
@@ -340,56 +340,30 @@ const Timeline = ({ data }) => {
       const latest = latestItemBefore([224686], episode.sbt_start, 24);
       return { actual: formatMeasurement(latest), expected: 'Spontaneous tidal volume > 0 mL', observedAt: latest?.timestamp || null };
     }
-    if (cid === 'SBT-TM-01') {
-      const sortedStarts = conformance
-        .filter(ep => ep.sbt_start)
-        .sort((a, b) => new Date(a.sbt_start).getTime() - new Date(b.sbt_start).getTime());
-      const idx = sortedStarts.findIndex(ep => ep.episode_index === episode.episode_index);
-      const priorFailed = idx > 0
-        ? [...sortedStarts.slice(0, idx)].reverse().find(ep => typeof ep.sbt_outcome === 'string' && ep.sbt_outcome.startsWith('Failure'))
-        : null;
-      if (!priorFailed) return { actual: 'No prior failed SBT', expected: 'At least 24h after prior failed SBT' };
-      const deltaH = (new Date(episode.sbt_start).getTime() - new Date(priorFailed.sbt_start).getTime()) / (1000 * 60 * 60);
-      return { actual: `${deltaH.toFixed(1)}h since failed SBT`, expected: 'At least 24h after prior failed SBT' };
+    if (cid === 'SBT-TM-01' || cid === 'SBT-TM-01-early' || cid === 'SBT-TM-01-late') {
+      const expected = {
+        'SBT-TM-01': 'Next SBT on the calendar day after the failed SBT',
+        'SBT-TM-01-early': 'Next SBT not on the same calendar day as the failed SBT',
+        'SBT-TM-01-late': 'Next SBT no later than the calendar day after the failed SBT',
+      }[cid];
+      const failure = findNext(events.filter(e => e.activity === 'SBTFailed'), episode.sbt_start || episode.episode_start);
+      if (!failure) return { actual: 'No SBT failure in this episode', expected };
+      const nextStart = findNext(events.filter(e => e.activity === 'SBTStarted'), failure.timestamp);
+      if (!nextStart) return { actual: 'No later SBT start', expected, observedAt: failure.timestamp };
+      const dayOf = (ts) => Date.UTC(...String(ts).slice(0, 10).split('-').map((v, i) => Number(v) - (i === 1 ? 1 : 0)));
+      const dayDiff = Math.round((dayOf(nextStart.timestamp) - dayOf(failure.timestamp)) / (24 * 60 * 60 * 1000));
+      return {
+        actual: dayDiff === 0 ? 'Next SBT on the same calendar day' : `Next SBT ${dayDiff} calendar day(s) later`,
+        expected,
+        observedAt: nextStart.timestamp,
+      };
     }
-    if (cid === 'RC-TM-03') {
+    if (cid === 'SBT-TM-02') {
+      // The checker measures hours_since_stay_start from the first event of the evaluation trace (the episode start).
       const actualH = episode.sbt_start ? getHours(episode.sbt_start) - getHours(episode.episode_start) : null;
-      return { actual: typeof actualH === 'number' ? `${actualH.toFixed(1)}h` : 'No SBT start', expected: 'SBT should occur within 72h of ventilation start' };
-    }
-    if (cid === 'SBT-CF-01') {
-      const hasCompletion = !!findNext(events.filter(e => e.activity === 'SBTCompleted'), episode.sbt_start || episode.episode_start);
-      return { actual: hasCompletion ? 'SBTCompleted found' : 'No SBTCompleted found', expected: 'Each SBTStarted must have a corresponding SBTCompleted event' };
-    }
-    if (cid === 'SBT-DP-01') {
-      let durationMin = null;
-      if (episode.sbt_start && episode.sbt_end) {
-        const durationMs = new Date(episode.sbt_end).getTime() - new Date(episode.sbt_start).getTime();
-        durationMin = durationMs / (1000 * 60);
-      }
       return {
-        actual: durationMin != null ? `${durationMin.toFixed(1)} min` : 'No measurable SBT duration',
-        expected: 'SBT duration should be between 30 and 120 min for valid success',
-      };
-    }
-    if (cid === 'SBT-DP-06') {
-      const ventHours = episode.sbt_start ? (new Date(episode.sbt_start).getTime() - new Date(episode.episode_start).getTime()) / (1000 * 60 * 60) : null;
-      const ventMode = latestItemBefore([223848], episode.sbt_start || episode.episode_end, 24);
-      const modeValue = (ventMode?.value_raw ?? ventMode?.value_num ?? 'N/A');
-      return {
-        actual: `Vent duration=${ventHours != null ? `${ventHours.toFixed(1)}h` : 'N/A'}, mode=${modeValue}`,
-        expected: 'If vent duration > 24h, mode should include PSV',
-        observedAt: ventMode?.timestamp || null,
-      };
-    }
-    if (cid === 'SBT-TM-01') {
-      let durationH = null;
-      if (episode.sbt_start && episode.sbt_end) {
-        const durationMs = new Date(episode.sbt_end).getTime() - new Date(episode.sbt_start).getTime();
-        durationH = durationMs / (1000 * 60 * 60);
-      }
-      return {
-        actual: durationH != null ? `${durationH.toFixed(2)}h` : 'No completion timestamp found',
-        expected: 'SBTCompleted should be recorded within 3h of SBTStarted',
+        actual: typeof actualH === 'number' ? `SBT ${actualH.toFixed(1)}h after episode start` : 'No SBT start',
+        expected: 'SBT within 72h of stay start',
       };
     }
 
@@ -621,17 +595,6 @@ const Timeline = ({ data }) => {
                       </text>
                     )}
 
-                    {episode.mandatory_violated_constraints.includes('RC-TM-03') && (
-                      <rect
-                        x={getX(episode.episode_start) + (48 * 60 * 60 * 1000 / duration) * chartWidth}
-                        y={y + 50}
-                        width={(24 * 60 * 60 * 1000 / duration) * chartWidth}
-                        height={6}
-                        fill="var(--color-success)"
-                        opacity={0.4}
-                        rx={3}
-                      />
-                    )}
                   </g>
                 </g>
               );

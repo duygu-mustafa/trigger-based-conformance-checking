@@ -153,7 +153,7 @@ A per-stay (trace-global) verdict has to assign one outcome label to the whole s
 
 ## 2c. What segmentation buys (trace-global ablation)
 
-Same clinical model, same stays, evaluated a second time with segmentation disabled (`main_per_sbt.py --no-segmentation`): one evaluation trace per stay instead of one per trigger episode. Comparing the two verdicts on the same 2,000 multi-episode stays isolates what episode-local evaluation adds, holding the checker, the model, and the population fixed. This ablation covers the multi-episode subpopulation only — it shows where segmentation *can* matter, not an average over the whole cohort.
+Same clinical model, same stays, evaluated a second time with segmentation disabled (`main.py --no-segmentation`): one evaluation trace per stay instead of one per trigger episode. Comparing the two verdicts on the same 2,000 multi-episode stays isolates what episode-local evaluation adds, holding the checker, the model, and the population fixed. This ablation covers the multi-episode subpopulation only — it shows where segmentation *can* matter, not an average over the whole cohort.
 
 **Numbers for prose**
 

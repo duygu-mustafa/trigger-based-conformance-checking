@@ -1,6 +1,26 @@
-"""Weighted, fuzzy conformance scoring based on thesis Section 3.
+"""Optional weighted, fuzzy conformance scoring (not part of the thesis method).
 
-This module implements formulas (3.1) to (3.5) from the thesis method.
+The conformance method evaluated in the thesis reports per-episode verdicts per
+constraint; no pipeline script calls this module. It is kept as an optional
+extension (see the "Optional: weighted conformance scoring" section of
+evaluation/rtfm_conformance.ipynb). Importance scores are read from a weights
+YAML such as configs/declare/weights.yaml.
+
+Two scoring variants are implemented:
+
+Penalty score (compute_trace_scores), numbered (1)-(5) below:
+  (1) w_max(c)  = 2 if all metadata scores of c are 1, else their mean
+  (2) mu(v)     = 1 for a control-flow violation; for a threshold violation
+                  0 / (x - theta) / (theta_crit - theta) / 1, piecewise linear
+  (3) w(v)      = w_max(c)^2 * mu(v)
+  (4) W_t(c)    = min(w_max(c)^2, sum of w(v) over violations v of c in trace t)
+  (5) score(t)  = 1 - sum_c W_t(c) / sum_c w_max(c)^2, over the constraints
+                  applicable to t (open-world assumption)
+
+Fuzzy weighted average (score_trace_result / score_trace_collection): each
+constraint gets a satisfaction degree in [0, 1] from the checker result, the
+trace score is their importance-weighted mean, and sugeno_kpi() aggregates
+trace scores into a population KPI with the Sugeno integral.
 """
 
 from __future__ import annotations
@@ -21,8 +41,8 @@ from conformance.types import DeclareTemplate, NEGATIVE_TEMPLATES, UNARY_TEMPLAT
 class Constraint:
     """Declarative constraint metadata used for weighted scoring.
 
-    Implements inputs needed for formulas (3.1) to (3.5) and the newer
-    fuzzy trace-scoring pipeline.
+    Holds the inputs of both the penalty score (1)-(5) and the fuzzy weighted
+    average (see the module docstring).
     """
 
     constraint_id: str
@@ -42,8 +62,7 @@ class Constraint:
 class ViolationInstance:
     """Single violation instance for a trace and constraint.
 
-    Used to compute fuzzy severity in formula (3.2) and effective penalty in
-    formula (3.3).
+    Used to compute fuzzy severity (2) and effective penalty (3).
     """
 
     case_id: str
@@ -180,7 +199,7 @@ def load_constraints_with_weights(
 
 
 def compute_w_max(constraint: Constraint) -> float:
-    """Compute static maximum weight w_max(c) using formula (3.1).
+    """Compute static maximum weight w_max(c) using (1).
 
     If all metadata dimension scores are 1, returns 2; otherwise returns the
     mean of metadata scores.
@@ -317,7 +336,7 @@ def _satisfaction_from_count_deviation(
 
 
 def compute_threshold_severity(x: float, theta: float, theta_crit: float) -> float:
-    """Compute fuzzy severity mu(v) for threshold violations with formula (3.2)."""
+    """Compute fuzzy severity mu(v) for threshold violations with (2)."""
 
     if theta_crit <= theta:
         raise ValueError("theta_crit must be strictly greater than theta.")
@@ -334,7 +353,7 @@ def compute_violation_severity(
 ) -> float:
     """Compute mu(v) in [0,1] for one violation instance.
 
-    Implements formula (3.2):
+    Implements (2):
     - control-flow violations: mu(v) = 1
     - threshold violations: piecewise-linear severity using x, theta, theta_crit
     """
@@ -359,7 +378,7 @@ def compute_violation_severity(
 
 
 def compute_violation_weight(violation: ViolationInstance, constraint: Constraint) -> float:
-    """Compute effective violation weight w(v) with formula (3.3)."""
+    """Compute effective violation weight w(v) with (3)."""
 
     w_max = compute_w_max(constraint)
     mu = compute_violation_severity(violation=violation, constraint=constraint)
@@ -573,7 +592,7 @@ def compute_trace_scores(
     violations: Iterable[ViolationInstance] | pd.DataFrame,
     applicable_constraints: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Compute per-trace conformance score using formulas (3.1) to (3.5).
+    """Compute per-trace conformance score using (1) to (5).
 
     Args:
         constraints: Constraint definitions or equivalent DataFrame.
@@ -607,7 +626,7 @@ def compute_trace_scores(
         raise ValueError("applicable_constraints must include case_id and constraint_id.")
     a_df = applicable_constraints[list(required_a)].drop_duplicates().copy()
 
-    # Aggregate instance-level penalties then cap with formula (3.4).
+    # Aggregate instance-level penalties then cap with (4).
     if v_df.empty:
         vt = pd.DataFrame(columns=["case_id", "constraint_id", "sum_w", "W_t_c"])
     else:

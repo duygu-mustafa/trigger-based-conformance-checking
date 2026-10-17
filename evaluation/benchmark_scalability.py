@@ -3,13 +3,13 @@
 Experiments (each writes one tidy CSV to ``evaluation/data/benchmarks/``):
 
 * **E1 — log size**: wall time of the full pipeline (episode segmentation,
-  outcome derivation, all 10 RTFM constraints) over increasing case samples.
+  outcome derivation, all 11 RTFM constraints) over increasing case samples.
 * **E2 — trace length**: per-case runtime vs. events per trace; natural range
   from the log plus synthetically lengthened traces (event sequence replicated
   k times with shifted timestamps, checked without segmentation to keep the
   whole lengthened trace as one evaluation unit).
-* **E3 — model size**: wall time on a fixed sample with the first k of the 10
-  RTFM constraints, k = 1..10.
+* **E3 — model size**: wall time on a fixed sample with the first k of the 11
+  RTFM constraints, k = 1..11.
 * **E4 — rule complexity**: per-constraint runtime (real model + synthetic
   variants from ``rtfm_synthetic_rules.yaml``) joined with the complexity
   breakdown from ``evaluation/complexity.py``.
@@ -24,8 +24,8 @@ library versions are recorded in ``machine_info.json``.
 
 Results are appended per measurement, so an interrupted run keeps everything
 already measured and ``--resume`` continues from there (same contract as
-``main_per_sbt.py --resume``). Long runs should go through
-``run_benchmark_safe.sh``, which wraps this in tmux/nohup with a timestamped log.
+``main.py --resume``). Long runs should go through
+``scripts/run_benchmark_safe.sh``, which wraps this in tmux/nohup with a timestamped log.
 
 Usage::
 

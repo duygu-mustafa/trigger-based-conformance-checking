@@ -1,7 +1,16 @@
-"""Precompute canonical event-log rows from raw ICU events.
+"""Build the canonical event log from the raw MIMIC-IV extraction.
+
+Reads the raw event file (database/materialize_all_icu_events.py), converts each
+selected stay with derive.pipeline.raw_to_event_log, and writes the canonical
+event log (Parquet or CSV). Stays are processed one at a time into a temporary
+DuckDB database; progress is checkpointed so an interrupted run can --resume.
+
+Stay selection: by default all stays with a `ventilator_setting` row
+(--source-table-filter), randomly sampled unless --use-all-data is given.
 
 Usage:
-    python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/icu_event_log.parquet
+    python prepare_event_log.py --input data/icu_event_level_sbt.parquet \
+        --output data/final/icu_event_log_full.parquet --use-all-data
 """
 
 from __future__ import annotations
@@ -298,21 +307,15 @@ def main() -> None:
         help="Output canonical event-log file.",
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=1,
-        help="Deprecated: processing is forced to one stay_id at a time.",
-    )
-    parser.add_argument(
         "--use-all-data",
         action="store_true",
-        help="Process all stay_ids from input instead of filtering by sample-source.",
+        help="Process all candidate stays instead of a random sample.",
     )
     parser.add_argument(
         "--sample-source",
         type=Path,
         default=Path("data/sbt_started_yes_stay_ids.parquet"),
-        help="Parquet file containing candidate stay_id values for sampling (ignored if --use-all-data).",
+        help="Parquet file with candidate stay_id values; only used when --source-table-filter is empty.",
     )
     parser.add_argument(
         "--source-table-filter",
@@ -324,7 +327,7 @@ def main() -> None:
         "--sample-size",
         type=int,
         default=None,
-        help="Number of random stay_ids to process from sample-source.",
+        help="Number of random stays to sample (default: all candidates).",
     )
     parser.add_argument(
         "--sample-seed",
@@ -336,7 +339,8 @@ def main() -> None:
         "--pin-stay-id",
         action="append",
         default=["35616431", "30031915"],
-        help="Stay id to always include in the sampled set. Repeatable.",
+        help="Stay id to always include in the sampled set (ignored with --use-all-data). "
+        "Repeatable; added to the two default example stays.",
     )
     parser.add_argument(
         "--memory-limit",
@@ -391,9 +395,6 @@ def main() -> None:
     state_path = args.state_file or _state_file_default(args.output)
     backup_dir = args.backup_dir or _backup_dir_default(args.output)
     signature = _run_signature(args)
-
-    if args.batch_size != 1:
-        print("Note: forcing one-stay-at-a-time processing; ignoring --batch-size.")
 
     if not args.input.exists():
         raise FileNotFoundError(f"Input file does not exist: {args.input}")
@@ -662,7 +663,6 @@ def main() -> None:
             raise RuntimeError("No event-log rows were generated from input")
 
         _export_event_log(output_con, args.output)
-        _export_event_log(output_con, Path("data/icu_event_log_sbt_test.csv"))
         print(f"Saved event log: {args.output}")
         run_success = True
     except KeyboardInterrupt:

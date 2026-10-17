@@ -9,25 +9,25 @@ model:
     No cause classification is performed: rules fire after every SBT failure and
     individual weights reflect how universally each intervention is expected.
 
-    All templates conform to Burattin et al. (2016) Table 2 MP-Declare semantics.
-    The custom `semantics` field has been removed; violation attribution is
-    determined by the template algorithm:
-      - response: SBTFailed activation instance moves to violations at closing()
-        when no target event satisfying ϕ_c and ϕ_τ is found within the window.
-      - precedence: target activation instance moves to violations when no prior
-        occurrence of the activation satisfying ϕ_c is found.
+    All templates follow Burattin et al. (2016) Table 2 MP-Declare semantics.
+    Violations are attributed to the activation instance:
+      - response: the SBTFailed activation is violated when, at trace end, no
+        target event satisfying ϕ_c and ϕ_τ was found within the window.
+      - precedence: the treatment activation is violated when no earlier
+        diagnostic (target) event is found in the evaluation trace.
 
-    SBTFailed is defined as:
-      - SBTCompleted with value = "Failure" (derived from weaning state transitions)
+    SBTFailed is derived in derive/activity_emitter.py: an SBTStarted followed
+    by InvasiveVentilationStarted within 48 h (re-ventilation).
 
-    Activity definitions:
-      SBTFailed                    -- derived from above
-      Bronchodilator_Admin         -- inputevents itemid 224170
+    Activity definitions (configs/activity_mapping.yaml):
+      SBTFailed                    -- derived, see above
+      Bronchodilator_Admin         -- chartevents itemid 224170
       Diuretic_Admin               -- inputevents itemids [221794, 229639]
       AfterloadReduction_Admin     -- inputevents itemids [222056, 222051, 225974, 221429]
       ElectrolyteBG_Test           -- labevents itemids [50971, 50960, 50970, 50882, 50818, 50820]
       ElectrolyteCorrection_Admin  -- inputevents itemids [222011, 227536, 222151, 220995, 227523]
-      HormonalLab_Test             -- labevents itemids [227463, 50993, 50995]
+      HormonalLab_Test             -- chartevents itemid 227463 (cortisol),
+                                      labevents itemids [50993, 50995]
       HormonalReplacement_Admin    -- prescriptions drugnames
                                       ["HYDROCORTISONE", "METHYLPREDNISOLONE",
                                        "DEXAMETHASONE", "LEVOTHYROXINE SODIUM"]
@@ -50,7 +50,7 @@ constraints:
     outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: Bronchodilator_Admin
     context_window_post_hours: 24
-    # source: icu.inputevents, itemid 224170
+    # source: icu.chartevents, itemid 224170
     time_condition:
       max_hours: 24
     rationale: >
@@ -148,8 +148,7 @@ constraints:
     outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: HormonalLab_Test
     context_window_post_hours: 24
-    # source: hosp.labevents
-    # itemids: [227463 (Cortisol), 50993 (TSH), 50995 (Free T4)]
+    # source: icu.chartevents 227463 (Cortisol); hosp.labevents 50993 (TSH), 50995 (Free T4)
     time_condition:
       max_hours: 24
     rationale: >
@@ -189,15 +188,13 @@ constraints:
     outcome_scope: next_episode  # inter-episode rule: outcome = next episode sbt_outcome
     target: AnyFailureIntervention
     context_window_post_hours: 24
-    # AnyFailureIntervention is a derived activity resolved in preprocessing:
-    # exists(inputevents,  itemid IN [224170, 221794, 229639,
-    #                                 222056, 222051, 225974, 221429,
-    #                                 222011, 227536, 222151, 220995, 227523])
-    # OR exists(labevents, itemid IN [50971, 50960, 50970, 50882, 50818, 50820,
-    #                                 227463, 50993, 50995])
-    # OR exists(prescriptions, drugname IN ['HYDROCORTISONE', 'METHYLPREDNISOLONE',
-    #                                        'DEXAMETHASONE', 'LEVOTHYROXINE SODIUM'])
-    # preprocessing_required: true
+    # AnyFailureIntervention is derived in derive/activity_emitter.py: one copy
+    # of every event of the seven intervention activities above.
+    # main.py does not evaluate this definition with the generic checker.
+    # It evaluates the rule at each non-first SBT attempt instead
+    # (_evaluate_composite_for_attempt): satisfied if an intervention occurs within
+    # 24 h after the latest prior SBTFailed/SBTStopped and before that attempt.
+    # api.py (Clinician Studio) evaluates the definition below generically.
     time_condition:
       max_hours: 24
     rationale: >
@@ -209,8 +206,8 @@ constraints:
   # MFOTL: G(∀x.((B ∧ ϕ_a(x)) → O_I(A ∧ ∃y.ϕ_c(x,y))))
   # B (activation) = the treatment event — whose occurrence fires the check.
   # A (target)     = the diagnostic event — must have occurred before B.
-  # Violation: treatment activation instance moves to violations when no
-  # prior diagnostic event is found in the trace history.
+  # Violation: the treatment activation is violated when no earlier
+  # diagnostic event is found in the evaluation trace.
 
   - id: INT-SEQ-01
     label: "Electrolyte correction must be preceded by electrolyte or blood gas testing"

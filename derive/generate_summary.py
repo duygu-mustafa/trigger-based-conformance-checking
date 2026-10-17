@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Generate global conformance summary metrics for the frontend dashboard.
 
-The script scans case JSON files and writes an aggregated summary JSON used by the
-frontend Summary view.
+Scans the per-stay case_*.json files written by main.py and writes the
+aggregated summary.json read by the frontend Results views. Per-constraint
+statistics (OR/RR/p-values) are merged in from the R statistics CSV
+(rule_statistics_R2.csv) when available. Violation counts use the mandatory
+constraint columns only, i.e. INT-* rules other than INT-COMPOSITE-01 are not counted.
+
+main.py calls build_summary() directly; the CLI regenerates summary.json
+from existing case files.
 """
 
 from __future__ import annotations
@@ -107,11 +113,7 @@ def _load_constraint_metas_from_models(project_root: Path) -> dict[str, dict[str
 
 
 def infer_input_dir(project_root: Path) -> Path:
-    public_dir = project_root / "frontend" / "public" / "data"
-    src_dir = project_root / "frontend" / "src" / "data"
-    if public_dir.exists():
-        return public_dir
-    return src_dir
+    return project_root / "frontend" / "public" / "data"
 
 
 def _load_item_labels(project_root: Path) -> dict[str, str]:
@@ -299,16 +301,12 @@ def build_summary(case_files: list[Path], input_dir: Path, stats_csv: Path | Non
         rate_success = round(count_success / num_success, 4) if num_success > 0 else 0.0
         rate_failure = round(count_failure / num_failure, 4) if num_failure > 0 else 0.0
         
-        # Lift = P(V|F) / P(V)
-        # We only calculate lift if there are SOME violations overall
+        # Lift = P(V|F) / P(V); 1.0 when there are no violations at all.
         total_v = count_success + count_failure
         prob_v = total_v / (num_success + num_failure) if (num_success + num_failure) > 0 else 0.0
         lift_failure = round(rate_failure / prob_v, 3) if prob_v > 0 else 1.0
         
-        # Satisfaction Metrics
-        # P(S|Success) = count_satisfied_success / num_success
-        # But we need to count satisfactions per outcome
-        # Let's add that logic
+        # Satisfaction rates per outcome, e.g. P(S|Success) = count_sat_success / num_success.
         count_sat_success = sum(1 for ep in grouped["success"] if cid in parse_constraint_list(ep.get("mandatory_satisfied_constraints")))
         count_sat_failure = sum(1 for ep in grouped["failure"] if cid in parse_constraint_list(ep.get("mandatory_satisfied_constraints")))
         
@@ -518,7 +516,7 @@ def main() -> None:
         "--input-dir",
         type=Path,
         default=None,
-        help="Directory containing case_*.json files (default: frontend/public/data if present, else frontend/src/data)",
+        help="Directory containing case_*.json files (default: frontend/public/data)",
     )
     parser.add_argument(
         "--stats-csv",
@@ -541,7 +539,7 @@ def main() -> None:
     # Default to the standard stats path when not specified explicitly
     stats_csv = args.stats_csv
     if stats_csv is None:
-        default_stats = project_root / "data" / "results" / "rule_statistics_R2.csv"
+        default_stats = project_root / "data" / "results" / "full_results" / "rule_statistics_R2.csv"
         if default_stats.exists():
             stats_csv = default_stats
             print(f"Using stats CSV: {stats_csv}")

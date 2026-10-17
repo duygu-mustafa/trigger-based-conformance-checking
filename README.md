@@ -1,444 +1,135 @@
-# Master Thesis: SBT Conformance Testing Pipeline
+# Trigger-Based Declarative Conformance Checking
 
-This repository implements a complete pipeline for deriving Spontaneous Breathing Trial (SBT) events from ICU data and measuring conformance to a set of declarative rules.
+Code for the master's thesis *Trigger-Based Declarative Conformance Checking* (Duygu Mustafa,
+Chair of Process and Data Science, RWTH Aachen University).
 
-## Workflow Overview
+The thesis proposes a declarative, multi-perspective conformance checking framework. Normative
+rules are MP-Declare constraints over control flow, data and time. Instead of evaluating whole
+traces, the framework splits each case into **episodes** opened by a trigger event and checks every
+episode on its own. It also adds a **target-selection** mode for repeatedly recorded measurements:
+the verdict depends on the most recent measurement in the time window, not on any measurement that
+happens to satisfy the condition. The framework is applied to weaning from mechanical ventilation in
+the ICU, using event logs derived from MIMIC-IV, and evaluated on synthetic logs and on the public
+Road Traffic Fine Management log.
 
-The process has three main stages:
+This README covers the framework overview and the **Clinician Studio**, the interactive front end.
+To rebuild the event log and the results from MIMIC-IV, see [docs/PIPELINE.md](docs/PIPELINE.md).
 
-1. **Raw Data Extraction** — Fetch ICU events from the MIMIC-IV database
-2. **Event Log Construction** — Build a canonical event log with automatic SBT derivation and conformance gates
-3. **Conformance Checking** — Run declarative rules against the event log and compute metrics
+## Framework overview
 
----
-
-## 1. Raw Data Extraction
-
-```bash
-python database/materialize_all_icu_events.py --output icu_event_level_sbt.parquet
+```mermaid
+flowchart LR
+    raw[(Raw event log)] --> E[1. Episode<br/>extraction]
+    E -- episodes --> C[2. Evaluation<br/>context]
+    C -- evaluation traces --> V[3. Constraint<br/>evaluation]
+    V -- episode verdicts --> O[4. Outcome<br/>association]
+    V --> res[/Conformance results/]
+    O --> assoc[/Constraint–outcome associations/]
+    t[[trigger definition,<br/>observation windows]] -.-> E
+    w[[context windows,<br/>derived attributes]] -.-> C
+    k[[constraint definitions]] -.-> V
+    d[[outcome definition]] -.-> O
 ```
 
-### What This Does
-- Connects to the MIMIC-IV PostgreSQL database
-- Queries multiple event tables: `chartevents`, `datetimeevents`, `ingredientevents`, `inputevents`, `outputevents`, `procedureevents`
-- Filters for ICU stays that have at least one documented SBT candidate (derived weaning events)
-- Normalizes all raw events into a consistent schema with columns: `source_table`, `itemid`, `event_time`, `value_text`, `value_num`, `value_uom`, `charttime`, `starttime`, `endtime`, `case_id`, `stay_id`, `subject_id`
-- Exports to Parquet for efficient downstream processing
-
-### Requirements
-- Active PostgreSQL connection to MIMIC-IV (credentials in `database/client.py`)
-- `configs/item_dictionary.yaml` — Mapping of MIMIC-IV item IDs to semantic labels
-
----
-
-## 2. Event Log Construction
-
-### Purpose
-Transform raw ICU events into a canonical event log with automatic SBT derivation and conformance-aware gates.
-
-### Key Features
-- **Automatic SBT Derivation** — Reconstructs SBT episodes from raw ventilator settings and transitions
-- **Invasive Ventilation Gate** — Ensures SBT start events only appear after invasive ventilation has begun
-- **Activity Mapping** — Maps raw events to semantic activities using declarative configuration
-
-```bash
-python prepare_event_log.py \
-  --input icu_event_level_sbt.parquet \
-   --output icu_event_log_full.parquet \
-   --use-all-data
-```
-
-### Arguments
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--input` | `icu_event_level_sbt.parquet` | Raw ICU events (Parquet or CSV) |
-| `--output` | `icu_event_log_full.parquet` | Output canonical event log (Parquet or CSV) |
-| `--sample-source` | `sbt_started_yes_stay_ids.parquet` | Parquet file with candidate stay_ids |
-| `--sample-size` | 1000 | Number of random stays to process |
-| `--sample-seed` | 42 | Random seed for reproducibility |
-| `--source-table-filter` | _none_ | Restrict stays to those that contain a given raw `source_table`, such as `ventilator_setting` |
-| `--memory-limit` | `4GB` | DuckDB memory limit |
-| `--resume` | off | Resume an interrupted run from checkpoint state and temp DB |
-| `--state-file` | `<output>.state.json` | Path to checkpoint state JSON |
-| `--backup-every` | 200 | Write periodic checkpoint exports every N processed stays (0 disables) |
-| `--backup-dir` | `<output_parent>/<output_stem>_checkpoints` | Directory for checkpoint export files |
-| `--seed-checkpoint` | _none_ | Seed the output table from an existing parquet checkpoint before continuing |
-| `--seed-skip-count` | _none_ | Skip the first N candidate stays when starting from a seeded checkpoint |
-
-To process the full dataset produced by the preparation script, add:
-
-```bash
-python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data
-```
-
-If you want to restrict the run to a specific raw source table, pass `--source-table-filter ventilator_setting` instead.
-
-### Processing Pipeline
-
-The pipeline (`derive/pipeline.py`) performs these steps for each stay:
-
-1. **Derive Weaning Frame**
-   - Extracts all ventilator-setting rows (indicative of mechanical ventilation)
-   - Reconstructs weaning/SBT episodes from ventilation status transitions
-   - Groups events by stay_id and time
-
-2. **Extract Invasive Ventilation Start Times**
-   - Queries raw procedureevents for invasive ventilation marker (itemid=225792)
-   - Records the earliest starttime per stay_id
-   - **This ensures SBT can only start after invasive ventilation begins**
-
-3. **Build SBT Episodes**
-   - Calls thesis-specific SBT episode builder (`derive/sbt_episodes.py`)
-   - Returns DataFrame with columns: `stay_id`, `case_id`, `sbt_start_time`, `sbt_end_time`, etc.
-
-4. **Apply Invasive Ventilation Gate**
-   - Filters episodes: keep only if `sbt_start_time ≥ invasive_vent_start_time`
-   - Suppresses SBT events that would occur before ventilation began
-   - **Prevents conformance violation RC-CF-01** (SBTStarted must follow InvasiveVentilationStarted)
-
-5. **Emit SBT Events**
-   - Converts filtered episodes to canonical event rows
-   - Sets `source_table='sbt_derived'`, `itemid='sbt_status'`, `value_text='Started'`
-
-6. **Activity Mapping**
-   - Maps all events (including SBT) to semantic activities via `configs/activity_mapping.yaml`
-   - Example: `source=sbt_derived, itemid=sbt_status, value_text=Started` → Activity: `SBTStarted`
-
-7. **Output Canonical Event Log**
-   - Aggregates all processed stays into a single event log
-   - Schema: `case_id`, `timestamp`, `activity`, `attrs` (metadata)
-   - Sorted by timestamp within each case
-
-### Output
-- `icu_event_log_full.parquet` — Canonical event log ready for conformance checking
-- Temporary DuckDB files created and cleaned up automatically
-
-### Safe Long-Run Execution on Linux
-
-For long runs, use `tmux` so the process survives terminal disconnects.
-
-```bash
-tmux new -s eventlog
-python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/final/icu_event_log_full.parquet --use-all-data --backup-every 200 --workers 4
-# detach with Ctrl+b then d
-```
-
-Reattach later:
-
-```bash
-tmux attach -t eventlog
-```
-
-If the job is interrupted, resume where it left off:
-
-```bash
-python prepare_event_log.py --input data/icu_event_level_sbt.parquet --output data/final/icu_event_log_full.parquet --use-all-data --resume --workers 4
-```
-
-Alternative without tmux (`nohup`):
-
-```bash
-nohup python prepare_event_log.py --input icu_event_level_sbt.parquet --output icu_event_log_full.parquet --use-all-data --backup-every 200 > prepare_event_log.out 2>&1 &
-```
-
-Convenience launcher script (tmux first, nohup fallback):
-
-```bash
-./run_event_log_safe.sh
-./run_event_log_safe.sh --resume
-./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
-```
-
-The script writes timestamped logs under `logs/`, starts in a detached `tmux` session when available, and supports pass-through options like `--input`, `--output`, `--backup-every`, `--state-file`, `--backup-dir`, `--memory-limit`, `--source-table-filter`, `--seed-checkpoint`, and `--seed-skip-count`.
-
-To restart from the 10,000-stay checkpoint and continue the full build, use:
-
-```bash
-./run_event_log_safe.sh --seed-checkpoint data/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
-```
-
-### Configuration Files
-- `configs/activity_mapping.yaml` — Maps raw source/itemid/value combinations to semantic activities
-
----
-
-## 3. Conformance Checking
-
-### Purpose
-Execute declarative process-compliance rules against the event log and compute conformance metrics.
-
-### Command
-```bash
-source .venv/bin/activate
-python main_per_sbt.py
-```
-
-### Arguments
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--input` | `data/final/icu_event_log_full.parquet` | Canonical event log (Parquet) |
-| `--output` | `data/results/full_results020726/trigger_results_full.csv` | Output results CSV |
-| `--resume` | off | Skip stays already present in output CSV and append new results |
-
-### Safe Long-Run Execution on Linux 
-
-Conformance checking over the full dataset can take hours. Use the launcher script so the process survives terminal disconnects.
-
-```bash
-./run_conformance_safe.sh
-```
-
-Reattach to the tmux session later:
-
-```bash
-tmux attach -t conformance
-```
-
-Monitor the log in a separate terminal:
-
-```bash
-tail -f logs/main_per_sbt_<timestamp>.log
-```
-
-If interrupted, resume from where it left off (already-processed stays are skipped):
-
-```bash
-./run_conformance_safe.sh --resume
-```
-
-Full launcher options:
-
-```bash
-./run_conformance_safe.sh [options]
-
-  --input PATH      Input event log parquet (default: icu_event_log_full.parquet)
-  --output PATH     Output results CSV (default: data/results/full_results/trigger_results_full.csv)
-  --resume          Skip stays already present in output CSV
-  --session NAME    tmux session name (default: conformance)
-  --nohup           Force nohup background mode instead of tmux
-  --dry-run         Print command and exit without running
-```
-
-Alternative without tmux (`nohup`):
-
-```bash
-nohup python main_per_sbt.py \
-  --input data/final/icu_event_log_full.parquet \
-  --output data/results/full_results/trigger_results_full.csv \
-  > logs/conformance.out 2>&1 &
-```
-
-To evaluate a checkpoint folder incrementally and write each checkpoint's results immediately, use:
-
-```bash
-python main_per_sbt_checkpoints.py \
-   --checkpoint-dir data/icu_event_log_checkpoints \
-   --results-dir data/results/checkpoint_trigger_results
-```
-
-### What This Does
-
-The conformance checker (`main_per_sbt.py` and `conformance/checker.py`) performs these steps:
-
-1. **Load Configuration**
-   - Reads declarative rules from `configs/declare/` (YAML format)
-   - Rules include: `readiness_assessment.yaml`, `failure_correction.yaml`, `sbt_execution.yaml`, `weights.yaml`
-
-2. **Load Event Log**
-   - Reads canonical event log from `icu_event_log_full.parquet`
-   - Extracts trace data: activities per case, with timestamps
-
-3. **Process Each Stay**
-   - For each case in the event log:
-     - Extract ordered activity sequence
-     - Check each declarative constraint (LTL formulas)
-     - Record violations with timestamps and details
-
-4. **Aggregate Results**
-   - Per-stay conformance score
-   - Per-rule violation counts
-   - Weighted aggregation via Sugeno fuzzy integral (from `weights.yaml`)
-
-5. **Compute Metrics**
-   - **Population KPI** — Weighted average conformance across all stays
-   - **Violations Summary** — Breakdown by rule type (must/may/not constraints)
-   - **Per-Rule Statistics** — How many stays violated each rule
-
-6. **Export Results**
-   - `conformance_results.csv` — Per-stay scores and violation details
-   - Console output with population-level KPI
-
-### Declarative Rules
-
-Rules are defined in YAML and encode process constraints as LTL formulas. Example from `configs/declare/readiness_assessment.yaml`:
-
-```yaml
-rules:
-  RC-CF-01:
-    name: "SBT Start requires prior Invasive Ventilation"
-    ltl: "!(({SBTStarted})->{InvasiveVentilationStarted})"
-    type: "must"
-```
-
-### Output
-- `conformance_results.csv` — Per-stay conformance scores and violation details
-- Console: Population KPI summary
-- Example output:
-  ```
-  Batch Processing: 100%|████████████| 1000/1000 [37:35<00:00,  2.26s/it]
-  Successfully processed 1000 stays.
-  Population KPI (Sugeno): 0.9120
-  Results saved to conformance_results.csv
-  ```
-
----
-
-## Quick Start
+The pipeline has four steps. Domain knowledge comes in only through configuration (dashed boxes), so
+moving the framework to a new domain means writing new configuration, not changing the method.
+
+| Step | What it does | Implementation |
+|---|---|---|
+| 1. Episode extraction | Splits each case trace into episodes. Each episode opens at a trigger event (`InvasiveVentilationStarted`) and ends at the next trigger, at a fixed observation window, or at an end event. | `main.py` (`_build_trigger_episodes`) |
+| 2. Evaluation context | Extends each episode, per constraint, into the trace that constraint may see (`context_window_pre_hours` / `context_window_post_hours`). Derived attributes such as `hours_since_intubation` are also computed here. | `main.py` (`_process_stay`), `conformance/checker.py` (`_build_eval_context`) |
+| 3. Constraint evaluation | Checks every evaluation trace against the MP-Declare constraints (24 templates, activation and correlation conditions, time windows, target selection *any / earliest / latest*). Each activation is classified as fulfilled or violated, and the constraint as satisfied, violated or vacuous. | `conformance/checker.py`, rules in `configs/declare/*.yaml` |
+| 4. Outcome association | Relates episode verdicts to the episode outcome (SBT success/failure, or the next episode's outcome for inter-episode rules): Fisher's exact test, odds ratio, risk ratio. | `statistics_R.r`, `derive/statistical_analysis.py` |
+
+For the ICU case, building the event log from MIMIC-IV is a separate preprocessing step outside the
+method (`database/`, `prepare_event_log.py`, `derive/`).
+
+## Clinician Studio
+
+The Clinician Studio is a React app (`frontend/`) backed by a FastAPI server (`api.py`). In it you can
+browse the clinical rule set, write new rules, run conformance checks, and explore the results.
 
 ### Prerequisites
-- Python 3.10+
-- PostgreSQL connection to MIMIC-IV (for raw data extraction)
-- Node.js 18+ (for the frontend)
 
-### Full Pipeline Example
+- Python 3.14 and Node.js 18+
+- Python dependencies: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
+- Frontend dependencies: `cd frontend && npm install`
 
-```bash
-# Activate the virtual environment first
-source .venv/bin/activate
+### Start
 
-# Step 1: Extract raw ICU events (requires MIMIC-IV database access)
-python database/materialize_all_icu_events.py --output icu_event_level_sbt.parquet
-
-# Step 2: Build canonical event log
-python prepare_event_log.py \
-  --input icu_event_level_sbt.parquet \
-  --output icu_event_log_full.parquet \
-  --use-all-data
-
-# Step 3: Run conformance checking — writes results + frontend JSON
-python main_per_sbt.py
-
-# Step 4: Launch the dashboard (see section 4 below)
-```
-
----
-
-## 4. Clinician Studio & Dashboard
-
-The React frontend provides three views for exploring conformance results, plus a **Clinician Studio** for interactive rule management and on-demand analysis.
-
-### Starting the dashboard
-
-The frontend requires the pre-computed JSON files written by `main_per_sbt.py` (in `frontend/public/data/`). The Clinician Studio additionally requires the FastAPI backend server.
-
-**Start both servers** (two terminals):
+Start two processes from the repository root:
 
 ```bash
-# Terminal 1 — Python API backend (required for Clinician Studio)
+# Terminal 1: API backend (http://localhost:8000)
 source .venv/bin/activate
 uvicorn api:app --reload --port 8000
 ```
 
 ```bash
-# Terminal 2 — React frontend dev server
+# Terminal 2: frontend dev server (http://localhost:5173); proxies /api/* to port 8000
 cd frontend
-npm install        # first time only
 npm run dev
 ```
 
-Then open **http://localhost:5173** in your browser.
+Then open **http://localhost:5173**. For a production build, run `npm run build` (the output goes to
+`frontend/dist/`) and then `npm run preview`.
 
-### Frontend views
+### Pages
 
-| View | Description |
-|------|-------------|
-| **Global Summary** | Population-level conformance: violation frequencies, outcome correlations, stay explorer |
-| **Patient Timeline** | Per-case event timeline with episode outcomes and constraint detail |
-| **Rules Reference** | Developer-facing catalog of all Declare rules with raw definitions |
-| **Clinician Studio** | Three-tab workspace for clinicians (see below) |
+The sidebar has a **Dataset** selector: the built-in *ICU Weaning* dataset or an uploaded XES log.
 
-### Clinician Studio tabs
+| Group | Page | What it shows |
+|---|---|---|
+| Configure | **Upload Log** | Upload an XES event log and check your own rules on it, independently of the ICU pipeline. |
+| Configure | **Rule Library** | The clinical rule set as Declare diagrams, with data conditions, time windows and severity scores. Built-in dataset only. |
+| Configure | **Rule Builder** | A step-by-step wizard for writing a custom rule: template, events, time window, data conditions, metadata. It shows a live preview. Rules are saved in the browser's `localStorage`. |
+| Analyze | **Run Analysis** | Run conformance on a random sample of stays (or of the uploaded log), with the predefined rules, your own rules, or both. |
+| Results | **Frequencies** | Violations ranked by frequency, with timing histograms and drill-down per episode. |
+| Results | **Statistics** | Associations between each constraint and the outcome: OR, RR, 95% CI, p-values. |
+| Results | **Patients** | Browse and filter stays by violation profile, and open a per-stay timeline. |
+| Results | **Insights** | Case-study views: deviation breadth, readiness violation causes, co-violation, attempt position. |
 
-| Tab | Description |
-|-----|-------------|
-| **Rule Library** | Visual browser of all 28 clinical rules. Each rule is shown as an SVG diagram (Declare template notation), with data conditions displayed as human-readable chips (`PaO₂/FiO₂ ≥ 150`), time windows, and severity bars. No code exposed. |
-| **Rule Builder** | 5-step wizard: choose a rule type → pick clinical events → set time window → define data conditions → add metadata. Live preview updates as you build. Rules are saved to `localStorage` and persist across sessions. |
-| **Run Analysis** | Choose a sample size and rule set (predefined rules, custom rules, or both), run conformance on a random sample, and compare the results side-by-side with the global baseline. |
+### Data each page needs
 
-### Building for production
+The repository contains no patient data. MIMIC-IV is credentialed-access, so you have to generate the
+data files yourself:
 
-```bash
-cd frontend
-npm run build      # outputs to frontend/dist/
-npm run preview    # preview the production build locally
-```
+| Feature | Needs |
+|---|---|
+| Upload Log, Rule Builder, Rule Library | Nothing beyond the repository. |
+| Results pages (Frequencies, Statistics, Patients) | `frontend/public/data/` (`summary.json`, `manifest.json`, `case_*.json`), written by `main.py`. |
+| Insights page | `frontend/public/data/insights.json`, written by `case_study/10_frontend_insights.py`. |
+| Run Analysis on the built-in dataset | `data/icu_event_log_sample.parquet`, a sampled event log: `python prepare_event_log.py --sample-size 1000 --output data/icu_event_log_sample.parquet`. |
+| Item search, SQL preview, custom MIMIC events in the Rule Builder | A PostgreSQL connection to MIMIC-IV (`MIMIC_DB_*` environment variables, see `database/client.py`). |
 
-### API endpoints (backend)
+See [docs/PIPELINE.md](docs/PIPELINE.md) for how to produce these files.
 
-The FastAPI server runs at `http://localhost:8000` and is proxied through Vite at `/api/*`.
+**Run Analysis** is a quick, approximate run. Each episode is checked as a whole, without the
+per-constraint context windows, and the outcome is recomputed from re-ventilation alone (the
+death-within-48 h rule is not applied). The results pages and the thesis use the full pipeline
+(`main.py`). The Studio hides rule `SBT-TM-02` (`DISABLED_RULE_IDS` in `api.py`); the
+pipeline still evaluates it.
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/rules` | All 28 Declare rules as structured JSON (no raw expressions) |
-| `GET /api/activities` | Available semantic activity names, grouped by category |
-| `GET /api/item_labels` | MIMIC-IV item-id → human-readable label lookup |
-| `POST /api/run` | Submit an async conformance job (sample size + optional custom rules) |
-| `GET /api/jobs/{id}` | Poll job status and retrieve results |
-| `DELETE /api/jobs/{id}` | Cancel a running job |
+## Repository layout
 
----
+| Path | Contents |
+|---|---|
+| `api.py`, `frontend/` | Clinician Studio backend and front end |
+| `main.py` | Episode segmentation, constraint evaluation, statistics and frontend export |
+| `prepare_event_log.py`, `derive/` | Raw MIMIC-IV rows → canonical event log (SBT and ventilation derivation, activity mapping) |
+| `conformance/` | MP-Declare checker, YAML rule loader, types; optional weighted (Sugeno) scoring |
+| `database/` | MIMIC-IV extraction from PostgreSQL |
+| `configs/` | Activity mapping, item dictionary, Declare rule sets, importance weights |
+| `statistics_R.r` | Outcome-association statistics (called by `main.py`) |
+| `case_study/` | Scripts behind the MIMIC-IV case-study chapter, see [case_study/README.md](case_study/README.md) |
+| `evaluation/` | Synthetic ground truth, Road Traffic Fine log, scalability benchmarks, see [evaluation/README.md](evaluation/README.md) |
+| `tests/` | Unit and pipeline sanity tests (`python -m pytest tests/`) |
+| `scripts/` | tmux/nohup launchers for long runs |
+| `experimental/` | Code the pipeline does not use (alternative automata engine), see [experimental/README.md](experimental/README.md) |
 
-## Architecture
+## Further documentation
 
-### Key Modules
-
-| Module | Purpose |
-|--------|---------|
-| `database/` | Raw data extraction and database utilities |
-| `derive/` | Event log construction, SBT derivation, invasive-vent gating |
-| `conformance/` | Declarative rule checking and metrics computation |
-| `configs/` | YAML configuration for activity mapping, rules, weights |
-| `api.py` | FastAPI backend — serves structured rule data and runs on-demand conformance jobs |
-| `frontend/` | React + Vite dashboard (Summary, Timeline, Rules, Clinician Studio) |
-
-### Data Flow
-
-```
-MIMIC-IV Database
-       ↓
-[materialize_all_icu_events.py]
-       ↓
-Raw ICU Events (icu_event_level_sbt.parquet)
-       ↓
-[prepare_event_log.py → derive/pipeline.py]
-  - Derive weaning frame
-  - Extract invasive-vent start times
-  - Build SBT episodes
-  - Apply invasive-vent gate ← Conformance Guard
-  - Map activities
-       ↓
-Canonical Event Log (icu_event_log_full.parquet)
-       ↓
-[main_per_sbt.py → conformance/checker.py]
-  - Load declarative rules (configs/declare/*.yaml)
-  - Segment stays into trigger episodes
-  - Check Declare constraints per episode
-  - Compute fuzzy weighted scores (Sugeno KPI)
-  - Write frontend/public/data/*.json
-       ↓
-Conformance Results (conformance_results.csv)
-  + frontend/public/data/  ← static JSON for dashboard
-       ↓
-[React frontend  +  api.py]
-  - Global Summary / Timeline / Rules reference
-  - Clinician Studio: visual rules, rule builder, on-demand analysis
-```
-
----
-
-## Documentation & Configuration
-
-- **Activity Mapping** — See `configs/activity_mapping.yaml`
-- **Declarative Rules** — See `configs/declare/*.yaml`
-- **Rule Weights** — See `configs/declare/weights.yaml`
-- **Item Dictionary** — See `configs/item_dictionary.yaml` (MIMIC-IV itemid → label mapping)
+- [docs/PIPELINE.md](docs/PIPELINE.md): MIMIC-IV extraction, event-log construction, conformance
+  run, outputs, rule format, API reference
+- [case_study/README.md](case_study/README.md): regenerating the case-study results
+- [evaluation/README.md](evaluation/README.md): synthetic and public-log evaluation, benchmarks

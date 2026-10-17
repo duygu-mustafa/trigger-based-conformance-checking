@@ -8,7 +8,7 @@ modified.
 | File | What it is |
 |---|---|
 | `rtfm_conformance.ipynb` | The run: load → outcome preprocessing → episodes → conformance → statistics |
-| `rtfm.yaml` | Declare model for the fine process (RTF-01 … RTF-10) |
+| `rtfm.yaml` | Declare model for the fine process (RTF-01 … RTF-10 and RTF-03b, 11 constraints) |
 | `rtfm_utils.py` | Episode segmentation, good/bad outcome derivation, results adapter |
 | `complexity.py` | Rule complexity measure C(r) = w_template + n_clauses + n_attributes + t_time |
 | `benchmark_scalability.py` | Scalability benchmark (E1 log size, E2 trace length, E3 model size, E4 rule complexity, E5 memory) |
@@ -17,11 +17,14 @@ modified.
 | `benchmark_synthetic.py` | Ground-truth experiments (SE1 correctness, SE2 scoping, SE3 association recovery) |
 | `synthetic_analysis.py` | Reads `data/synthetic/`, produces thesis figures and LaTeX table fragments |
 | `scalability_analysis.ipynb` | Reads `data/benchmarks/`, produces thesis figures (`figures/`) and tables |
+| `trigger_sensitivity.ipynb` | Trigger-selection sensitivity (EQ4): coverage, granularity, prefix loss and label validity per candidate trigger |
 | `data/` | Parquet cache of the log and all result CSVs (generated) |
 
 ## Running it
 
-Needs `Road_Traffic_Fine_Management_Process.xes` in the repo root (already there) and `pm4py`.
+Needs the Road Traffic Fine Management Process log (de Leoni & Mannhardt, 4TU.Centre for Research
+Data, 2015, [doi:10.4121/uuid:270fd440-1057-4fb9-89a9-b699b47990f5](https://doi.org/10.4121/uuid:270fd440-1057-4fb9-89a9-b699b47990f5))
+saved as `evaluation/Road_Traffic_Fine_Management_Process.xes` (not committed), and `pm4py`.
 Open `rtfm_conformance.ipynb` and run top to bottom. The first run parses the 185 MB XES and caches
 it to `data/rtfm_event_log.parquet`; later runs read the parquet.
 
@@ -63,7 +66,8 @@ python evaluation/synthetic_analysis.py                               # figures 
 ```
 
 SE2/SE3 replications are keyed by seed and appended as they finish, so `--resume` continues an
-interrupted run. Results go to `data/synthetic/`, figures and table fragments to `figures/`.
+interrupted run. Results go to `evaluation/data/synthetic/`, figures and table fragments to
+`evaluation/figures/`.
 
 The outcome model multiplies a baseline success probability by the planted risk ratio of every
 violated rule. That makes each rule's marginal risk ratio equal its planted value **only while no
@@ -78,12 +82,12 @@ rejects a configuration that would need clipping rather than doing it silently, 
 sampling seed (the same case sample across repetitions, so repetition spread is timing noise
 only), warm-up pass, `perf_counter`, median over `--reps` repetitions.
 
-Long runs go through the launcher, same contract as `run_conformance_safe.sh` — tmux (or
+Long runs go through the launcher, same contract as `scripts/run_conformance_safe.sh` — tmux (or
 nohup), timestamped log in `logs/`, `--resume`:
 
 ```
-./run_benchmark_safe.sh --reps 3 -- --e2-cases 5000 --e3-cases 5000 --e4-cases 5000
-./run_benchmark_safe.sh --resume            # after an interruption
+scripts/run_benchmark_safe.sh --reps 3 -- --e2-cases 5000 --e3-cases 5000 --e4-cases 5000
+scripts/run_benchmark_safe.sh --resume      # after an interruption
 tmux attach -t benchmark                     # watch it
 ```
 
@@ -92,7 +96,7 @@ measurement, so an interrupted run loses at most the unit in flight; `--resume` 
 completed keys back and runs only what is missing. Without `--resume` existing CSVs are
 truncated, so a fresh run never mixes measurements from different machines or code revisions.
 
-Writes tidy CSVs + `machine_info.json` + `sample_representativeness.csv` to `data/benchmarks/`;
+Writes tidy CSVs + `machine_info.json` + `sample_representativeness.csv` to `evaluation/data/benchmarks/`;
 `scalability_analysis.ipynb` turns them into figures (log-log scaling fits, complexity-score
 regression) under `figures/`. The complexity measure and its rationale live in `complexity.py`.
 
@@ -120,13 +124,8 @@ Random case sampling preserves that distribution in expectation, but the long-tr
 thin, so this is the check that a sample is not systematically short.
 
 
-## Outputs (`data/`)
+## Outputs (`evaluation/data/`)
 
 - `rtfm_conformance_results.csv` — one row per episode, per-rule satisfied/violated/vacuous
 - `rtfm_case_table_{activations_only,pooled}.csv` — case-level analysis table
 - `rtfm_stats_{activations_only,pooled}.csv` — per-rule 2×2 counts, Fisher p, OR, RR with CIs
-
-
-./run_benchmark_safe.sh --reps 3 -- --e2-cases 10000 --e3-cases 10000 --e4-cases 10000   
-./run_benchmark_safe.sh --resume    # after any interruption
-tmux attach -t benchmark

@@ -8,9 +8,10 @@ import psycopg2
 
 
 def get_postgres_connection():
-    """Create a PostgreSQL connection using environment variables.
+    """Create a PostgreSQL connection from the MIMIC_DB_* environment variables.
 
-    Defaults match the local settings used in the notebooks.
+    MIMIC_DB_USER, MIMIC_DB_PASSWORD, MIMIC_DB_HOST, MIMIC_DB_PORT, MIMIC_DB_NAME;
+    defaults are a local PostgreSQL with database `mimiciv`.
     """
     return psycopg2.connect(
         user=os.getenv("MIMIC_DB_USER", "postgres"),

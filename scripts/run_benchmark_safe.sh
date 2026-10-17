@@ -7,7 +7,7 @@ set -euo pipefail
 # - Writes timestamped logs and supports --resume
 # Mirrors run_conformance_safe.sh.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
 EXPERIMENTS="all"
@@ -24,7 +24,7 @@ EXTRA_ARGS=()
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_benchmark_safe.sh [options] [-- extra args passed to benchmark_scalability.py]
+  scripts/run_benchmark_safe.sh [options] [-- extra args passed to benchmark_scalability.py]
 
 Options:
   --experiments "E1 E3"  Experiments to run (default: all)
@@ -40,11 +40,11 @@ Options:
 
 Examples:
   # Full thesis protocol, ~5-6 h; safe to interrupt and re-run with --resume
-  ./run_benchmark_safe.sh
-  ./run_benchmark_safe.sh --resume
+  scripts/run_benchmark_safe.sh
+  scripts/run_benchmark_safe.sh --resume
 
   # Quick re-run of one experiment
-  ./run_benchmark_safe.sh --experiments E4 --reps 3 --session bench_e4
+  scripts/run_benchmark_safe.sh --experiments E4 --reps 3 --session bench_e4
 EOF
 }
 

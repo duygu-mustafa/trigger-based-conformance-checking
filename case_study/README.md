@@ -28,7 +28,7 @@ bash case_study/run_ablation.sh --smoke  # 20 stays, seconds — sanity-checks t
 ```
 
 It runs, in order: (1) the mixed-outcome numbers and the stay-id lists, (2) a
-no-segmentation conformance run on those stays (`main_per_sbt.py --no-segmentation`,
+no-segmentation conformance run on those stays (`main.py --no-segmentation`,
 resumable), (3) the episode-vs-trace comparison, (4) the digest. `--full` prints a
 runtime estimate and asks for confirmation once (`--yes` skips the prompt). Re-running
 the same invocation after an interruption resumes rather than restarting, because stage
@@ -60,6 +60,7 @@ Nothing under `data/` is written to; all output goes to `case_study/out` and
 | `07_segmentation_ablation.py` | `ablation_by_constraint.csv`, `ablation_overview.json`, masking/activation-loss figures — needs the no-segmentation CSV from `run_ablation.sh` |
 | `08_readiness_diagnostics.py` | `readiness_violation_causes.csv`, `readiness_margin_association.csv`, `readiness_records.parquet`, cause and margin figures — needs the diagnostics conformance run below |
 | `09_deviation_patterns.py` | `deviation_profiles*.csv`, `readiness_coviolation_matrix.csv`, `violation_by_attempt.csv`, profile, co-violation and attempt-position figures |
+| `10_frontend_insights.py` | `frontend/public/data/insights.json` — reshapes the tables of steps 04–09 for the Insights page of the Clinician Studio; needs step 08 |
 
 `06` and `07` are invoked together by `run_ablation.sh` (see above); they are not part
 of the default `run_all.sh` unless `--with-ablation` is passed, since `07` needs the
@@ -71,7 +72,7 @@ Step 08 decomposes each readiness violation into *why* the activation failed, wh
 the checker records per activation but the committed results predate:
 
 ```bash
-python main_per_sbt.py --output data/results/full_results_diag/trigger_results_full.csv \
+python main.py --output data/results/full_results_diag/trigger_results_full.csv \
     --workers 6 --resume --skip-postprocess          # ~3 h over the full cohort
 ```
 
@@ -103,7 +104,7 @@ when that file is absent.
 - **Vacuity sensitivity.** Both encodings are computed: activations-only (primary,
   vacuous episodes dropped) and pooled (vacuous counted as satisfied). The comparison
   CSV/figure flag constraints whose direction or relevance class changes.
-- **Segmentation ablation.** `main_per_sbt.py --no-segmentation` reuses the exact
+- **Segmentation ablation.** `main.py --no-segmentation` reuses the exact
   per-constraint evaluation code path (context windows, verdict bucketing, outcome
   reading) with a single whole-stay window in place of trigger-based episodes, so the
   comparison isolates the effect of segmentation rather than any other pipeline
@@ -137,4 +138,5 @@ when that file is absent.
 - `sbt_start` → `sbt_end` is the post-SBT outcome-observation window (capped at 48 h,
   ending with the episode on failure), not the duration of the breathing trial.
 - `SBT-TM-01`, `SBT-TM-01-early`, `SBT-TM-01-late` activate only in failing episodes;
-  their outcome split and odds ratios are degenerate by construction.
+  their same-episode outcome split is degenerate by construction, which is why they are
+  tested against the next episode's outcome.

@@ -53,7 +53,7 @@ function loadPersistedResult() {
   } catch { return null }
 }
 
-export default function AnalysisRunner({ customRules = [], onOpenTimeline, uploadInfo = null, datasetId = 'builtin', onUploadStale }) {
+export default function AnalysisRunner({ customRules = [], predefinedRuleCount = null, onOpenTimeline, uploadInfo = null, datasetId = 'builtin', onUploadStale }) {
   if (uploadInfo) {
     return <UploadedLogRunner uploadInfo={uploadInfo} datasetId={datasetId} onStale={onUploadStale} />
   }
@@ -301,7 +301,7 @@ export default function AnalysisRunner({ customRules = [], onOpenTimeline, uploa
           <label className={`rules-toggle-card ${includePredefined ? 'active' : ''}`}>
             <input type="checkbox" checked={includePredefined} onChange={e => setIncludePredefined(e.target.checked)} />
             <span className="toggle-card-title">Predefined rules</span>
-            <span className="toggle-card-count">28 clinical rules</span>
+            <span className="toggle-card-count">{predefinedRuleCount != null ? `${predefinedRuleCount} clinical rules` : 'Clinical rule set'}</span>
           </label>
           <label className={`rules-toggle-card ${includeCustom ? 'active' : ''}`}>
             <input

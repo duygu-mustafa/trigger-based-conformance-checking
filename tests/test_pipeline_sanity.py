@@ -58,20 +58,20 @@ def test_raw_to_event_log_activities():
     activities = set(event_log["activity"])
 
     assert "Diuretic_Admin" in activities, (
-        "Phase 1: furosemide_admin measurement row never mapped to Diuretic_Admin activity"
+        "furosemide_admin measurement row never mapped to Diuretic_Admin activity"
     )
 
     assert "CuffLeakTest_Performed" in activities, (
-        "Phase 2: cuff pressure (224417) never mapped to CuffLeakTest_Performed"
+        "cuff pressure (224417) never mapped to CuffLeakTest_Performed"
     )
 
     end_events = event_log[event_log["activity"].str.contains("InvasiveVentilationEnded", na=False)]
     assert len(end_events) == 1, (
-        f"Phase 8: expected exactly one InvasiveVentilationEnded-flavoured event, got {len(end_events)}"
+        f"expected exactly one InvasiveVentilationEnded-flavoured event, got {len(end_events)}"
     )
 
     assert not any(str(a).strip().lower() == "nan" for a in activities), (
-        "Phase 8: literal 'nan' activity name leaked into event log"
+        "literal 'nan' activity name leaked into event log"
     )
 
     sbt_started = event_log[event_log["activity"] == "SBTStarted"].sort_values("timestamp")
@@ -80,11 +80,11 @@ def test_raw_to_event_log_activities():
     start_ts = sbt_started.iloc[0]["timestamp"]
     failed_ts = sbt_failed.iloc[0]["timestamp"]
     assert start_ts < failed_ts <= start_ts + pd.Timedelta(hours=48), (
-        f"Phase 3: SBTFailed ({failed_ts}) must fall strictly inside its own episode window "
+        f"SBTFailed ({failed_ts}) must fall strictly inside its own episode window "
         f"(start={start_ts})"
     )
 
-    # Phase 3: episode-boundary containment. The synthetic trace has two
+    # episode-boundary containment. The synthetic trace has two
     # InvasiveVentilationStarted triggers (initial CMV at t0, re-vent CMV at
     # t0+3h) forming episodes [t0, t0+3h) and [t0+3h, end). SBTStarted sits in
     # the first episode; SBTFailed's re-vent trigger equals the second
@@ -96,14 +96,14 @@ def test_raw_to_event_log_activities():
         .tolist()
     )
     assert len(vent_triggers) == 2, (
-        f"Phase 3 harness precondition: expected 2 InvasiveVentilationStarted triggers, got {len(vent_triggers)}"
+        f"harness precondition: expected 2 InvasiveVentilationStarted triggers, got {len(vent_triggers)}"
     )
     episode1_start, episode2_start = vent_triggers
     assert episode1_start <= start_ts < episode2_start, (
-        "Phase 3 harness precondition: SBTStarted must fall in episode 1"
+        "harness precondition: SBTStarted must fall in episode 1"
     )
     assert episode1_start <= failed_ts < episode2_start, (
-        f"Phase 3: SBTFailed ({failed_ts}) must land in the same episode slice as its SBTStarted "
+        f"SBTFailed ({failed_ts}) must land in the same episode slice as its SBTStarted "
         f"[{episode1_start}, {episode2_start}), not be pushed into the next episode by the "
         f"re-ventilation boundary collision"
     )
@@ -158,7 +158,7 @@ def test_rc_dp_01_oxygenation_unconditional_emission():
     event_log = raw_to_event_log(raw_df)
     oxy_events = event_log[event_log["activity"] == "OxygenationMeasured"]
     assert len(oxy_events) == 1, (
-        "Phase 4 (DP-01): OxygenationMeasured must fire for every PaO2/FiO2 reading "
+        "RC-DP-01: OxygenationMeasured must fire for every PaO2/FiO2 reading "
         f"regardless of threshold, got {len(oxy_events)} events"
     )
 
@@ -168,7 +168,7 @@ def test_rc_dp_01_oxygenation_unconditional_emission():
 def test_rc_dp_02_24h_lookback_across_episode_start():
     # pH measured 2h before InvasiveVentilationStarted; SBT starts 4h after.
     # episode_df (>= episode_start) cannot see the pH event; context_df
-    # (>= episode_start - 24h) can (Phase 5).
+    # (>= episode_start - 24h) can.
     episode_start = pd.Timestamp("2026-01-01 00:00:00")
     episode_end = pd.Timestamp("2026-01-05 00:00:00")
 
@@ -205,13 +205,13 @@ def test_rc_dp_02_24h_lookback_across_episode_start():
 
     result_episode = evaluate_constraint(case_id="case1", trace_df=episode_df, constraint=constraint)
     assert result_episode.outcome == ConformanceOutcome.VIOLATED, (
-        "Phase 5 baseline: without look-back, pre-episode pH is invisible "
+        "baseline: without look-back, pre-episode pH is invisible "
         f"(got {result_episode.outcome})"
     )
 
     result_context = evaluate_constraint(case_id="case1", trace_df=context_df, constraint=constraint)
     assert result_context.outcome == ConformanceOutcome.SATISFIED, (
-        "Phase 5: 24h pre-episode look-back must surface pH measured before "
+        "24h pre-episode look-back must surface pH measured before "
         f"InvasiveVentilationStarted (got {result_context.outcome}, reason={result_context.violation_reason})"
     )
 
@@ -278,7 +278,7 @@ def test_rc_dp_no_leak_from_prior_episode():
 
 
 def test_sbt_outcome_single_source_of_truth():
-    # Phase 8: two SBT attempts, first fails via re-ventilation. The derived
+    # two SBT attempts, first fails via re-ventilation. The derived
     # outcome event for attempt 1 (SBTFailed) must precede SBTStarted of
     # attempt 2, and its value_raw must carry the outcome label.
     from derive.activity_emitter import _derive_activities
@@ -307,17 +307,17 @@ def test_sbt_outcome_single_source_of_truth():
         f"expected [SBTFailed, SBTSucceeded], got [{attempt1['activity']}, {attempt2['activity']}]"
     )
     assert attempt1["timestamp"] < (t0 + pd.Timedelta(hours=4)), (
-        "Phase 8: attempt 1's outcome event must precede attempt 2's SBTStarted"
+        "attempt 1's outcome event must precede attempt 2's SBTStarted"
     )
     assert attempt1["value_raw"] == "Failure (Reventilated <48h)", (
-        f"Phase 8: SBTFailed value_raw must carry the outcome label, got {attempt1['value_raw']!r}"
+        f"SBTFailed value_raw must carry the outcome label, got {attempt1['value_raw']!r}"
     )
 
     print("PASS: test_sbt_outcome_single_source_of_truth")
 
 
 def test_other_ventilator_rows_do_not_fragment_episode():
-    # Phase 7 fix: a peep-only row (classifies "Other", no mode) sandwiched
+    # a peep-only row (classifies "Other", no mode) sandwiched
     # between two Full-Support mode rows must not close/reopen the vent
     # episode. Bug: "Other" rows counted as non-full-support in the
     # start/end transition scan, fragmenting one continuous episode into two.
@@ -333,7 +333,7 @@ def test_other_ventilator_rows_do_not_fragment_episode():
     episodes = _full_support_start_times_from_settings(raw_df)
     starts = episodes.get("1", [])
     assert len(starts) == 1, (
-        f"Phase 7: peep-only 'Other' row must not fragment one continuous "
+        f"peep-only 'Other' row must not fragment one continuous "
         f"Full-Support run into multiple episodes, got {len(starts)}: {starts}"
     )
 
@@ -377,7 +377,7 @@ def test_int_response_post_episode_lookahead():
     episode_df = event_log[
         (event_log["timestamp"] >= episode_start) & (event_log["timestamp"] < episode_end)
     ]
-    # Mirrors the look-ahead built in main_per_sbt.py: episode events plus the
+    # Mirrors the look-ahead built in main.py: episode events plus the
     # rule's target activity within 48h after episode_end.
     lookahead = event_log[
         (event_log["timestamp"] >= episode_end)

@@ -19,9 +19,6 @@ from .weighted_scoring import (
     load_constraints_with_weights,
     violations_to_frame,
 )
-from .outcome_postprocessing import (
-    build_model_level_summary_frame,
-)
 
 __all__ = [
     "DeclareTemplate",
@@ -47,5 +44,4 @@ __all__ = [
     "constraints_to_frame",
     "violations_to_frame",
     "compute_trace_scores",
-    "build_model_level_summary_frame",
 ]

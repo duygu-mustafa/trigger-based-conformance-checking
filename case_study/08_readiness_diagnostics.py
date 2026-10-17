@@ -111,7 +111,7 @@ def _results_path():
         return EPISODE_RESULTS_DIAG
     raise SystemExit(
         f"{EPISODE_RESULTS_DIAG} not found. Regenerate it with\n"
-        "  python main_per_sbt.py --output data/results/full_results_diag/"
+        "  python main.py --output data/results/full_results_diag/"
         "trigger_results_full.csv --workers 6 --resume --skip-postprocess\n"
         f"It carries the same verdicts as {EPISODE_RESULTS} plus the per-activation "
         "failure causes this script decomposes."

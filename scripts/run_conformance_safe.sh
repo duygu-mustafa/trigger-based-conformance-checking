@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Safe launcher for long main_per_sbt.py conformance runs.
+# Safe launcher for long main.py conformance runs.
 # - Uses tmux when available (recommended)
 # - Falls back to nohup when tmux is unavailable
 # - Writes timestamped logs and supports --resume
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
 INPUT="data/final/icu_event_log_full.parquet"
@@ -20,10 +20,10 @@ WORKERS=4
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_conformance_safe.sh [options]
+  scripts/run_conformance_safe.sh [options]
 
 Options:
-  --input PATH      Input event log parquet (default: icu_event_log_full.parquet)
+  --input PATH      Input event log parquet (default: data/final/icu_event_log_full.parquet)
   --output PATH     Output results CSV (default: data/results/full_results/trigger_results_full.csv)
   --resume          Skip stays already present in output CSV
   --workers N       Parallel worker processes (default: 4)
@@ -33,9 +33,9 @@ Options:
   -h, --help        Show this help
 
 Examples:
-  ./run_conformance_safe.sh
-  ./run_conformance_safe.sh --resume
-  ./run_conformance_safe.sh --output data/results/full_results/trigger_results_full.csv --resume
+  scripts/run_conformance_safe.sh
+  scripts/run_conformance_safe.sh --resume
+  scripts/run_conformance_safe.sh --output data/results/full_results/trigger_results_full.csv --resume
 EOF
 }
 
@@ -92,17 +92,17 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "$ROOT_DIR/main_per_sbt.py" ]]; then
-  echo "main_per_sbt.py not found in $ROOT_DIR" >&2
+if [[ ! -f "$ROOT_DIR/main.py" ]]; then
+  echo "main.py not found in $ROOT_DIR" >&2
   exit 1
 fi
 
 LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$LOG_DIR"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$LOG_DIR/main_per_sbt_${TIMESTAMP}.log"
+LOG_FILE="$LOG_DIR/main_${TIMESTAMP}.log"
 
-CMD=("$PYTHON_BIN" "$ROOT_DIR/main_per_sbt.py" "--input" "$INPUT" "--output" "$OUTPUT" "--workers" "$WORKERS")
+CMD=("$PYTHON_BIN" "$ROOT_DIR/main.py" "--input" "$INPUT" "--output" "$OUTPUT" "--workers" "$WORKERS")
 
 if [[ "$RESUME" -eq 1 ]]; then
   CMD+=("--resume")
@@ -132,6 +132,6 @@ if [[ "$FORCE_NOHUP" -eq 0 ]] && command -v tmux >/dev/null 2>&1; then
 else
   (cd "$ROOT_DIR" && nohup "${CMD[@]}" > "$LOG_FILE" 2>&1 &)
   echo "Started with nohup in background."
-  echo "PID: $(pgrep -n -f 'main_per_sbt.py' || true)"
+  echo "PID: $(pgrep -n -f "$ROOT_DIR/main.py" || true)"
   echo "Log tail: tail -f '$LOG_FILE'"
 fi

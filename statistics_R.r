@@ -1,4 +1,16 @@
 #!/usr/bin/env Rscript
+# Outcome-association statistics per constraint, called by main.py.
+#
+#   Rscript statistics_R.r <trigger_results_csv> <analysis_table_csv> <rule_statistics_csv>
+#
+# Keeps episodes with an SBT attempt and an evaluable outcome (Success = 1,
+# Failure = 0). Per constraint, an episode is exposed (violated, 1), unexposed
+# (satisfied, 0) or excluded (vacuous). For each constraint a 2x2 table against
+# the episode outcome (or the next episode's outcome for inter-episode rules)
+# gives Fisher's exact p-value, the conditional-MLE odds ratio and its exact CI
+# (fisher.test), and the risk ratio of Success with a log-scale 95% CI (0.5
+# continuity correction if any cell is zero). Multiple-testing corrections are
+# applied later, in derive/generate_summary.py. Base R only.
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
@@ -295,11 +307,5 @@ if (nrow(results) == 0) {
   write.csv(results, rule_statistics_csv, row.names = FALSE, na = '')
   quit(status = 0)
 }
-
-# non_na_p <- sum(!is.na(results$fisher_p))
-# results$p_bonf <- pmin(results$fisher_p * non_na_p, 1)
-# results$p_fdr <- p.adjust(results$fisher_p, method = 'BH')
-# results$sig_bonf <- !is.na(results$p_bonf) & results$p_bonf < 0.05
-# results$sig_fdr <- !is.na(results$p_fdr) & results$p_fdr < 0.05
 
 write.csv(results, rule_statistics_csv, row.names = FALSE, na = '')

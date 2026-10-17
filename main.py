@@ -1,8 +1,14 @@
-"""CLI for trigger-episode conformance checking.
+"""CLI for trigger-episode conformance checking of the MIMIC-IV weaning log.
 
 Each stay is split into episodes using `InvasiveVentilationStarted` as trigger.
-Within each episode, conformance is evaluated and reported even if no SBT attempt
-was recorded.
+Within each episode, every constraint of the combined Declare model
+(configs/declare/*.yaml) is evaluated on its evaluation trace, and one result row
+per episode is written to the output CSV, even if no SBT attempt was recorded.
+
+Unless --skip-postprocess is given, the script then runs the outcome-association
+statistics (statistics_R.r), exports per-stay JSON for the frontend
+(frontend/public/data/), builds summary.json, and copies the results to
+data/final/results/.
 """
 
 from __future__ import annotations
@@ -59,7 +65,7 @@ def _assert_intervention_activities_match_mapping() -> None:
     if missing:
         raise AssertionError(
             f"FAILURE_INTERVENTION_ACTIVITIES names not found in activity_mapping.yaml: {missing}. "
-            "Keep main_per_sbt.FAILURE_INTERVENTION_ACTIVITIES in sync with configs/activity_mapping.yaml."
+            "Keep main.FAILURE_INTERVENTION_ACTIVITIES in sync with configs/activity_mapping.yaml."
         )
 
 
@@ -125,15 +131,16 @@ def _find_latest_failure_before(df_full: pd.DataFrame, ts: pd.Timestamp) -> pd.T
     return failures.iloc[-1]["timestamp"]
 
 
-# NOTE: manual `_evaluate_sbt_tm_01_outcome` special-case was removed in favor
-# of emitting derived `SBTFailed` events and using the generic Declare checker.
-# The old helper was intentionally removed to eliminate ad-hoc runtime branches.
-
-
 def _evaluate_composite_for_attempt(
     df_full: pd.DataFrame,
     sbt_start: pd.Timestamp,
 ) -> tuple[bool, list[str], str | None]:
+    """Evaluate INT-COMPOSITE-01 for an SBT attempt that is not the stay's first.
+
+    Satisfied if any failure-intervention activity occurs after the latest
+    SBTFailed/SBTStopped before `sbt_start`, within 24 h of that failure and
+    before `sbt_start`. Returns (satisfied, interventions found, reason if not).
+    """
     prior_failure_ts = _find_latest_failure_before(df_full, sbt_start)
     if prior_failure_ts is None:
         return False, [], "No prior SBT failure before this non-first attempt"
@@ -354,7 +361,7 @@ _OUTPUT_COLUMNS = [
     "num_mandatory_violations", "num_mandatory_satisfactions",
 ]
 
-# ponytail: per-process globals set by _init_worker; avoids repickling the
+# Per-process globals set by _init_worker; avoids repickling the
 # DuckDB runner/model for every task submitted to the pool.
 _WORKER_RUNNER = None
 _WORKER_LOOKUP = None
@@ -453,9 +460,8 @@ def _process_stay(stay_id: str) -> list[dict]:
             attempt_index += 1
 
         # Read the outcome from the derived SBTFailed/SBTSucceeded event
-        # (Phase 3 guarantees it falls inside this episode's window) instead
-        # of recomputing it here — the emitter is the single source of truth
-        # (Phase 8).
+        # (derive/activity_emitter.py places it inside this episode's window)
+        # instead of recomputing it here; the emitter is the single source of truth.
         sbt_end: pd.Timestamp | None = None
         if sbt_start is not None:
             outcome_rows = episode_df[
@@ -502,9 +508,12 @@ def _process_stay(stay_id: str) -> list[dict]:
             if not canon_id:
                 continue
 
+            # INT-COMPOSITE-01 is not evaluated through its YAML definition;
+            # see _evaluate_composite_for_attempt below.
             if canon_id == INT_COMPOSITE_ID:
                 continue
 
+            # INT-* rules are reported in the informational columns.
             is_failure_rule = canon_id.startswith("INT-")
             pre_hours = getattr(constraint, "context_window_pre_hours", None)
             post_hours = getattr(constraint, "context_window_post_hours", None)
@@ -546,7 +555,6 @@ def _process_stay(stay_id: str) -> list[dict]:
                 constraint=constraint,
             )
             outcome = res.outcome
-            manual_forensics = None
 
             if outcome == ConformanceOutcome.VACUOUS:
                 target_vacuous = mandatory_vacuous
@@ -563,23 +571,23 @@ def _process_stay(stay_id: str) -> list[dict]:
 
             if outcome == ConformanceOutcome.VIOLATED:
                 target_violated.append(canon_id)
-                f_data = manual_forensics if manual_forensics else ({"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds} if res else None)
-                if f_data and res is not None and manual_forensics is None:
-                    # Why the activation failed, and — where the criterion was
-                    # assessed but not met — the values the condition read.
-                    if res.violation_causes:
-                        f_data["causes"] = res.violation_causes
-                    if res.violation_values:
-                        f_data["values"] = res.violation_values
-                if f_data:
-                    violation_forensics[canon_id] = f_data
+                f_data = {"deltas": res.violation_deltas, "delay_seconds": res.delay_seconds}
+                # Why the activation failed, and — where the criterion was
+                # assessed but not met — the values the condition read.
+                if res.violation_causes:
+                    f_data["causes"] = res.violation_causes
+                if res.violation_values:
+                    f_data["values"] = res.violation_values
+                violation_forensics[canon_id] = f_data
             elif outcome == ConformanceOutcome.SATISFIED:
                 target_satisfied.append(canon_id)
-                f_data = manual_forensics if manual_forensics else ({"deltas": res.satisfaction_deltas, "delay_seconds": res.delay_seconds} if res else None)
-                if f_data:
-                    satisfaction_forensics[canon_id] = f_data
+                satisfaction_forensics[canon_id] = {
+                    "deltas": res.satisfaction_deltas,
+                    "delay_seconds": res.delay_seconds,
+                }
 
-        # INT-COMPOSITE-01 is mandatory only for non-first SBT attempts.
+        # INT-COMPOSITE-01 is evaluated only for non-first SBT attempts and is
+        # reported in the mandatory columns of the episode holding that attempt.
         composite_reason = None
         if sbt_start is not None and attempt_index > 1:
             composite_ok, composite_interventions, composite_reason = _evaluate_composite_for_attempt(
@@ -637,7 +645,7 @@ def _process_stay(stay_id: str) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=Path("data/final/icu_event_log_full.parquet"))
-    parser.add_argument("--output", type=Path, default=Path("data/results/full_results020726/trigger_results_full.csv"))
+    parser.add_argument("--output", type=Path, default=Path("data/results/full_results/trigger_results_full.csv"))
     parser.add_argument("--resume", action="store_true", help="Skip stays already present in output CSV.")
     parser.add_argument("--workers", type=int, default=4, help="Parallel worker processes (1 = sequential).")
     parser.add_argument(
@@ -757,7 +765,7 @@ def main() -> None:
                     csv_handle.flush()
 
         csv_handle.close()
-        log_step("main_per_sbt", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
+        log_step("main", "conformance_checking", _conformance_start, n_stays=len(remaining_ids))
     output_df = pd.read_csv(args.output)
     print(f"Saved trigger-episode conformance results to {args.output}")
 
@@ -765,8 +773,8 @@ def main() -> None:
         print("Skipping R statistics, frontend export and summary generation.")
         return
 
-    # --- AUTOMATIC FRONTEND EXPORT ---
-    # Calculate path relative to this script's location to be robust
+    # --- R STATISTICS + FRONTEND EXPORT ---
+    # Paths are resolved relative to this script's location.
     base_path = Path(__file__).resolve().parent
     frontend_data_dir = base_path / "frontend" / "public" / "data"
     results_dir = (base_path / args.output).resolve().parent if not args.output.is_absolute() else args.output.parent
@@ -777,7 +785,7 @@ def main() -> None:
     if not r_script.exists():
         raise FileNotFoundError(f"Missing R statistics script: {r_script}")
 
-    with track_step("main_per_sbt", "r_stats"):
+    with track_step("main", "r_stats"):
         subprocess.run(
             [
                 "Rscript",
@@ -792,12 +800,12 @@ def main() -> None:
 
     # Filter to only stays with actual conformance results
     stays_with_results = sorted(set(output_df["stay_id"].unique()))
-    with track_step("main_per_sbt", "frontend_export"):
+    with track_step("main", "frontend_export"):
         export_to_frontend(runner, stays_with_results, output_df, frontend_data_dir)
 
     # --- AUTOMATIC SUMMARY GENERATION ---
     from derive.generate_summary import build_summary
-    with track_step("main_per_sbt", "summary_generation"):
+    with track_step("main", "summary_generation"):
         case_files = sorted(frontend_data_dir.glob("case_*.json"))
         if case_files:
             summary = build_summary(case_files, frontend_data_dir, stats_summary_path if stats_summary_path.exists() else None)
@@ -808,7 +816,7 @@ def main() -> None:
             print(f"Global summary generated at {summary_file}")
 
     # --- COPY TO data/final/results ---
-    with track_step("main_per_sbt", "copy_final"):
+    with track_step("main", "copy_final"):
         final_dir = base_path / "data" / "final" / "results"
         final_dir.mkdir(parents=True, exist_ok=True)
         for src in [args.output, stats_table_path, stats_summary_path, frontend_data_dir / "summary.json"]:
@@ -817,5 +825,5 @@ def main() -> None:
         print(f"Results copied to {final_dir}")
 
 if __name__ == "__main__":
-    with track_step("main_per_sbt", "total"):
+    with track_step("main", "total"):
         main()

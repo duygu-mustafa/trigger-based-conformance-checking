@@ -1,8 +1,8 @@
 """Target selection (method.tex, Def. "Target selection").
 
-Checks the modes any / earliest / latest on both evaluation engines: the
-pandas checker (conformance.checker) and the streaming automata
-(conformance.automata). Each case states the verdict the definition prescribes.
+Checks the modes any / earliest / latest on the checker (conformance.checker).
+Each case states the verdict the definition prescribes. The same cases are run
+against the experimental automata engine in experimental/test_automata_target_selection.py.
 """
 
 import sys
@@ -15,7 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from conformance.automata import Event, build_automaton_for_constraint
 from conformance.checker import _evaluate_constraint_impl
 from conformance.results import ConformanceOutcome
 from conformance.types import (
@@ -58,24 +57,15 @@ def run_checker(df, c):
     return _evaluate_constraint_impl("c1", df, c)
 
 
-def run_automaton(df, c):
-    aut = build_automaton_for_constraint(c)
-    for idx, row in df.iterrows():
-        aut.process_event(Event("c1", row["activity"], row["timestamp"], idx), df)
-    aut.close_trace(df)
-    return aut.to_result("c1", "x")
-
-
-ENGINES = {"checker": run_checker, "automata": run_automaton}
-
-
 class TargetSelectionTest(unittest.TestCase):
+    engines = {"checker": run_checker}
+
     def assertVerdicts(self, events, template, activation, target, expected, **kw):
         """expected: {mode: (outcome, num_fulfilled, num_violated)}"""
         df = trace(events)
         for mode, (outcome, n_ful, n_vio) in expected.items():
             c = con(template, activation, target, mode, **kw)
-            for name, run in ENGINES.items():
+            for name, run in self.engines.items():
                 with self.subTest(mode=mode, engine=name):
                     r = run(df, c)
                     self.assertEqual(r.outcome, outcome)

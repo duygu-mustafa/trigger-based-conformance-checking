@@ -1,8 +1,18 @@
-"""Materialize all ICU events once and export to a local CSV cache.
+"""Materialize all ICU events once and export them to a local Parquet/CSV file.
 
-This script builds a denormalized event-level table from core MIMIC-IV ICU
-event tables and writes it to a local file so downstream experiments can run
-without querying the database each time.
+Builds one denormalized, long-form event table in PostgreSQL from
+  - mimiciv_icu: chartevents, datetimeevents, inputevents, outputevents,
+    procedureevents, ingredientevents
+  - mimiciv_hosp: labevents, prescriptions
+  - mimiciv_derived (MIMIC-IV concepts): norepinephrine_equivalent_dose,
+    bg (PaO2/FiO2, FiO2, pH, hemoglobin), ventilator_setting (rows with a
+    ventilator mode only)
+and exports it so downstream steps run without querying the database.
+Output columns: source_table, stay_id, subject_id, event_time, charttime,
+starttime, endtime, storetime, itemid, label, value_text, value_num, value_uom.
+
+Connection settings come from the MIMIC_DB_* environment variables
+(database/client.py).
 """
 
 from __future__ import annotations

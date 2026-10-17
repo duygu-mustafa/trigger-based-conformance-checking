@@ -1,4 +1,9 @@
-"""Clinical rule-model loaders and entry points."""
+"""Load Declare models from YAML (configs/declare/*.yaml and evaluation/*.yaml).
+
+A model file holds `model.constraints` (a list of constraint mappings) and optional
+named `model.data_conditions`, which are expanded inline wherever a constraint's
+activation or correlation condition references them by name.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from conformance.types import (
     DeclareModel,
     DeclareTemplate,
     TimeCondition,
+    UNARY_TEMPLATES,
 )
 
 
@@ -20,15 +26,15 @@ DECLARE_CONFIG_DIR = PROJECT_ROOT / "configs" / "declare"
 
 
 _TEMPLATE_ALIASES: dict[str, str] = {
-    # Multi-perspective aliases in newer configs.
+    # Multi-perspective aliases.
     "MP_EXISTENCE": "EXISTENCE",
     "MP_RESPONSE": "RESPONSE",
     "MP_PRECEDENCE": "PRECEDENCE",
     "MP_SUCCESSION": "SUCCESSION",
-    # Timed aliases in newer configs.
+    # Timed aliases.
     "TIMED_RESPONSE": "RESPONSE",
     # Some configs encode observation-window checks as TIMED_PRECEDENCE without a target.
-    # EXISTENCE is the safest unary fallback for those checks in this lightweight checker.
+    # They are loaded as EXISTENCE.
     "TIMED_PRECEDENCE": "EXISTENCE",
     "TIMED_SUCCESSION": "SUCCESSION",
 }
@@ -87,7 +93,7 @@ def _build_time_condition(raw: dict[str, Any]) -> TimeCondition | None:
         min_seconds = _pick_first(raw, "min_seconds", "min_gap_seconds")
         max_seconds = _pick_first(raw, "max_seconds", "max_gap_seconds")
 
-    # Newer configs often specify windows as hours.
+    # Windows may also be given in hours.
     if min_seconds is None:
         min_seconds = _hours_to_seconds(_pick_first(raw, "min_gap_hours"))
     if max_seconds is None:
@@ -239,14 +245,8 @@ def _parse_constraint(
     activation = str(raw["activation"])
     target = str(raw["target"]) if raw.get("target") is not None else None
 
-    # Some MP-style constraints are encoded without an explicit target activity.
-    # For this lightweight checker we keep them loadable using a self-target fallback.
-    if target is None and template not in {
-        DeclareTemplate.EXISTENCE,
-        DeclareTemplate.ABSENCE,
-        DeclareTemplate.AT_MOST_ONE,
-        DeclareTemplate.INIT,
-    }:
+    # A binary constraint without an explicit target uses its activation as target.
+    if target is None and template not in UNARY_TEMPLATES:
         target = activation
 
     raw_id = str(raw["id"]) if raw.get("id") is not None else None
@@ -301,6 +301,7 @@ def _parse_constraint(
 
 
 def load_model_from_yaml(path: str | Path) -> DeclareModel:
+    """Parse a Declare model YAML file into a DeclareModel."""
     config_path = Path(path)
     data = _load_yaml_dict(config_path)
 

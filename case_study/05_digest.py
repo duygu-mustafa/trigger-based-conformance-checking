@@ -288,7 +288,7 @@ def section_ablation(parts: list[str]) -> None:
     parts.append("\n## 2c. What segmentation buys (trace-global ablation)\n")
     parts.append(
         "Same clinical model, same stays, evaluated a second time with segmentation "
-        "disabled (`main_per_sbt.py --no-segmentation`): one evaluation trace per stay "
+        "disabled (`main.py --no-segmentation`): one evaluation trace per stay "
         "instead of one per trigger episode. Comparing the two verdicts on the same "
         f"{n(ov['n_stays_compared'])} multi-episode stays isolates what episode-local "
         "evaluation adds, holding the checker, the model, and the population fixed. "

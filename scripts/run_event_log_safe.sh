@@ -6,7 +6,7 @@ set -euo pipefail
 # - Falls back to nohup when tmux is unavailable
 # - Writes timestamped logs and optional resume mode
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN_DEFAULT="$ROOT_DIR/.venv/bin/python"
 
 INPUT="data/final/mimic_raw_data.parquet"
@@ -26,7 +26,7 @@ SEED_SKIP_COUNT=""
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_event_log_safe.sh [options]
+  scripts/run_event_log_safe.sh [options]
 
 Options:
   --input PATH            Input raw events file (default: data/final/mimic_raw_data.parquet)
@@ -45,10 +45,10 @@ Options:
   -h, --help              Show this help
 
 Examples:
-  ./run_event_log_safe.sh
-  ./run_event_log_safe.sh --resume
-  ./run_event_log_safe.sh --output data/final/icu_event_log_full.parquet --backup-every 100
-  ./run_event_log_safe.sh --seed-checkpoint data/final/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
+  scripts/run_event_log_safe.sh
+  scripts/run_event_log_safe.sh --resume
+  scripts/run_event_log_safe.sh --output data/final/icu_event_log_full.parquet --backup-every 100
+  scripts/run_event_log_safe.sh --seed-checkpoint data/final/icu_event_log_checkpoints/icu_event_log.checkpoint_0010000.parquet
 EOF
 }
 
