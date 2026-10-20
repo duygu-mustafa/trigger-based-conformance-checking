@@ -41,13 +41,78 @@ FIG_DIR.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-plt.rcParams.update({"figure.dpi": 110, "axes.grid": True, "grid.alpha": 0.3})
+# Figures are drawn at the thesis text width and included at natural size, so every
+# figure carries the same type size as the body text. The serif matches the thesis.
+FIG_WIDTH = 5.8  # inches, \textwidth of the thesis
+
+plt.rcParams.update({
+    "figure.dpi": 110,
+    "axes.grid": True,
+    "grid.alpha": 0.3,
+    "font.family": "serif",
+    "font.serif": ["CMU Serif", "DejaVu Serif"],
+    "mathtext.fontset": "cm",
+    "axes.unicode_minus": False,
+    "font.size": 8,
+    "axes.labelsize": 8,
+    "xtick.labelsize": 7.5,
+    "ytick.labelsize": 7.5,
+    "legend.fontsize": 7.5,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+})
+
+# Episode outcomes keep one colour in every figure; red doubles as "violation".
+OUTCOME_COLOR = {"success": "#0072B2", "failure": "#d62728"}
+
+CONSTRAINT_NAME = {
+    "RC-DP-01": "Oxygenation",
+    "RC-DP-02": "Arterial pH",
+    "RC-DP-03": "Hemoglobin",
+    "RC-DP-04": "Temperature",
+    "RC-DP-05": "Hemodynamics",
+    "RC-DP-06": "Mental status",
+    "RC-DP-07": "Inspiratory effort",
+    "SBT-TM-01": "Retry next day",
+    "SBT-TM-01-early": "No same-day retry",
+    "SBT-TM-01-late": "Retry by next day",
+    "SBT-TM-02": "Early weaning",
+    "INT-TR-01": "Bronchodilator",
+    "INT-TR-02": "Diuretic",
+    "INT-TR-03": "Afterload reduction",
+    "INT-DX-04": "Electrolyte/BG test",
+    "INT-TR-04": "Electrolyte correction",
+    "INT-DX-05": "Hormonal lab test",
+    "INT-TR-05": "Hormonal replacement",
+    "INT-COMPOSITE-01": "Any pathway",
+    "INT-SEQ-01": "Test before correction",
+    "INT-SEQ-02": "Test before replacement",
+}
+
+
+def constraint_label(cid: str) -> str:
+    """'Hemoglobin (RC-DP-03)', the label every per-constraint axis uses."""
+    name = CONSTRAINT_NAME.get(cid)
+    return f"{name} ({cid})" if name else cid
+
+
+def top_legend(ax, handles=None, ncol=None) -> None:
+    """Frameless legend centred above the plot, one row."""
+    if handles is None:
+        handles, _ = ax.get_legend_handles_labels()
+    # Attached to the figure, so the layout reserves room for it even when it is
+    # wider than the axes.
+    ax.figure.legend(handles=handles, loc="outside upper center",
+                     ncol=ncol or len(handles), frameon=False)
 
 
 def save_fig(fig, name: str) -> None:
     """Write a figure as both PNG and PDF into case_study/figures."""
+    # A constrained layout fits labels and legend inside the figure, so a figure
+    # drawn at FIG_WIDTH stays exactly that wide; a tight bbox would grow it.
+    fig.set_layout_engine("constrained")
     for ext in ("png", "pdf"):
-        fig.savefig(FIG_DIR / f"{name}.{ext}", bbox_inches="tight")
+        fig.savefig(FIG_DIR / f"{name}.{ext}")
     plt.close(fig)
     print(f"  figure -> {FIG_DIR / (name + '.{png,pdf}')}")
 

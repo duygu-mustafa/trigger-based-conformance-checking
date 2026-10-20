@@ -14,40 +14,98 @@ import argparse
 import time
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from config import (
     EPISODE_RESULTS,
+    FIG_WIDTH,
     OUT_DIR,
+    CONSTRAINT_NAME,
+    OUTCOME_COLOR,
     STATE_COLUMNS,
+    constraint_label,
     explode_states,
     load_constraint_meta,
     save_fig,
+    top_legend,
     write_csv,
     write_json,
 )
 from derive.statistical_analysis import _binarize_label
 
 
+# Constraint families in the order of the thesis table, keyed by ID prefix.
+FAMILIES = [("RC-", "Readiness"), ("SBT-", "Trial timing"), ("INT-", "Failure management")]
+TABLE_ORDER = {cid: i for i, cid in enumerate(CONSTRAINT_NAME)}
+
+
 def _plot_violation_rates(out: pd.DataFrame) -> None:
-    plot_df = out.dropna(subset=["rate_diff"]).sort_values("rate_diff")
-    fig, ax = plt.subplots(figsize=(7.5, max(3.5, 0.32 * len(plot_df))))
-    y = range(len(plot_df))
-    ax.barh([i - 0.2 for i in y], plot_df["violation_rate_success"], height=0.4,
-            color="#0072B2", label="episodes ending in success")
-    ax.barh([i + 0.2 for i in y], plot_df["violation_rate_failure"], height=0.4,
-            color="#E69F00", label="episodes ending in failure")
-    ax.set_yticks(list(y))
-    ax.set_yticklabels(
-        [
-            f"{cid} *" if ent else cid
-            for cid, ent in zip(plot_df["constraint_id"], plot_df["outcome_entangled"])
-        ]
-    )
-    ax.set_xlim(0, 1.05)
-    ax.set_xlabel("Violation rate among activations  (* = activations confined to one arm)")
-    ax.set_title("Violation rate by episode outcome")
-    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    """Two dots per constraint, one per outcome arm, joined by a line.
+
+    The gap between the dots is the quantity the text discusses, so it is drawn
+    rather than left to be read off two bars. Rows alternate in shading, as in the
+    cause association figure; families are separated by a thin rule and named,
+    rotated, to the left of the constraint labels.
+    """
+    plot_df = out.dropna(subset=["violation_rate_success", "violation_rate_failure"])
+    rows: list[tuple[str, float, float]] = []
+    bands: list[tuple[float, float, str]] = []
+    y = 0.0
+    for prefix, family in FAMILIES:
+        members = plot_df[plot_df["constraint_id"].str.startswith(prefix)]
+        # The order of the thesis constraint table.
+        members = members.sort_values(
+            "constraint_id", key=lambda ids: ids.map(TABLE_ORDER.get)
+        )
+        if members.empty:
+            continue
+        top = y
+        for row in members.itertuples(index=False):
+            rows.append((row.constraint_id, y, row.violation_rate_success,
+                         row.violation_rate_failure))
+            y += 1.0
+        bands.append((top, y - 1.0, family))
+
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 0.6 + 0.2 * y))
+    # Shading restarts in every family, so each family opens with a shaded row.
+    for top, bottom, _ in bands:
+        for yy in np.arange(top, bottom + 1.0, 2.0):
+            ax.axhspan(yy - 0.5, yy + 0.5, color="#f0f0f0", zorder=0, linewidth=0)
+    for cid, yy, success, failure in rows:
+        ax.plot([success, failure], [yy, yy], color="#bdbdbd", linewidth=1.5, zorder=1)
+    ys = [r[1] for r in rows]
+    ax.scatter([r[2] for r in rows], ys, color=OUTCOME_COLOR["success"], s=22, zorder=2,
+               label="reference episode succeeded")
+    ax.scatter([r[3] for r in rows], ys, color=OUTCOME_COLOR["failure"], s=22, zorder=2,
+               label="reference episode failed")
+    ax.set_yticks(ys)
+    ax.set_yticklabels([constraint_label(r[0]) for r in rows])
+    ax.tick_params(axis="y", length=0)
+    ax.spines["left"].set_visible(False)
+    ax.grid(axis="y", visible=False)
+    ax.set_ylim(y - 0.5, -0.5)
+    ax.set_xlim(0, 1.02)
+    ax.set_xlabel("Violation rate among activations")
+
+    # Family names sit left of the constraint labels, so measure those first.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    label_width = max(t.get_window_extent(renderer).width for t in ax.get_yticklabels())
+    label_width *= 72 / fig.dpi  # pixels to points
+    family_x = -(label_width + 10)
+    for k, (top, bottom, family) in enumerate(bands):
+        ax.annotate(family, xy=(0, (top + bottom) / 2), xycoords=("axes fraction", "data"),
+                    xytext=(family_x, 0), textcoords="offset points", rotation=90,
+                    ha="center", va="center", fontsize=7.5, style="italic")
+        if k > 0:
+            # Thin rule between families, across the plot and the label column.
+            ax.axhline(top - 0.5, color="black", linewidth=0.6, zorder=3)
+            ax.annotate("", xy=(0, top - 0.5), xycoords=("axes fraction", "data"),
+                        xytext=(family_x - 6, 0), textcoords="offset points",
+                        arrowprops={"arrowstyle": "-", "color": "black", "linewidth": 0.6,
+                                    "shrinkA": 0, "shrinkB": 0})
+    top_legend(ax)
     save_fig(fig, "fig_violation_rates")
 
 

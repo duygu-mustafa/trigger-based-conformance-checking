@@ -31,15 +31,27 @@ DATA_DIR = REPO_ROOT / "evaluation" / "data" / "synthetic"
 FIG_DIR = REPO_ROOT / "evaluation" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-plt.rcParams.update({"figure.dpi": 110, "axes.grid": True, "grid.alpha": 0.3})
+# The thesis figure style (text width, serif, legend on top) lives with the case
+# study; importing it applies the shared rcParams.
+sys.path.insert(0, str(REPO_ROOT / "case_study"))
+from config import FIG_WIDTH  # noqa: E402
 
-EPISODE_COLOR = "#2b6cb0"
-CASE_COLOR = "#c05621"
+EPISODE_COLOR = "#0072B2"
+CASE_COLOR = "#E69F00"
+HIDDEN_COLOR = "#CC79A7"
+INVENTED_COLOR = "#D55E00"
+
+
+def legend_above(ax) -> None:
+    """Frameless legend centred above one panel."""
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
 
 
 def save_fig(fig, name: str) -> None:
+    # Constrained layout keeps a figure drawn at FIG_WIDTH exactly that wide.
+    fig.set_layout_engine("constrained")
     for ext in ("png", "pdf"):
-        fig.savefig(FIG_DIR / f"{name}.{ext}", bbox_inches="tight")
+        fig.savefig(FIG_DIR / f"{name}.{ext}")
     plt.close(fig)
     print(f"  figure -> {FIG_DIR / name}.{{png,pdf}}")
 
@@ -50,7 +62,8 @@ def save_fig(fig, name: str) -> None:
 
 def se1_table() -> None:
     df = pd.read_csv(DATA_DIR / "se1_correctness.csv")
-    df["group"] = df["template"]
+    # Thesis convention: CamelCase template names in small caps (prelim.tex).
+    df["group"] = df["template"].replace({"Existence": "AtLeastOne"}).str.replace(r"[ -]", "", regex=True)
     summary = (
         df.groupby("group")
         .agg(
@@ -71,7 +84,7 @@ def se1_table() -> None:
     ]
     for _, row in summary.iterrows():
         lines.append(
-            f"{row['group']} & \\num{{{row['cases']}}} & \\num{{{row['matching']}}} "
+            f"\\textsc{{{row['group']}}} & \\num{{{row['cases']}}} & \\num{{{row['matching']}}} "
             f"& \\num{{{row['deviations']}}} \\\\"
         )
     total = summary[["cases", "matching", "deviations"]].sum()
@@ -112,40 +125,41 @@ def se2_figure() -> pd.DataFrame:
         .sort_values("rule_id")
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH, 2.8), sharey=True)
     y = np.arange(len(agg))
     height = 0.38
 
     ax = axes[0]
-    ax.barh(y + height / 2, agg["episode_acc"], height, label="episode-scoped",
+    ax.barh(y - height / 2, agg["episode_acc"], height, label="episode-scoped",
             color=EPISODE_COLOR)
-    ax.barh(y - height / 2, agg["case_acc"], height, label="case-scoped",
+    ax.barh(y + height / 2, agg["case_acc"], height, label="case-scoped",
             color=CASE_COLOR)
     ax.set_yticks(y, agg["rule_id"])
-    ax.set_xlim(0, 1.45)
-    ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
-    ax.set_xlabel("share of correct verdicts")
-    ax.set_title("Verdict accuracy on multi-episode cases")
-    ax.legend(loc="lower right", fontsize=9)
+    ax.set_xlim(0, 1.0)
+    ax.set_xlabel("Share of correct verdicts")
+    ax.grid(axis="y", visible=False)
+    ax.tick_params(axis="y", length=0)
+    legend_above(ax)
     ax.invert_yaxis()
 
     ax = axes[1]
-    ax.barh(y + height / 2, agg["masked"], height, xerr=agg["masked_sd"],
-            color="#805ad5", label="violation hidden")
-    ax.barh(y - height / 2, agg["false_alarm"], height, xerr=agg["false_alarm_sd"],
-            color="#dd6b20", label="violation invented")
-    ax.set_yticks(y, agg["rule_id"])
-    ax.set_xlim(0, max(0.6, float((agg[["masked", "false_alarm"]].max().max())) * 1.35))
-    ax.set_xlabel("share of multi-episode cases")
-    ax.set_title("Case-scoped checking: errors by kind")
-    ax.legend(loc="lower right", fontsize=9)
+    ax.barh(y - height / 2, agg["masked"], height, xerr=agg["masked_sd"],
+            color=HIDDEN_COLOR, label="violation hidden",
+            error_kw={"elinewidth": 0.8, "capsize": 2})
+    ax.barh(y + height / 2, agg["false_alarm"], height, xerr=agg["false_alarm_sd"],
+            color=INVENTED_COLOR, label="violation invented",
+            error_kw={"elinewidth": 0.8, "capsize": 2})
+    ax.set_xlim(0, max(0.6, float((agg[["masked", "false_alarm"]].max().max())) * 1.2))
+    ax.set_xlabel("Share of multi-episode cases")
+    ax.grid(axis="y", visible=False)
+    ax.tick_params(axis="y", length=0)
+    legend_above(ax)
     # A constraint with neither error draws no bar; say so rather than leave a gap.
     for idx, row in agg.reset_index(drop=True).iterrows():
         if row["masked"] == 0 and row["false_alarm"] == 0:
-            ax.text(0.01, idx, "no errors", va="center", fontsize=9, style="italic")
-    ax.invert_yaxis()
+            ax.text(0.01, idx, "no errors", va="center", fontsize=7, style="italic",
+                    color="#4a4a4a")
 
-    fig.tight_layout()
     save_fig(fig, "synthetic_scoping")
     return agg
 
@@ -173,7 +187,7 @@ def se3_figure_and_table() -> pd.DataFrame:
         .reset_index()
     )
 
-    fig, ax = plt.subplots(figsize=(7.5, 4.6))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 3.0))
     rules = sorted(agg["rule_id"].unique())
     x = np.arange(len(rules))
     offset = 0.16
@@ -187,11 +201,11 @@ def se3_figure_and_table() -> pd.DataFrame:
         hi = (sub["rr_hi"] - sub["rr_median"]).clip(lower=0)
         ax.errorbar(
             x + dx, sub["rr_median"], yerr=[lo, hi], fmt=marker, color=color,
-            capsize=3, label=f"{scope}-scoped estimate", linestyle="none",
+            capsize=3, markersize=5, label=f"{scope}-scoped estimate", linestyle="none",
         )
 
     planted = agg.drop_duplicates("rule_id").set_index("rule_id").loc[rules, "planted_rr"]
-    ax.scatter(x, planted, marker="_", s=420, color="black", zorder=5, label="planted value")
+    ax.scatter(x, planted, marker="_", s=300, color="black", zorder=5, label="planted value")
 
     ax.set_yscale("log")
     ax.axhline(1.0, color="grey", linewidth=0.8, linestyle="--")
@@ -200,10 +214,14 @@ def se3_figure_and_table() -> pd.DataFrame:
     ax.set_yticklabels([f"{t:g}" for t in ticks])
     ax.minorticks_off()
     ax.set_xticks(x, rules)
-    ax.set_ylabel("risk ratio of Success under violation")
-    ax.set_title("Recovery of planted associations (median and 10–90th percentile over seeds)")
-    ax.legend(loc="upper left", fontsize=9)
-    fig.tight_layout()
+    ax.set_ylabel("Risk ratio of success under violation")
+    ax.grid(axis="x", visible=False)
+    handles, labels = ax.get_legend_handles_labels()
+    # Planted value first, then the two estimates.
+    order = [labels.index("planted value"), labels.index("episode-scoped estimate"),
+             labels.index("case-scoped estimate")]
+    fig.legend([handles[i] for i in order], [labels[i] for i in order],
+               loc="outside upper center", ncol=3, frameon=False)
     save_fig(fig, "synthetic_association")
 
     # LaTeX table: episode scope against case scope, per rule.

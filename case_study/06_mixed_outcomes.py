@@ -18,7 +18,16 @@ import time
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from config import EPISODE_RESULTS, OUT_DIR, save_fig, write_csv, write_json
+from config import (
+    EPISODE_RESULTS,
+    FIG_WIDTH,
+    OUT_DIR,
+    OUTCOME_COLOR,
+    save_fig,
+    top_legend,
+    write_csv,
+    write_json,
+)
 from derive.statistical_analysis import _binarize_label
 
 MULTI_EPISODE_IDS = OUT_DIR / "multi_episode_stay_ids.txt"
@@ -32,12 +41,55 @@ def episode_bucket(n: int) -> str:
     return str(n) if n <= 4 else "5+"
 
 
+# Outcome classes of a stay, bottom to top. Success and failure keep the outcome
+# colours of the other figures; mixed sits between them, missing is neutral.
+CLASS_ORDER = ["all success", "mixed", "all failure", "no evaluable outcome"]
+CLASS_COLOR = {
+    "all success": OUTCOME_COLOR["success"],
+    "mixed": "#E69F00",
+    "all failure": OUTCOME_COLOR["failure"],
+    "no evaluable outcome": "#c7c7c7",
+}
+
+
+def _plot_composition(table: pd.DataFrame) -> None:
+    shares = table.div(table.sum(axis=1), axis=0).fillna(0)
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 2.8))
+    bottom = None
+    for cls in CLASS_ORDER:
+        if cls not in shares.columns:
+            continue
+        vals = shares[cls].values
+        # A thin surface-coloured edge separates the stacked segments.
+        ax.bar(shares.index, vals, bottom=bottom, width=0.7, color=CLASS_COLOR[cls],
+               edgecolor="white", linewidth=1, label=cls)
+        bottom = vals if bottom is None else bottom + vals
+    ax.set_ylim(0, 1.0)
+    ax.set_xlabel("Episodes in stay")
+    ax.set_ylabel("Share of stays")
+    ax.grid(axis="x", visible=False)
+    top_legend(ax)
+    save_fig(fig, "fig_mixed_outcomes")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample-size", type=int, default=2000,
                         help="Size of the ablation sample drawn from multi-episode stays.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--replot", action="store_true",
+        help="Regenerate the figure from the cached CSV only, without recomputing.",
+    )
     args = parser.parse_args()
+
+    if args.replot:
+        table = pd.read_csv(
+            OUT_DIR / "mixed_outcomes_composition_by_episode_count.csv",
+            dtype={"episodes_in_stay": str},
+        ).set_index("episodes_in_stay")
+        _plot_composition(table)
+        return
 
     t0 = time.time()
     df = pd.read_csv(
@@ -136,26 +188,7 @@ def main() -> None:
     print(f"  ids    -> {sample_path} ({n:,} stays, seed {args.seed})")
 
     # ---- figure ----------------------------------------------------------
-    shares = table.div(table.sum(axis=1), axis=0).fillna(0)
-    palette = {
-        "all success": "#2ca02c",
-        "mixed": "#ff7f0e",
-        "all failure": "#d62728",
-        "no evaluable outcome": "#c7c7c7",
-    }
-    fig, ax = plt.subplots(figsize=(6.5, 3.8))
-    bottom = None
-    for cls in ["all success", "mixed", "all failure", "no evaluable outcome"]:
-        if cls not in shares.columns:
-            continue
-        vals = shares[cls].values
-        ax.bar(shares.index, vals, bottom=bottom, color=palette[cls], label=cls)
-        bottom = vals if bottom is None else bottom + vals
-    ax.set_xlabel("Episodes in stay")
-    ax.set_ylabel("Share of stays")
-    ax.set_title("Outcome agreement within a stay")
-    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
-    save_fig(fig, "fig_mixed_outcomes")
+    _plot_composition(table)
 
     print(
         f"Mixed-outcome stays: {len(mixed):,} of {len(ge2_evaluable):,} stays with two or "

@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import time
 
 import matplotlib.pyplot as plt
@@ -27,10 +28,14 @@ import pandas as pd
 
 from config import (
     EPISODE_RESULTS,
+    FIG_WIDTH,
+    OUT_DIR,
     STATE_COLUMNS,
+    constraint_label,
     explode_states,
     load_constraint_meta,
     save_fig,
+    top_legend,
     write_csv,
     write_json,
 )
@@ -205,7 +210,6 @@ def _plot_profile_sizes(size: pd.DataFrame) -> None:
     ax.bar(size["n_violated"], size["share"], color="#3182bd")
     ax.set_xlabel("Readiness criteria violated in the episode")
     ax.set_ylabel("Share of episodes")
-    ax.set_title("How many readiness criteria fail at once")
     save_fig(fig, "fig_readiness_profile_sizes")
 
 
@@ -215,7 +219,7 @@ def _plot_profile_outcomes(profile_outcomes: pd.DataFrame) -> None:
         return
     breadth["arm"] = breadth["arm"].astype(int)
     breadth = breadth.sort_values("arm")
-    fig, ax = plt.subplots(figsize=(6.2, 3.4))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 2.6))
     err = np.vstack(
         [
             (breadth["rr_point"] - breadth["rr_ci_low"]).to_numpy(dtype=float),
@@ -223,11 +227,17 @@ def _plot_profile_outcomes(profile_outcomes: pd.DataFrame) -> None:
         ]
     )
     ax.errorbar(breadth["arm"], breadth["rr_point"], yerr=np.abs(err), fmt="o-",
-                capsize=3, color="#d62728")
+                capsize=3, color="#d62728", markersize=5)
     ax.axhline(1.0, color="black", linewidth=1)
+    # The arms shrink with breadth, so each tick carries the size of its arm.
+    ax.set_xticks(breadth["arm"])
+    ax.set_xticklabels(
+        [f"{int(r.arm)}\nn = {int(r.n_episodes):,}".replace(",", "\u2009")
+         for r in breadth.itertuples(index=False)]
+    )
+    ax.grid(axis="x", visible=False)
     ax.set_xlabel("Readiness criteria violated in the episode")
     ax.set_ylabel("Risk ratio of success")
-    ax.set_title("Outcome by breadth of deviation, against fully conformant episodes")
     save_fig(fig, "fig_deviation_breadth_outcome")
 
 
@@ -259,10 +269,11 @@ def _plot_by_attempt(by_attempt: pd.DataFrame) -> None:
     ]
     if readiness.empty:
         return
-    fig, ax = plt.subplots(figsize=(6.6, 3.6))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 3.0))
     for cid, arm in readiness.groupby("constraint_id"):
         arm = arm.sort_values("attempt_bucket")
-        ax.plot(arm["attempt_bucket"], arm["violation_rate"], marker="o", label=cid)
+        ax.plot(arm["attempt_bucket"], arm["violation_rate"], marker="o", markersize=4,
+                label=constraint_label(cid))
     ax.set_xticks(sorted(readiness["attempt_bucket"].unique()))
     ax.set_xticklabels(
         [
@@ -273,12 +284,23 @@ def _plot_by_attempt(by_attempt: pd.DataFrame) -> None:
     ax.set_ylim(0, 1.02)
     ax.set_xlabel("Weaning attempt within the stay")
     ax.set_ylabel("Violation rate among activations")
-    ax.set_title("Readiness violation by attempt position")
-    ax.legend(fontsize=7, ncol=2)
+    top_legend(ax, ncol=3)
     save_fig(fig, "fig_violation_by_attempt")
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--replot", action="store_true",
+        help="Regenerate the thesis figures from the cached CSVs only, without recomputing.",
+    )
+    args = parser.parse_args()
+
+    if args.replot:
+        _plot_profile_outcomes(pd.read_csv(OUT_DIR / "deviation_profile_outcomes.csv"))
+        _plot_by_attempt(pd.read_csv(OUT_DIR / "violation_by_attempt.csv"))
+        return
+
     t0 = time.time()
     usecols = [
         "stay_id", "episode_index", "sbt_attempt", "sbt_outcome", "next_sbt_outcome",

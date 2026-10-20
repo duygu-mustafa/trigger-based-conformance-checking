@@ -43,9 +43,12 @@ import pandas as pd
 from config import (
     EPISODE_RESULTS,
     EPISODE_RESULTS_DIAG,
+    FIG_WIDTH,
     OUT_DIR,
+    constraint_label,
     load_constraint_meta,
     save_fig,
+    top_legend,
     write_csv,
     write_json,
 )
@@ -371,20 +374,26 @@ def _episode_cause_profile(records: pd.DataFrame) -> pd.DataFrame:
 
 def _plot_causes(causes: pd.DataFrame) -> None:
     # The criteria with a graded reading, as in the thesis table; RC-DP-06 is in the CSV.
-    plot_df = causes[causes["constraint_id"].isin(GRADED_CONSTRAINTS)].sort_values("share_care")
+    # Ordered by ID from the top, as in the cause association figure.
+    plot_df = causes[causes["constraint_id"].isin(GRADED_CONSTRAINTS)].sort_values(
+        "constraint_id", ascending=False
+    )
     present = [c for c in CAUSES if plot_df[f"n_{c}"].sum() > 0]
-    fig, ax = plt.subplots(figsize=(7.5, max(3.0, 0.45 * len(plot_df))))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 0.6 + 0.32 * len(plot_df)))
     left = np.zeros(len(plot_df))
+    labels = [constraint_label(c) for c in plot_df["constraint_id"]]
     for cause in present:
         share = plot_df[f"share_{cause}"].astype(float).to_numpy()
-        ax.barh(plot_df["constraint_id"], share, left=left,
-                color=CAUSE_COLOR[cause], label=CAUSE_LABEL[cause])
+        # A thin surface-coloured edge separates adjacent segments.
+        ax.barh(labels, share, left=left, height=0.7, color=CAUSE_COLOR[cause],
+                edgecolor="white", linewidth=1, label=CAUSE_LABEL[cause])
         left = left + np.nan_to_num(share)
     ax.set_xlim(0, 1.0)
     ax.set_xlabel("Share of violated episodes")
-    ax.set_title("Why each readiness constraint is violated")
-    ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.15),
-              ncol=len(present), frameon=False)
+    ax.grid(axis="y", visible=False)
+    ax.tick_params(axis="y", length=0)
+    ax.spines["left"].set_visible(False)
+    top_legend(ax)
     save_fig(fig, "fig_readiness_causes")
 
 
@@ -420,76 +429,63 @@ def _plot_margins(records: pd.DataFrame) -> None:
     save_fig(fig, "fig_readiness_margins")
 
 
-def _plot_stratified(strata: pd.DataFrame) -> None:
-    if strata.empty:
-        return
-    order = ["near", "moderate", "gross"]
-    fig, ax = plt.subplots(figsize=(7.5, 3.6))
-    width = 0.8 / max(len(order), 1)
-    for i, stratum in enumerate(order):
-        arm = strata[strata["stratum"] == stratum].set_index("constraint_id")
-        arm = arm.reindex(sorted(strata["constraint_id"].unique()))
-        x = np.arange(len(arm)) + (i - 1) * width
-        err = np.vstack(
-            [
-                (arm["rr_point"] - arm["rr_ci_low"]).to_numpy(dtype=float),
-                (arm["rr_ci_high"] - arm["rr_point"]).to_numpy(dtype=float),
-            ]
-        )
-        ax.errorbar(x, arm["rr_point"].to_numpy(dtype=float), yerr=np.abs(err),
-                    fmt="o", capsize=3, label=f"{stratum} the threshold")
-    ax.axhline(1.0, color="black", linewidth=1)
-    ax.set_xticks(np.arange(strata["constraint_id"].nunique()))
-    ax.set_xticklabels(sorted(strata["constraint_id"].unique()))
-    ax.set_ylabel("Risk ratio of success vs. satisfied")
-    ax.set_title("Does it matter how far past the threshold a trial was started?")
-    ax.legend(fontsize=8)
-    save_fig(fig, "fig_readiness_margin_outcome")
-
-
-CRITERION_NAME = {
-    "RC-DP-01": "Oxygenation",
-    "RC-DP-02": "Arterial pH",
-    "RC-DP-03": "Hemoglobin",
-    "RC-DP-04": "Temperature",
-    "RC-DP-05": "Hemodynamics",
-    "RC-DP-06": "Mental status",
-    "RC-DP-07": "Inspiratory effort",
+# Margin strata, ordered from the mildest to the most severe violation. All are
+# `unmet` violations, so they share its hue and darken with severity.
+STRATUM_ORDER = ["near", "moderate", "gross"]
+STRATUM_COLOR = {"near": "#fc9272", "moderate": "#ef3b2c", "gross": "#99000d"}
+STRATUM_LABEL = {
+    "near": "mild (nearest third)",
+    "moderate": "moderate",
+    "gross": "severe (farthest third)",
 }
 
 
-def _plot_cause_association(assoc: pd.DataFrame) -> None:
-    """One row group per constraint, one point with its CI per cause.
+def _plot_stratified(strata: pd.DataFrame) -> None:
+    if strata.empty:
+        return
+    _plot_banded_forest(strata, "stratum", STRATUM_ORDER, STRATUM_COLOR, STRATUM_LABEL,
+                        "fig_readiness_margin_outcome")
 
-    Each constraint sits in its own shaded band with its name on the left, so a
-    point is read against the band it lies in rather than a shared tick.
-    """
+
+def _plot_cause_association(assoc: pd.DataFrame) -> None:
     if assoc.empty:
         return
     per_cause = assoc[assoc["cause"] != "all_violations"]
-    order = sorted(per_cause["constraint_id"].unique())
-    present = [c for c in CAUSES if c in set(per_cause["cause"])]
+    _plot_banded_forest(per_cause, "cause", CAUSES, CAUSE_COLOR, CAUSE_LABEL,
+                        "fig_readiness_cause_outcome")
+
+
+def _plot_banded_forest(df: pd.DataFrame, arm_col: str, arm_order: list[str],
+                        colors: dict, labels: dict, name: str) -> None:
+    """One row group per constraint, one point with its CI per arm.
+
+    Each constraint sits in its own shaded band with its name on the left, so a
+    point is read against the band it lies in rather than a shared tick. Used for
+    both the cause and the margin association, so the two figures read alike.
+    """
+    order = sorted(df["constraint_id"].unique())
+    present = [a for a in arm_order if a in set(df[arm_col])]
 
     row_step = 1.0
     band_gap = 0.8
-    fig_height = 0.8 + 0.22 * (len(per_cause) + band_gap * len(order))
-    fig, ax = plt.subplots(figsize=(7.5, fig_height))
+    fig_height = 0.6 + 0.17 * (len(df) + band_gap * len(order))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height))
 
     y = 0.0
     centers: list[float] = []
     for k, cid in enumerate(order):
-        rows = per_cause[per_cause["constraint_id"] == cid].set_index("cause")
-        causes_here = [c for c in present if c in rows.index]
+        rows = df[df["constraint_id"] == cid].set_index(arm_col)
+        arms_here = [a for a in present if a in rows.index]
         top = y
-        for cause in causes_here:
-            row = rows.loc[cause]
+        for arm in arms_here:
+            row = rows.loc[arm]
             point = float(row["rr_point"])
             low, high = float(row["rr_ci_low"]), float(row["rr_ci_high"])
             ax.errorbar(point, y, xerr=[[point - low], [high - point]], fmt="o",
-                        capsize=3, color=CAUSE_COLOR[cause], markersize=5)
+                        capsize=3, color=colors[arm], markersize=5)
             # The lightest marker colour is too pale for text, so labels use a darker tone.
             ax.annotate(f"{point:.2f}", (high, y), xytext=(4, 0),
-                        textcoords="offset points", va="center", fontsize=7,
+                        textcoords="offset points", va="center", fontsize=6.5,
                         color="#4a4a4a")
             y += row_step
         bottom = y - row_step
@@ -500,22 +496,21 @@ def _plot_cause_association(assoc: pd.DataFrame) -> None:
         y += band_gap
 
     ax.axvline(1.0, color="black", linewidth=1)
-    x_low = float(per_cause["rr_ci_low"].min())
-    x_high = float(per_cause["rr_ci_high"].max())
-    ax.set_xlim(x_low - 0.03, x_high + 0.08)
+    x_low = float(df["rr_ci_low"].min())
+    x_high = float(df["rr_ci_high"].max())
+    ax.set_xlim(min(x_low, 1.0) - 0.03, max(x_high, 1.0) + 0.08)
     ax.grid(axis="y", visible=False)
     ax.set_yticks(centers)
-    ax.set_yticklabels([f"{CRITERION_NAME.get(c, c)} ({c})" for c in order], fontsize=8)
+    ax.set_yticklabels([constraint_label(c) for c in order])
     ax.tick_params(axis="y", length=0)
     ax.set_ylim(y - band_gap - row_step / 2, -row_step / 2)
     ax.set_xlabel("Risk ratio of success vs. satisfied")
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
-    handles = [plt.Line2D([], [], marker="o", linestyle="", color=CAUSE_COLOR[c],
-                          label=CAUSE_LABEL[c]) for c in present]
-    ax.legend(handles=handles, fontsize=8, loc="lower center",
-              bbox_to_anchor=(0.5, 1.0), ncol=len(present), frameon=False)
-    save_fig(fig, "fig_readiness_cause_outcome")
+    handles = [plt.Line2D([], [], marker="o", linestyle="", color=colors[a],
+                          label=labels[a]) for a in present]
+    top_legend(ax, handles)
+    save_fig(fig, name)
 
 
 def main() -> None:
