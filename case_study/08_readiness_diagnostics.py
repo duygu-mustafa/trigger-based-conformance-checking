@@ -10,7 +10,9 @@ only some of which are present (`partial_payload`), or the criterion was assesse
 on complete readings and not met (`unmet`). Only the last is a statement about
 care; the rest are statements about documentation. Each cause is then related to
 the episode outcome separately, to see whether only `unmet` violations go along
-with failure.
+with failure. The per-rule outcome association of step 04 is then repeated with
+each readiness rule split into its `unmet` and documentation arms, which the
+frontend's outcome forest shows.
 
 The checker distinguishes `absent` (no measurement anywhere in the evaluated
 history) from `stale` (a measurement exists, but only before the lookback). Both
@@ -335,6 +337,88 @@ def _cause_association(records: pd.DataFrame, min_arm: int = 30) -> pd.DataFrame
     return out
 
 
+def _split_arm(arm: pd.DataFrame, reference: pd.DataFrame) -> dict:
+    """The 2x2 table and both effect measures, in step 04's column names."""
+    a = int((arm["outcome_binary"] == 1).sum())
+    b = int((arm["outcome_binary"] == 0).sum())
+    c = int((reference["outcome_binary"] == 1).sum())
+    d = int((reference["outcome_binary"] == 0).sum())
+    stats = calculate_stats(a, b, c, d)
+    return {
+        "n_exposed": a + b,
+        "n_unexposed": c + d,
+        "a_violated_success": a,
+        "b_violated_failure": b,
+        "c_satisfied_success": c,
+        "d_satisfied_failure": d,
+        "p_raw": stats["p_raw"],
+        "or": stats["or_point"],
+        "or_ci_low": stats["or_ci_low"],
+        "or_ci_high": stats["or_ci_high"],
+        "rr": stats["rr_point"],
+        "rr_ci_low": stats["rr_ci_low"],
+        "rr_ci_high": stats["rr_ci_high"],
+        "used_continuity_correction": min(a, b, c, d) == 0,
+    }
+
+
+def _split_association(records: pd.DataFrame, min_arm: int = 30) -> pd.DataFrame:
+    """Step 04's per-rule association with the readiness rules split by cause.
+
+    A readiness violation is either a criterion assessed and not met or a gap in
+    documentation, and the two are associated with the outcome differently. Each
+    readiness rule therefore contributes two arms against the same satisfied
+    reference: `unmet`, and `documentation` pooling the three documentation
+    causes. The other rules have no data condition on their target, so their only
+    failure is a missing action and their step 04 row is kept as it is
+    (arm `missing_action`). Bonferroni runs over every row of the combined table,
+    so the split costs the readiness rules one extra test each.
+    """
+    base = pd.read_csv(OUT_DIR / "association_activations_only.csv")
+    pooled = base.set_index("constraint_id")
+    rows: list[dict] = []
+    for cid in CRITERION:
+        subset = records[
+            (records["constraint_id"] == cid) & records["outcome_binary"].notna()
+        ]
+        satisfied = subset[subset["state"] == "satisfied"]
+        violated = subset[subset["state"] == "violated"]
+        arms = [
+            ("unmet", violated[violated["cause"] == "unmet"]),
+            ("documentation", violated[violated["cause"].isin(DOCUMENTATION_CAUSES)]),
+        ]
+        for arm_name, arm in arms:
+            if len(arm) < min_arm or satisfied.empty:
+                continue
+            rows.append({
+                "constraint_id": cid,
+                "label": pooled.loc[cid, "label"],
+                "arm": arm_name,
+                "outcome_variable": pooled.loc[cid, "outcome_variable"],
+                **_split_arm(arm, satisfied),
+                "pooled_rr": pooled.loc[cid, "rr"],
+                "pooled_rr_ci_low": pooled.loc[cid, "rr_ci_low"],
+                "pooled_rr_ci_high": pooled.loc[cid, "rr_ci_high"],
+                "pooled_or": pooled.loc[cid, "or"],
+                "pooled_or_ci_low": pooled.loc[cid, "or_ci_low"],
+                "pooled_or_ci_high": pooled.loc[cid, "or_ci_high"],
+                "pooled_significant_bonferroni": pooled.loc[cid, "significant_bonferroni"],
+                "degenerate_estimate": False,
+            })
+    others = base[~base["constraint_id"].isin(CRITERION)].assign(arm="missing_action")
+    out = pd.concat([pd.DataFrame(rows), others[[
+        "constraint_id", "label", "arm", "outcome_variable", "n_exposed", "n_unexposed",
+        "a_violated_success", "b_violated_failure", "c_satisfied_success",
+        "d_satisfied_failure", "p_raw", "or", "or_ci_low", "or_ci_high", "rr",
+        "rr_ci_low", "rr_ci_high", "used_continuity_correction", "degenerate_estimate",
+    ]]], ignore_index=True)
+    n_tests = len(out)
+    out["n_tests"] = n_tests
+    out["p_bonferroni"] = (out["p_raw"] * n_tests).clip(upper=1.0)
+    out["significant_bonferroni"] = out["p_raw"] < 0.05 / n_tests
+    return out
+
+
 def _episode_cause_profile(records: pd.DataFrame) -> pd.DataFrame:
     """Success by the worst readiness evidence an episode carries.
 
@@ -560,6 +644,8 @@ def main() -> None:
 
     profile = _episode_cause_profile(records)
     write_csv(profile, "readiness_cause_profile.csv")
+
+    write_csv(_split_association(records), "association_split_by_cause.csv")
 
     # The headline shares cover the criteria with a graded reading, as the cause
     # table in the thesis does; RC-DP-06 is reported in its own row of the CSV.

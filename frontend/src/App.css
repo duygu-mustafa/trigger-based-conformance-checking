@@ -4679,17 +4679,24 @@
 }
 
 .app-sidebar.collapsed .sidebar-nav-label {
-  opacity: 0;
-  width: 0;
-  overflow: hidden;
+  display: none;
 }
 
 /* Tooltip on collapsed sidebar */
 .app-sidebar.collapsed .sidebar-nav-item {
   justify-content: center;
+  gap: 0;
   padding: 0.55rem 0;
   width: calc(100% - 0.8rem);
 }
+
+/* Explorer pages listed under the Case Study entry */
+.sidebar-nav-item.sub {
+  padding-left: 2rem;
+  font-size: 0.92em;
+}
+
+.app-sidebar.collapsed .sidebar-nav-item.sub { padding-left: 0; }
 
 /* ============================================================
    MAIN AREA
@@ -5730,12 +5737,6 @@
 /* ============================================================
    CASE-STUDY INSIGHTS VIEW
    ============================================================ */
-
-.insights-view .insight-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
 
 .insight-tabs {
   display: flex;

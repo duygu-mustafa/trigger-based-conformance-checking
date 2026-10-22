@@ -3,6 +3,7 @@ venv/
 env/
 ENV/
 .venv/
+.venv-win/
 
 # Data Files
 *.csv

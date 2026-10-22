@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import SummaryView from './components/SummaryView'
@@ -9,12 +9,24 @@ import AnalysisRunner from './components/StudioView/AnalysisRunner'
 import XESUploadView from './components/UploadView/XESUploadView'
 import { loadRules, rulesKey } from './datasetRules'
 
-// Plotly is large; only fetch it when the Insights page opens.
-const InsightsView = lazy(() => import('./components/InsightsView'))
+// The story pulls in Plotly; only fetch it when the page opens.
+const StoryView = lazy(() => import('./components/StoryView'))
 
 const BUILTIN_DATASET = { kind: 'builtin', id: 'builtin', name: 'ICU Weaning (built-in)' }
 
+// Pages that need the 198 MB summary.json; it is fetched on first visit only.
+const SUMMARY_PAGES = ['results-patients']
+
+const storyChapterFromHash = () => {
+  const m = /^#story\/(\d+)/.exec(window.location.hash || '')
+  return m ? Number(m[1]) : null
+}
+
 const PAGE_META = {
+  story: {
+    eyebrow: 'Results',
+    title: 'Case Study',
+  },
   upload: {
     eyebrow: 'Configure',
     title: 'Upload Log',
@@ -35,25 +47,10 @@ const PAGE_META = {
     title: 'Run Analysis',
     lead: 'Configure and run conformance checking on a sample of ICU stays. Results appear on this page after the run completes.',
   },
-  'results-frequencies': {
-    eyebrow: 'Results',
-    title: 'Violation Frequencies',
-    lead: 'Ranked violations with timing histograms and episode-level drill-down. Based on the full patient cohort.',
-  },
-  'results-statistics': {
-    eyebrow: 'Results',
-    title: 'Statistical Analysis',
-    lead: 'Formal associations between process adherence and weaning outcome: OR, RR, 95% CI, and p-values.',
-  },
   'results-patients': {
     eyebrow: 'Results',
     title: 'Patient Explorer',
     lead: 'Browse, filter, and sort stays by violation profile. Open any patient timeline with one click.',
-  },
-  'results-insights': {
-    eyebrow: 'Results',
-    title: 'Case-Study Insights',
-    lead: 'Magnitude and breadth of deviation: how far adherence moves the outcome, how wide the deviation space is, and how much of it is a charting gap rather than a care gap.',
   },
 }
 
@@ -71,8 +68,24 @@ function ApiErrorState({ error }) {
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState('library')
+  // The defense story is the landing page for the built-in dataset.
+  const [activePage, setActivePage] = useState(() => {
+    if ((window.location.hash || '').startsWith('#story')) return 'story'
+    return (localStorage.getItem('studio_active_dataset') || 'builtin') === 'builtin' ? 'story' : 'library'
+  })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [returnChapter, setReturnChapter] = useState(null)
+
+  // Drill-down selection, shared by the story chapter and the page so it
+  // survives opening a timeline.
+  const [drillSel, setDrillSel] = useState({ ruleId: 'RC-DP-01', group: 'unmet' })
+  const [drilldownData, setDrilldownData] = useState(null)
+  const [drilldownError, setDrilldownError] = useState(null)
+  const drilldownRequested = useRef(false)
+  // Chapter 2 rule selection and its distributions (frequency_detail.json)
+  const [freqRule, setFreqRule] = useState('RC-DP-01')
+  const [frequencyDetail, setFrequencyDetail] = useState(null)
+  const summaryRequested = useRef(false)
 
   // Timeline drawer
   const [drawerStayId, setDrawerStayId] = useState(null)
@@ -164,10 +177,17 @@ export default function App() {
   // Builtin-only pages: bounce away when an uploaded dataset is active
   useEffect(() => {
     if (activeDatasetId === 'builtin') return
-    if (activePage === 'library' || activePage.startsWith('results-')) {
+    if (activePage === 'library' || activePage === 'story' || activePage.startsWith('results-')) {
       setActivePage('runner')
     }
   }, [activeDatasetId, activePage])
+
+  // Keep #story/N only while the story is open
+  useEffect(() => {
+    if (activePage !== 'story' && (window.location.hash || '').startsWith('#story')) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  }, [activePage])
 
   // Load case manifest
   useEffect(() => {
@@ -177,13 +197,29 @@ export default function App() {
       .catch(err => console.error('Failed to load manifest:', err))
   }, [])
 
-  // Load static summary
+  // Load static summary (large) the first time a page needs it
   useEffect(() => {
+    if (!SUMMARY_PAGES.includes(activePage) || summaryRequested.current) return
+    summaryRequested.current = true
     fetch('/data/summary.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(d => { setSummaryData(d); setSummaryLoading(false) })
       .catch(err => { setSummaryError(err.message); setSummaryLoading(false) })
-  }, [])
+  }, [activePage])
+
+  // Load the drill-down and per-rule distributions the first time the story opens
+  useEffect(() => {
+    if (activePage !== 'story' || drilldownRequested.current) return
+    drilldownRequested.current = true
+    fetch('/data/drilldown.json')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then(setDrilldownData)
+      .catch(err => setDrilldownError(err.message))
+    fetch('/data/frequency_detail.json')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then(setFrequencyDetail)
+      .catch(err => console.error('Failed to load frequency_detail.json:', err))
+  }, [activePage])
 
   // Load case-study insights
   useEffect(() => {
@@ -246,6 +282,24 @@ export default function App() {
     setDrawerStayId(String(stayId))
   }
 
+  // Story → explorer page and back, returning to the same chapter
+  const goExplore = (page) => {
+    setReturnChapter(storyChapterFromHash())
+    setActivePage(page)
+  }
+
+  const backToStory = () => {
+    if (returnChapter) window.history.replaceState(null, '', `#story/${returnChapter}`)
+    setReturnChapter(null)
+    setActivePage('story')
+  }
+
+  // Sidebar navigation drops the pending "back to chapter" link
+  const navigate = (page) => {
+    setReturnChapter(null)
+    setActivePage(page)
+  }
+
   const meta = PAGE_META[activePage] || PAGE_META['library']
 
   const mergedActivities = {
@@ -287,8 +341,8 @@ export default function App() {
       )
     }
 
-    if (activePage === 'results-insights') {
-      if (insightsLoading) return <div className="loading-spinner">Loading insights…</div>
+    if (activePage === 'story') {
+      if (insightsLoading) return <div className="loading-spinner">Loading case study…</div>
       if (insightsError) {
         return (
           <div className="error-message">
@@ -298,22 +352,43 @@ export default function App() {
         )
       }
       return (
-        <Suspense fallback={<p className="summary-empty">Loading charts…</p>}>
-          <InsightsView insights={insightsData} />
+        <Suspense fallback={<p className="summary-empty">Loading story…</p>}>
+          <StoryView
+            insights={insightsData}
+            drilldown={drilldownData}
+            drilldownError={drilldownError}
+            drillSel={drillSel}
+            onDrillChange={setDrillSel}
+            frequencyDetail={frequencyDetail}
+            freqRule={freqRule}
+            onFreqRule={setFreqRule}
+            onOpenTimeline={openTimeline}
+            onExplore={goExplore}
+          />
         </Suspense>
       )
     }
 
     if (activePage.startsWith('results-')) {
       const section = activePage.replace('results-', '')
-      if (summaryLoading) return <div className="loading-spinner">Loading results…</div>
-      if (summaryError) return <div className="error-message">{summaryError}</div>
+      const returnBar = returnChapter && (
+        <div className="story-return">
+          <button type="button" className="story-btn" onClick={backToStory}>
+            ← Back to chapter {returnChapter}
+          </button>
+        </div>
+      )
+      if (summaryLoading) return <>{returnBar}<div className="loading-spinner">Loading results…</div></>
+      if (summaryError) return <>{returnBar}<div className="error-message">{summaryError}</div></>
       return (
-        <SummaryView
-          summaryData={summaryData}
-          section={section}
-          onSelectStay={openTimeline}
-        />
+        <>
+          {returnBar}
+          <SummaryView
+            summaryData={summaryData}
+            section={section}
+            onSelectStay={openTimeline}
+          />
+        </>
       )
     }
 
@@ -337,7 +412,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={navigate}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(c => !c)}
         datasets={datasets}
@@ -350,7 +425,7 @@ export default function App() {
         <header className="page-header">
           <div className="page-header-eyebrow">{meta.eyebrow}</div>
           <h1>{meta.title}</h1>
-          <p className="page-header-lead">{meta.lead}</p>
+          {meta.lead && <p className="page-header-lead">{meta.lead}</p>}
         </header>
 
         <main className="page-content">

@@ -16,10 +16,8 @@ const NAV_GROUPS = [
   {
     label: 'Results',
     items: [
-      { id: 'results-frequencies', label: 'Frequencies', builtinOnly: true },
-      { id: 'results-statistics', label: 'Statistics', builtinOnly: true },
-      { id: 'results-patients', label: 'Patients', builtinOnly: true },
-      { id: 'results-insights', label: 'Insights', builtinOnly: true },
+      { id: 'story', label: 'Case Study', builtinOnly: true },
+      { id: 'results-patients', label: 'Patients', builtinOnly: true, sub: true },
     ],
   },
 ]
@@ -61,27 +59,6 @@ function IconRunner() {
   )
 }
 
-function IconFrequencies() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="2" y="10" width="2.5" height="4" rx="0.5" fill="currentColor"/>
-      <rect x="6" y="6" width="2.5" height="8" rx="0.5" fill="currentColor"/>
-      <rect x="10" y="3" width="2.5" height="11" rx="0.5" fill="currentColor"/>
-    </svg>
-  )
-}
-
-function IconStatistics() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4"/>
-      <line x1="2" y1="6" x2="14" y2="6" stroke="currentColor" strokeWidth="1"/>
-      <line x1="2" y1="10" x2="14" y2="10" stroke="currentColor" strokeWidth="1"/>
-      <line x1="6" y1="2" x2="6" y2="14" stroke="currentColor" strokeWidth="1"/>
-    </svg>
-  )
-}
-
 function IconPatients() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -93,11 +70,12 @@ function IconPatients() {
   )
 }
 
-function IconInsights() {
+function IconStory() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M2 13l3.5-4L8 11l5.5-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M10.5 4H14v3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <rect x="2" y="3" width="12" height="8.5" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+      <path d="M6 14h4M8 11.5V14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      <path d="M7 5.5l2.5 1.75L7 9V5.5z" fill="currentColor"/>
     </svg>
   )
 }
@@ -123,10 +101,8 @@ const ICON_MAP = {
   library: IconLibrary,
   builder: IconBuilder,
   runner: IconRunner,
-  'results-frequencies': IconFrequencies,
-  'results-statistics': IconStatistics,
   'results-patients': IconPatients,
-  'results-insights': IconInsights,
+  story: IconStory,
 }
 
 function NavItem({ item, activePage, onNavigate }) {
@@ -135,7 +111,7 @@ function NavItem({ item, activePage, onNavigate }) {
   return (
     <button
       type="button"
-      className={`sidebar-nav-item${isActive ? ' active' : ''}`}
+      className={`sidebar-nav-item${item.sub ? ' sub' : ''}${isActive ? ' active' : ''}`}
       onClick={() => onNavigate(item.id)}
       title={item.label}
       aria-current={isActive ? 'page' : undefined}

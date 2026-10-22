@@ -1,4 +1,5 @@
 import React, { Suspense, lazy } from 'react';
+import { ruleLabel } from '../../ruleNames';
 
 // Plotly is large; keep it out of the main bundle until a chart renders.
 const Plot = lazy(() => import('./Plot'));
@@ -172,14 +173,14 @@ const CAUSE_PARTS = [
   { key: 'share_unmet', label: 'Criterion genuinely unmet', color: VIOLATION },
 ];
 
-export function CauseStackedBars({ causes }) {
+export function CauseStackedBars({ causes, parts = CAUSE_PARTS }) {
   const rows = causes?.per_constraint || [];
   if (!rows.length) return <p className="summary-empty">No cause breakdown available.</p>;
 
   return (
     <div className="insight-stacked">
       <div className="insight-legend">
-        {CAUSE_PARTS.map((p) => (
+        {parts.map((p) => (
           <span key={p.key} className="insight-legend-item">
             <span className="insight-swatch" style={{ background: p.color }} />
             {p.label}
@@ -196,7 +197,7 @@ export function CauseStackedBars({ causes }) {
             </span>
           </div>
           <div className="insight-stack">
-            {CAUSE_PARTS.map((p) => {
+            {parts.map((p) => {
               const share = row[p.key] || 0;
               if (share <= 0) return null;
               return (
@@ -280,7 +281,7 @@ export function CoViolationHeatmap({ coviolation }) {
           {ids.map((rowId, r) => (
             <tr key={rowId}>
               <th scope="row" title={coviolation.labels?.[rowId]}>
-                {rowId}
+                {ruleLabel(rowId)}
                 <span className="insight-heatmap-n">n={count(coviolation.n_violated?.[rowId])}</span>
               </th>
               {ids.map((colId, c) => {
@@ -352,7 +353,7 @@ export function AttemptTrendChart({ series }) {
     return {
       type: 'scatter',
       mode: 'lines+markers',
-      name: s.constraint_id,
+      name: ruleLabel(s.constraint_id),
       x: s.buckets.map((b) => tickText[buckets.indexOf(b.bucket)]),
       y: s.buckets.map((b) => b.violation_rate),
       line: { color, width: 2 },

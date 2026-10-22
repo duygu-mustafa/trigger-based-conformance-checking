@@ -34,9 +34,12 @@ const CONFIG = {
 };
 
 /* Shared Plotly wrapper: fluid width, fixed pixel height, common styling. */
-export default function Plot({ data, layout, height = 300 }) {
+export default function Plot({ data, layout, height = 300, onClick, onLegendClick, onLegendDoubleClick }) {
   return (
     <PlotlyChart
+      onClick={onClick}
+      onLegendClick={onLegendClick}
+      onLegendDoubleClick={onLegendDoubleClick}
       data={data}
       layout={{
         ...BASE_LAYOUT,
